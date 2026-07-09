@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
-WORK_DIR="${WORK_DIR:-${REPO_ROOT}/.work/docker}"
+WORK_DIR="${WORK_DIR:-${TMPDIR:-/tmp}/xgc2-ros1-adapter-docker-work}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 
