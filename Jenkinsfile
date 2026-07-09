@@ -5,6 +5,7 @@ pipeline {
     timestamps()
     timeout(time: 45, unit: 'MINUTES')
     disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '0'))
   }
 
   stages {
@@ -14,8 +15,7 @@ pipeline {
 set -euo pipefail
 
 rm -rf debs
-.xgc2/scripts/build_debs_in_docker.sh \
-  --output-dir "${WORKSPACE}/debs"
+.xgc2/scripts/build_debs_in_docker.sh --skip-output-copy
 '''
       }
     }
@@ -23,7 +23,8 @@ rm -rf debs
 
   post {
     always {
-      archiveArtifacts artifacts: 'debs/*.deb', allowEmptyArchive: true
+      sh 'rm -rf debs'
+      deleteDir()
     }
   }
 }

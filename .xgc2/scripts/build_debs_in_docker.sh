@@ -8,6 +8,7 @@ DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
+COPY_OUTPUT="${COPY_OUTPUT:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_CHECK=false
       shift
       ;;
+    --skip-output-copy)
+      COPY_OUTPUT=false
+      shift
+      ;;
     *)
       echo "unknown argument: $1" >&2
       exit 1
@@ -34,8 +39,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "${OUTPUT_DIR}"
-rm -f "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter_"*.deb
+if [[ "${COPY_OUTPUT}" == "true" ]]; then
+  mkdir -p "${OUTPUT_DIR}"
+  rm -f "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter_"*.deb
+fi
 
 docker_network_args=()
 if [[ -n "${DOCKER_NETWORK}" ]]; then
@@ -127,7 +134,11 @@ docker exec "${container_name}" bash -lc '
     fi
   '
 
-docker cp "${container_name}:/tmp/out/." "${OUTPUT_DIR}/"
+if [[ "${COPY_OUTPUT}" == "true" ]]; then
+  docker cp "${container_name}:/tmp/out/." "${OUTPUT_DIR}/"
 
-echo "Debian package output:"
-find "${OUTPUT_DIR}" -maxdepth 1 -type f -name "*.deb" -print | sort
+  echo "Debian package output:"
+  find "${OUTPUT_DIR}" -maxdepth 1 -type f -name "*.deb" -print | sort
+else
+  echo "Debian package output copy skipped."
+fi
