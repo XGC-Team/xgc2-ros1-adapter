@@ -10,6 +10,7 @@ DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
+BUILD_JOBS="${BUILD_JOBS:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +30,10 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_DIR="$2"
       shift 2
       ;;
+    --jobs)
+      BUILD_JOBS="$2"
+      shift 2
+      ;;
     --skip-install-check)
       INSTALL_CHECK=false
       shift
@@ -43,6 +48,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "${BUILD_JOBS}" && ! "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--jobs must be a positive integer" >&2
+  exit 1
+fi
 
 expected_deb_arch=""
 case "${DOCKER_PLATFORM}" in
@@ -76,6 +86,7 @@ if [[ -n "${DOCKER_PLATFORM}" ]]; then
 fi
 
 docker_env_args=(
+  -e BUILD_JOBS="${BUILD_JOBS}"
   -e DEBIAN_FRONTEND=noninteractive
   -e EXPECTED_DEB_ARCH="${expected_deb_arch}"
   -e INSTALL_CHECK="${INSTALL_CHECK}"
@@ -96,6 +107,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+docker_pull_lock_file="${DOCKER_PULL_LOCK_FILE:-/tmp/xgc2-ros1-adapter-docker-pull.lock}"
+exec {docker_pull_lock_fd}>"${docker_pull_lock_file}"
+flock "${docker_pull_lock_fd}"
+
 docker pull "${docker_platform_args[@]}" "${DOCKER_IMAGE}"
 docker create --name "${container_name}" \
   "${docker_platform_args[@]}" \
@@ -103,6 +118,7 @@ docker create --name "${container_name}" \
   "${docker_env_args[@]}" \
   "${DOCKER_IMAGE}" sleep infinity >/dev/null
 container_created=true
+flock -u "${docker_pull_lock_fd}"
 
 docker start "${container_name}" >/dev/null
 docker exec "${container_name}" mkdir -p /tmp/ros1-adapter /tmp/work /tmp/out
@@ -152,7 +168,7 @@ docker exec "${container_name}" bash -lc '
     source /opt/ros/noetic/setup.bash
     set -u
     export XGC2_CONTRACTS_DIR=/tmp/work/contracts
-    parallel_jobs="$(nproc)"
+    parallel_jobs="${BUILD_JOBS:-$(nproc)}"
     DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
       -DCMAKE_BUILD_TYPE=Release \
