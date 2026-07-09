@@ -4,6 +4,13 @@ This repository is a Catkin workspace for the first-party
 `xgc_ros1_adapter` package. It bridges ROS1 robot state into the XGC2 Go Core
 adapter contract over gRPC UDS.
 
+## Product
+
+- Product id: `xgc2-ros1-adapter`
+- APT package: `ros-noetic-xgc2-ros1-adapter`
+- ROS package: `xgc_ros1_adapter`
+- Runtime process id in XGC Go Core: `ros1-adapter`
+
 ## Source Packages
 
 - `xgc_ros1_adapter`: XGC2 ROS1 semantic adapter.
@@ -26,8 +33,9 @@ sudo apt install -y \
 ```
 
 The adapter protobuf contract is resolved from `XGC2_CONTRACTS_DIR` when set.
-For standalone development, place the contracts tree at `contracts/` in this
-workspace root or export the path explicitly:
+For standalone development, the product carries the current adapter contract at
+`contracts/adapter/v1/adapter.proto`. To test a different Go Core contract,
+export the path explicitly:
 
 ```bash
 export XGC2_CONTRACTS_DIR=/path/to/xgc2/contracts
@@ -48,3 +56,17 @@ workspace package:
 ```bash
 rospack find xgc_ros1_adapter
 ```
+
+## Runtime
+
+The Go Core process-control manifest starts the adapter with:
+
+```bash
+rosrun xgc_ros1_adapter xgc_ros1_adapter_node \
+  _adapter_id:=ros1-adapter \
+  _experiment_id:=exp-ros1-sss-four-ugv \
+  _socket_path:=/tmp/xgc2/adapter-ingress.sock
+```
+
+The node registers with `AdapterIngress`, pushes semantic robot state frames,
+and consumes streamed robot commands from Go Core.

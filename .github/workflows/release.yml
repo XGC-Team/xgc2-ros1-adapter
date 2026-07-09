@@ -1,0 +1,86 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Expected .xgc2/product.yml version
+        required: true
+        type: string
+      expected_source_sha:
+        description: Expected source commit SHA
+        required: true
+        type: string
+      publish_apt:
+        description: Publish debs to the APT repository
+        required: true
+        type: boolean
+        default: false
+      run_source_tests:
+        description: Run source tests
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  release-guard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release inputs
+        run: |
+          set -euo pipefail
+          product_version="$(awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' .xgc2/product.yml)"
+          if [[ "${product_version}" != "${{ inputs.expected_version }}" ]]; then
+            echo "product.yml version ${product_version} != expected_version ${{ inputs.expected_version }}" >&2
+            exit 1
+          fi
+          source_sha="$(git rev-parse HEAD)"
+          if [[ "${source_sha}" != "${{ inputs.expected_source_sha }}" ]]; then
+            echo "HEAD ${source_sha} != expected_source_sha ${{ inputs.expected_source_sha }}" >&2
+            exit 1
+          fi
+
+  build:
+    name: package-debs-${{ matrix.arch }}
+    needs: release-guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      APT_REPO_HOST: ${{ secrets.APT_REPO_HOST }}
+      APT_REPO_PORT: ${{ secrets.APT_REPO_PORT }}
+      APT_REPO_SSH_KEY: ${{ secrets.APT_REPO_SSH_KEY }}
+      APT_REPO_KNOWN_HOSTS: ${{ secrets.APT_REPO_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and install-check deb package in Docker
+        run: |
+          if [[ "${{ inputs.run_source_tests }}" != "true" ]]; then
+            echo "No standalone source-test switch is currently exposed; running package build and install checks." >&2
+          fi
+          .xgc2/scripts/build_debs_in_docker.sh \
+            --work-dir "$RUNNER_TEMP/ros1-adapter-${{ matrix.arch }}" \
+            --output-dir "$GITHUB_WORKSPACE/debs"
+
+      - name: Upload deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
+          path: debs/*.deb
+
+      - name: Publish to self-hosted APT repository
+        if: ${{ inputs.publish_apt && env.APT_REPO_HOST != '' && env.APT_REPO_PORT != '' && env.APT_REPO_SSH_KEY != '' && env.APT_REPO_KNOWN_HOSTS != '' }}
+        run: .xgc2/scripts/publish_apt_repo.sh --deb-dir debs

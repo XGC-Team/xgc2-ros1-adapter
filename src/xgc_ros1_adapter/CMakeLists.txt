@@ -9,6 +9,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   std_msgs
+  tf2
 )
 find_package(Protobuf REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -91,4 +92,12 @@ target_link_libraries(xgc_ros1_adapter_node
   ${catkin_LIBRARIES}
   ${Protobuf_LIBRARIES}
   ${GRPCPP_LIBRARIES}
+)
+
+install(TARGETS xgc_ros1_adapter_node
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
 )

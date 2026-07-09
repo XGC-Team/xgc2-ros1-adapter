@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+package xgc.adapter.v1;
+
+option go_package = "xgc2/core-xgc/internal/adapterpb;adapterpb";
+
+service AdapterIngress {
+  rpc RegisterAdapter(RegisterAdapterRequest) returns (RegisterAdapterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc PushRobotState(PushRobotStateRequest) returns (PushRobotStateResponse);
+  rpc GetAdapterConfig(GetAdapterConfigRequest) returns (GetAdapterConfigResponse);
+  rpc StreamCommands(CommandStreamRequest) returns (stream AdapterCommand);
+}
+
+message RegisterAdapterRequest {
+  string adapter_id = 1;
+  string protocol = 2;
+  string version = 3;
+  repeated RobotMapping robots = 4;
+}
+
+message RegisterAdapterResponse {
+  bool accepted = 1;
+  string core_id = 2;
+  string message = 3;
+}
+
+message HeartbeatRequest {
+  string adapter_id = 1;
+  int64 observed_unix_nanos = 2;
+}
+
+message HeartbeatResponse {
+  bool accepted = 1;
+  int64 core_unix_nanos = 2;
+}
+
+message PushRobotStateRequest {
+  string adapter_id = 1;
+  string experiment_id = 2;
+  repeated RobotState states = 3;
+  int64 observed_unix_nanos = 4;
+}
+
+message PushRobotStateResponse {
+  bool accepted = 1;
+  string frame_id = 2;
+}
+
+message GetAdapterConfigRequest {
+  string adapter_id = 1;
+}
+
+message GetAdapterConfigResponse {
+  bool accepted = 1;
+  repeated RobotMapping robots = 2;
+}
+
+message RobotMapping {
+  string robot_id = 1;
+  string robot_type = 2;
+  string namespace = 3;
+  map<string, string> topics = 4;
+  RemoteControlConfig remote_control = 5;
+  map<string, ServiceBinding> services = 6;
+}
+
+message RobotState {
+  string robot_id = 1;
+  string status = 2;
+  string mode = 3;
+  double battery = 4;
+  Pose pose = 5;
+  Twist velocity = 6;
+  Health health = 7;
+  InstrumentState instruments = 8;
+  repeated TopicMetric topic_metrics = 9;
+}
+
+message Pose {
+  string frame_id = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+  double qx = 5;
+  double qy = 6;
+  double qz = 7;
+  double qw = 8;
+}
+
+message Twist {
+  string frame_id = 1;
+  double linear_x = 2;
+  double linear_y = 3;
+  double linear_z = 4;
+  double angular_x = 5;
+  double angular_y = 6;
+  double angular_z = 7;
+}
+
+message Health {
+  bool online = 1;
+  string source = 2;
+  string message = 3;
+}
+
+message InstrumentState {
+  double roll_deg = 1;
+  double pitch_deg = 2;
+  double yaw_deg = 3;
+  double height_m = 4;
+  double speed_m_s = 5;
+  double expected_speed_m_s = 6;
+  Twist expected_velocity = 7;
+}
+
+message TopicMetric {
+  string key = 1;
+  string topic = 2;
+  double frequency_hz = 3;
+  int64 last_message_unix_nanos = 4;
+}
+
+message RemoteControlConfig {
+  string command_topic = 1;
+  double publish_rate_hz = 2;
+  double deadman_timeout_ms = 3;
+  double linear_velocity_xy = 4;
+  double angular_velocity_z = 5;
+}
+
+message CommandStreamRequest {
+  string adapter_id = 1;
+  repeated string robot_ids = 2;
+}
+
+message AdapterCommand {
+  string command_id = 1;
+  string robot_id = 2;
+  string capability = 3;
+  RemoteControlCommand remote_control = 4;
+  int64 issued_unix_nanos = 5;
+  TopicSignalCommand topic_signal = 6;
+  ServiceCommand service_call = 7;
+}
+
+message RemoteControlCommand {
+  bool enabled = 1;
+  bool stop = 2;
+  double linear_x = 3;
+  double linear_y = 4;
+  double angular_z = 5;
+  double timeout_ms = 6;
+  double linear_z = 7;
+  double angular_x = 8;
+  double angular_y = 9;
+}
+
+message TopicSignalCommand {
+  string topic = 1;
+  string message_type = 2;
+}
+
+message ServiceBinding {
+  string service = 1;
+  string service_type = 2;
+}
+
+message ServiceCommand {
+  string service = 1;
+  string service_type = 2;
+  map<string, string> fields = 3;
+  double timeout_ms = 4;
+}
