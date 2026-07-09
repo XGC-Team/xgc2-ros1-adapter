@@ -7,7 +7,9 @@ APT_REPO_PORT="${APT_REPO_PORT:-22}"
 APT_REPO_USER="${APT_REPO_USER:-aptdeploy}"
 APT_REPO_DISTRIBUTION="${APT_REPO_DISTRIBUTION:-focal}"
 APT_REPO_SSH_KEY="${APT_REPO_SSH_KEY:-}"
+APT_REPO_SSH_KEY_FILE="${APT_REPO_SSH_KEY_FILE:-}"
 APT_REPO_KNOWN_HOSTS="${APT_REPO_KNOWN_HOSTS:-}"
+APT_REPO_KNOWN_HOSTS_FILE="${APT_REPO_KNOWN_HOSTS_FILE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,8 +24,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${APT_REPO_HOST}" || -z "${APT_REPO_SSH_KEY}" || -z "${APT_REPO_KNOWN_HOSTS}" ]]; then
-  echo "APT_REPO_HOST, APT_REPO_SSH_KEY and APT_REPO_KNOWN_HOSTS are required" >&2
+if [[ -z "${APT_REPO_HOST}" ]]; then
+  echo "APT_REPO_HOST is required" >&2
+  exit 1
+fi
+
+if [[ -z "${APT_REPO_SSH_KEY}" && -z "${APT_REPO_SSH_KEY_FILE}" ]]; then
+  echo "APT_REPO_SSH_KEY or APT_REPO_SSH_KEY_FILE is required" >&2
+  exit 1
+fi
+
+if [[ -z "${APT_REPO_KNOWN_HOSTS}" && -z "${APT_REPO_KNOWN_HOSTS_FILE}" ]]; then
+  echo "APT_REPO_KNOWN_HOSTS or APT_REPO_KNOWN_HOSTS_FILE is required" >&2
   exit 1
 fi
 
@@ -40,8 +52,19 @@ trap cleanup EXIT
 
 key_file="${tmp_dir}/apt-repo-key"
 known_hosts_file="${tmp_dir}/known_hosts"
-printf '%s\n' "${APT_REPO_SSH_KEY}" > "${key_file}"
-printf '%s\n' "${APT_REPO_KNOWN_HOSTS}" > "${known_hosts_file}"
+
+if [[ -n "${APT_REPO_SSH_KEY_FILE}" ]]; then
+  cp "${APT_REPO_SSH_KEY_FILE}" "${key_file}"
+else
+  printf '%s\n' "${APT_REPO_SSH_KEY}" > "${key_file}"
+fi
+
+if [[ -n "${APT_REPO_KNOWN_HOSTS_FILE}" ]]; then
+  cp "${APT_REPO_KNOWN_HOSTS_FILE}" "${known_hosts_file}"
+else
+  printf '%s\n' "${APT_REPO_KNOWN_HOSTS}" > "${known_hosts_file}"
+fi
+
 chmod 0600 "${key_file}" "${known_hosts_file}"
 
 ssh_args=(
