@@ -41,6 +41,11 @@ export the path explicitly:
 export XGC2_CONTRACTS_DIR=/path/to/xgc2/contracts
 ```
 
+The planned protocol evolution toward stable gRPC envelopes, packed typed
+arrays, and a centralized versioned schema registry is documented in
+[`docs/protocol-evolution-plan.md`](docs/protocol-evolution-plan.md). This is a
+design plan; the current implementation continues to use the v1 contract.
+
 ## Build
 
 ```bash
