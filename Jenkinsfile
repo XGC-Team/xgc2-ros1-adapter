@@ -13,10 +13,8 @@ pipeline {
         sh '''#!/usr/bin/env bash
 set -euo pipefail
 
-work_dir="${WORKSPACE}@tmp/catkin-work"
-rm -rf "${work_dir}" debs
+rm -rf debs
 .xgc2/scripts/build_debs_in_docker.sh \
-  --work-dir "${work_dir}" \
   --output-dir "${WORKSPACE}/debs"
 '''
       }
@@ -26,7 +24,6 @@ rm -rf "${work_dir}" debs
   post {
     always {
       archiveArtifacts artifacts: 'debs/*.deb', allowEmptyArchive: true
-      sh 'rm -rf "${WORKSPACE}@tmp/catkin-work"'
     }
   }
 }

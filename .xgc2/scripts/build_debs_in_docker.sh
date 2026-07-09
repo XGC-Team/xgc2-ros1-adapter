@@ -6,7 +6,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
-WORK_DIR="${WORK_DIR:-${TMPDIR:-/tmp}/xgc2-ros1-adapter-docker-work}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 
@@ -14,10 +13,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
       DOCKER_IMAGE="$2"
-      shift 2
-      ;;
-    --work-dir)
-      WORK_DIR="$2"
       shift 2
       ;;
     --network)
@@ -39,23 +34,45 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
+rm -f "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter_"*.deb
 
 docker_network_args=()
 if [[ -n "${DOCKER_NETWORK}" ]]; then
   docker_network_args=(--network "${DOCKER_NETWORK}")
 fi
 
+docker_env_args=(
+  -e DEBIAN_FRONTEND=noninteractive
+  -e INSTALL_CHECK="${INSTALL_CHECK}"
+)
+
+for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+  if [[ -n "${!proxy_var:-}" ]]; then
+    docker_env_args+=(-e "${proxy_var}=${!proxy_var}")
+  fi
+done
+
+container_name="xgc2-ros1-adapter-build-$(date +%s)-$$"
+container_created=false
+cleanup() {
+  if [[ "${container_created}" == "true" ]]; then
+    docker rm -f "${container_name}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
 docker pull "${DOCKER_IMAGE}"
-docker run --rm \
+docker create --name "${container_name}" \
   "${docker_network_args[@]}" \
-  -e DEBIAN_FRONTEND=noninteractive \
-  -e INSTALL_CHECK="${INSTALL_CHECK}" \
-  -v "${REPO_ROOT}:/workspace/ros1-adapter:ro" \
-  -v "${WORK_DIR}:/workspace/work" \
-  -v "${OUTPUT_DIR}:/workspace/out" \
-  "${DOCKER_IMAGE}" \
-  bash -lc '
+  "${docker_env_args[@]}" \
+  "${DOCKER_IMAGE}" sleep infinity >/dev/null
+container_created=true
+
+docker start "${container_name}" >/dev/null
+docker exec "${container_name}" mkdir -p /tmp/ros1-adapter /tmp/work /tmp/out
+docker cp "${REPO_ROOT}/." "${container_name}:/tmp/ros1-adapter/"
+docker exec "${container_name}" bash -lc '
     set -euo pipefail
 
     export DEBIAN_FRONTEND=noninteractive
@@ -84,30 +101,33 @@ docker run --rm \
       ros-noetic-std-msgs \
       ros-noetic-tf2
 
-    rm -rf /workspace/work/build /workspace/work/devel /workspace/work/install-root /workspace/work/src /workspace/work/contracts
-    rsync -a --delete /workspace/ros1-adapter/ /workspace/work/
+    rm -rf /tmp/work /tmp/out
+    mkdir -p /tmp/work /tmp/out
+    rsync -a --delete /tmp/ros1-adapter/ /tmp/work/
 
-    cd /workspace/work
+    cd /tmp/work
     set +u
     source /opt/ros/noetic/setup.bash
     set -u
-    export XGC2_CONTRACTS_DIR=/workspace/work/contracts
+    export XGC2_CONTRACTS_DIR=/tmp/work/contracts
     parallel_jobs="$(nproc)"
-    DESTDIR=/workspace/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
+    DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
-    /workspace/ros1-adapter/.xgc2/scripts/package_debs.sh \
-      --install-root /workspace/work/install-root \
-      --output-dir /workspace/out
+    /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
+      --install-root /tmp/work/install-root \
+      --output-dir /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
-      apt-get install -y /workspace/out/ros-noetic-xgc2-ros1-adapter_*.deb
-      /workspace/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
+      apt-get install -y /tmp/out/ros-noetic-xgc2-ros1-adapter_*.deb
+      /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
     fi
   '
+
+docker cp "${container_name}:/tmp/out/." "${OUTPUT_DIR}/"
 
 echo "Debian package output:"
 find "${OUTPUT_DIR}" -maxdepth 1 -type f -name "*.deb" -print | sort
