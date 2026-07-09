@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
@@ -14,6 +15,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
       DOCKER_IMAGE="$2"
+      shift 2
+      ;;
+    --platform)
+      DOCKER_PLATFORM="$2"
       shift 2
       ;;
     --network)
@@ -39,6 +44,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+expected_deb_arch=""
+case "${DOCKER_PLATFORM}" in
+  "")
+    ;;
+  linux/amd64)
+    expected_deb_arch="amd64"
+    ;;
+  linux/arm64|linux/arm64/v8)
+    expected_deb_arch="arm64"
+    ;;
+  *)
+    echo "unsupported Docker platform: ${DOCKER_PLATFORM}" >&2
+    exit 1
+    ;;
+esac
+
 if [[ "${COPY_OUTPUT}" == "true" ]]; then
   mkdir -p "${OUTPUT_DIR}"
   rm -f "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter_"*.deb
@@ -49,8 +70,14 @@ if [[ -n "${DOCKER_NETWORK}" ]]; then
   docker_network_args=(--network "${DOCKER_NETWORK}")
 fi
 
+docker_platform_args=()
+if [[ -n "${DOCKER_PLATFORM}" ]]; then
+  docker_platform_args=(--platform "${DOCKER_PLATFORM}")
+fi
+
 docker_env_args=(
   -e DEBIAN_FRONTEND=noninteractive
+  -e EXPECTED_DEB_ARCH="${expected_deb_arch}"
   -e INSTALL_CHECK="${INSTALL_CHECK}"
 )
 
@@ -69,8 +96,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker pull "${DOCKER_IMAGE}"
+docker pull "${docker_platform_args[@]}" "${DOCKER_IMAGE}"
 docker create --name "${container_name}" \
+  "${docker_platform_args[@]}" \
   "${docker_network_args[@]}" \
   "${docker_env_args[@]}" \
   "${DOCKER_IMAGE}" sleep infinity >/dev/null
@@ -83,6 +111,13 @@ docker exec "${container_name}" bash -lc '
     set -euo pipefail
 
     export DEBIAN_FRONTEND=noninteractive
+    actual_deb_arch="$(dpkg --print-architecture)"
+    if [[ -n "${EXPECTED_DEB_ARCH}" && "${actual_deb_arch}" != "${EXPECTED_DEB_ARCH}" ]]; then
+      echo "container Debian architecture ${actual_deb_arch} does not match expected ${EXPECTED_DEB_ARCH}" >&2
+      exit 1
+    fi
+    echo "Building Debian package for ${actual_deb_arch}"
+
     apt-get update
     apt-get install -y --no-install-recommends \
       build-essential \
