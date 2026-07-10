@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapter
 name: XGC2 ROS1 Adapter
-version: 0.1.0-2
+version: 0.1.0-3
 kind: ros1-apt
 summary: ROS1 semantic adapter for XGC2 Go Core robot state and command bridging.
 ros:

@@ -64,7 +64,7 @@ jobs:
             --ci-run-id "${{ inputs.trusted_ci_run_id }}"
       - name: Fallback build
         if: ${{ inputs.trusted_ci_run_id == '' }}
-        run: .xgc2/scripts/build_debs_in_docker.sh --work-dir "$RUNNER_TEMP/xgc2-ros1-adapter-${{ matrix.arch }}" --output-dir "$GITHUB_WORKSPACE/debs"
+        run: .xgc2/scripts/build_debs_in_docker.sh --output-dir "$GITHUB_WORKSPACE/debs"
       - name: Create fallback build manifest
         if: ${{ inputs.trusted_ci_run_id == '' }}
         run: |
