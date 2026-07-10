@@ -3,30 +3,81 @@ name: release
 on:
   workflow_dispatch:
     inputs:
-      expected_version: {required: true, type: string}
-      expected_source_sha: {required: true, type: string}
-      publish_apt:
+      expected_version:
+        description: Expected .xgc2/product.yml version
         required: true
-        default: false
-        type: boolean
+        type: string
+      expected_source_sha:
+        description: Expected source commit SHA
+        required: true
+        type: string
+      prepare_action:
+        description: Release-train action
+        required: false
+        default: release
+        type: choice
+        options:
+          - release
+          - compatibility-verify
+      apt_overlay_url:
+        description: Optional release-scoped staging APT base URL
+        required: false
+        default: ""
+        type: string
+      dependency_set_digest:
+        description: SHA256 of the resolved release-train dependency set
+        required: false
+        default: ""
+        type: string
       run_cpp_quality:
+        description: Run C++ quality checks
         required: true
         default: false
         type: boolean
       run_source_tests:
+        description: Run source tests
         required: true
         default: false
         type: boolean
-      release_id: {required: false, default: "", type: string}
-      release_lock_digest: {required: false, default: "", type: string}
-      trusted_ci_run_id: {required: false, default: "", type: string}
 
 permissions:
   actions: read
   contents: read
 
+env:
+  XGC2_APT_OVERLAY_URL: ${{ inputs.apt_overlay_url }}
+  XGC2_DEPENDENCY_SET_DIGEST: ${{ inputs.dependency_set_digest }}
+
 jobs:
+  prepare-contract:
+    name: Validate prepare contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release-train inputs
+        env:
+          PREPARE_ACTION: ${{ inputs.prepare_action }}
+          APT_OVERLAY_URL: ${{ inputs.apt_overlay_url }}
+          DEPENDENCY_SET_DIGEST: ${{ inputs.dependency_set_digest }}
+        run: |
+          set -euo pipefail
+          case "$PREPARE_ACTION" in
+            release|compatibility-verify) ;;
+            *)
+              echo "unsupported prepare_action: $PREPARE_ACTION" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -n "$DEPENDENCY_SET_DIGEST" && ! "$DEPENDENCY_SET_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "dependency_set_digest must be empty or 64 lowercase hex characters" >&2
+            exit 1
+          fi
+          if [[ -n "$APT_OVERLAY_URL" && ! "$DEPENDENCY_SET_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "apt_overlay_url requires a dependency_set_digest" >&2
+            exit 1
+          fi
+
   validate:
+    needs: prepare-contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,29 +95,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Download trusted CI artifacts
-        if: ${{ inputs.trusted_ci_run_id != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.trusted_ci_run_id }}
-          name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
-          path: .ci/trusted
-      - name: Verify and stage trusted CI artifacts
-        if: ${{ inputs.trusted_ci_run_id != '' }}
-        run: |
-          python3 .xgc2/scripts/xgc2_artifact_manifest.py verify-build \
-            --artifact-dir .ci/trusted --deb-output-dir debs \
-            --manifest-output-dir .ci/build-manifests \
-            --product xgc2-ros1-adapter --distribution focal \
-            --architecture "${{ matrix.arch }}" --source-sha "${{ inputs.expected_source_sha }}" \
-            --ci-run-id "${{ inputs.trusted_ci_run_id }}"
-      - name: Fallback build
-        if: ${{ inputs.trusted_ci_run_id == '' }}
+      - name: Release-train build
         run: .xgc2/scripts/build_debs_in_docker.sh --output-dir "$GITHUB_WORKSPACE/debs"
-      - name: Create fallback build manifest
-        if: ${{ inputs.trusted_ci_run_id == '' }}
+      - name: Create release-train build manifest
         run: |
           python3 .xgc2/scripts/xgc2_artifact_manifest.py build \
             --deb-dir debs --output-dir .ci/build-manifests \
@@ -75,6 +106,7 @@ jobs:
             --source-sha "${{ inputs.expected_source_sha }}" --ci-run-id "$GITHUB_RUN_ID" \
             --ci-workflow "$GITHUB_WORKFLOW" --ci-workflow-ref "$GITHUB_WORKFLOW_REF"
       - uses: actions/upload-artifact@v4
+        if: ${{ inputs.prepare_action == 'release' }}
         with:
           name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
           path: |
@@ -82,39 +114,3 @@ jobs:
             .ci/build-manifests/*.json
           retention-days: 14
           include-hidden-files: true
-  publish-apt:
-    if: ${{ inputs.publish_apt }}
-    needs: build
-    runs-on: ubuntu-latest
-    concurrency:
-      group: xgc2-apt-focal
-      cancel-in-progress: false
-    env:
-      APT_REPO_HOST: ${{ secrets.APT_REPO_HOST }}
-      APT_REPO_PORT: ${{ secrets.APT_REPO_PORT }}
-      APT_REPO_SSH_KEY: ${{ secrets.APT_REPO_SSH_KEY }}
-      APT_REPO_KNOWN_HOSTS: ${{ secrets.APT_REPO_KNOWN_HOSTS }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: xgc2-ros1-adapter-debs-*
-          path: release-input
-      - name: Validate all architectures and create release manifests
-        run: |
-          for arch in amd64 arm64; do
-            python3 .xgc2/scripts/xgc2_artifact_manifest.py verify-build \
-              --artifact-dir release-input --deb-output-dir staged/debs \
-              --manifest-output-dir staged/build-manifests \
-              --product xgc2-ros1-adapter --distribution focal \
-              --architecture "$arch" --source-sha "${{ inputs.expected_source_sha }}"
-          done
-          python3 .xgc2/scripts/xgc2_artifact_manifest.py release \
-            --deb-dir staged/debs --build-manifest-dir staged/build-manifests \
-            --publish-dir publish --product xgc2-ros1-adapter \
-            --product-version "${{ inputs.expected_version }}" --distribution focal \
-            --source-sha "${{ inputs.expected_source_sha }}" \
-            --release-id "${{ inputs.release_id || github.run_id }}" \
-            --release-lock-digest "${{ inputs.release_lock_digest }}" \
-            --target-architecture amd64 --target-architecture arm64
-      - run: .xgc2/scripts/publish_apt_repo.sh --deb-dir publish

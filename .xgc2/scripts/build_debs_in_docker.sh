@@ -86,6 +86,7 @@ if [[ -n "${DOCKER_PLATFORM}" ]]; then
 fi
 
 docker_env_args=(
+  -e XGC2_APT_OVERLAY_URL="${XGC2_APT_OVERLAY_URL:-}"
   -e BUILD_JOBS="${BUILD_JOBS}"
   -e DEBIAN_FRONTEND=noninteractive
   -e EXPECTED_DEB_ARCH="${expected_deb_arch}"
