@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapter
 name: XGC2 ROS1 Adapter
-version: 0.1.0-1
+version: 0.1.0-2
 kind: ros1-apt
 summary: ROS1 semantic adapter for XGC2 Go Core robot state and command bridging.
 ros:
@@ -26,15 +26,21 @@ apt:
   - ros-noetic-std-msgs
   - ros-noetic-tf2
 usage:
-  install: |
-    sudo apt update
+  install: 'sudo apt update
+
     sudo apt install ros-noetic-xgc2-ros1-adapter
-  smoke_test: |
-    rospack find xgc_ros1_adapter
+
+    '
+  smoke_test: 'rospack find xgc_ros1_adapter
+
     test -x /opt/ros/noetic/lib/xgc_ros1_adapter/xgc_ros1_adapter_node
-  notes: |
-    The runtime process is managed by XGC Go Core as ros1-adapter and connects
+
+    '
+  notes: 'The runtime process is managed by XGC Go Core as ros1-adapter and connects
+
     to the AdapterIngress gRPC UDS, defaulting to /tmp/xgc2/adapter-ingress.sock.
+
+    '
 ownership:
   paths:
   - /opt/ros/noetic/share/xgc_ros1_adapter
