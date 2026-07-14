@@ -1,48 +1,50 @@
 schema: xgc2.product.v1
-id: xgc2-ros1-adapter
-name: XGC2 ROS1 Adapter
-version: 0.1.0-4
+id: xgc2-ros1-adapters
+name: XGC2 ROS1 Robot Adapters
+version: 0.3.0-1
 kind: ros1-apt
-summary: ROS1 semantic adapter for XGC2 Go Core robot state and command bridging.
+summary: Separate PX4 multirotor and Scout Mini ROS1 semantic adapters.
 ros:
   distro: noetic
   workspace: catkin
   packages:
-  - xgc_ros1_adapter
+  - xgc_px4_multirotor_ros1_adapter
+  - xgc_scout_mini_ros1_adapter
 apt:
   distribution: focal
   install:
-  - ros-noetic-xgc2-ros1-adapter
+  - ros-noetic-xgc2-px4-multirotor-adapter
+  - ros-noetic-xgc2-scout-mini-adapter
   packages:
-  - ros-noetic-xgc2-ros1-adapter
+  - ros-noetic-xgc2-px4-multirotor-adapter
+  - ros-noetic-xgc2-scout-mini-adapter
   depends:
-  - libgrpc++1
-  - libprotobuf17
-  - libre2-5
+  - libxgc2-adapter-link-client-dev
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
+  - ros-noetic-nav-msgs
   - ros-noetic-roscpp
+  - ros-noetic-scout-msgs
   - ros-noetic-sensor-msgs
-  - ros-noetic-std-msgs
-  - ros-noetic-tf2
 usage:
-  install: 'sudo apt update
-
-    sudo apt install ros-noetic-xgc2-ros1-adapter
-
-    '
-  smoke_test: 'rospack find xgc_ros1_adapter
-
-    test -x /opt/ros/noetic/lib/xgc_ros1_adapter/xgc_ros1_adapter_node
-
-    '
-  notes: 'The runtime process is managed by XGC Go Core as ros1-adapter and connects
-
-    to the AdapterIngress gRPC UDS, defaulting to /tmp/xgc2/adapter-ingress.sock.
-
-    '
+  install: |
+    sudo apt update
+    sudo apt install \
+      ros-noetic-xgc2-px4-multirotor-adapter \
+      ros-noetic-xgc2-scout-mini-adapter
+  smoke_test: |
+    rospack find xgc_px4_multirotor_ros1_adapter
+    rospack find xgc_scout_mini_ros1_adapter
+    test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
+    test -x /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
+  notes: |
+    Each process advertises exactly one AdapterLink profile and can manage all
+    same-type robots in the immutable AdapterPlan for its experiment run.
 ownership:
   paths:
-  - /opt/ros/noetic/share/xgc_ros1_adapter
-  - /opt/ros/noetic/include/xgc_ros1_adapter
-  - /opt/ros/noetic/lib/xgc_ros1_adapter/xgc_ros1_adapter_node
+  - /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter
+  - /opt/ros/noetic/include/xgc_px4_multirotor_ros1_adapter
+  - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
+  - /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter
+  - /opt/ros/noetic/include/xgc_scout_mini_ros1_adapter
+  - /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node

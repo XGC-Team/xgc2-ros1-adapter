@@ -33,7 +33,7 @@ jobs:
           product_version="$(awk -F': *' '/^version:/ {print $2; exit}' .xgc2/product.yml)"
           python3 .xgc2/scripts/xgc2_artifact_manifest.py build \
             --deb-dir debs --output-dir .ci/build-manifests \
-            --product xgc2-ros1-adapter --product-version "$product_version" \
+            --product xgc2-ros1-adapters --product-version "$product_version" \
             --distribution focal --architecture "${{ matrix.arch }}" \
             --source-sha "$GITHUB_SHA" --ci-run-id "$GITHUB_RUN_ID" \
             --ci-workflow "$GITHUB_WORKFLOW" --ci-workflow-ref "$GITHUB_WORKFLOW_REF"
@@ -41,7 +41,7 @@ jobs:
       - name: Upload trusted build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
+          name: xgc2-ros1-adapters-debs-${{ matrix.arch }}
           path: |
             debs/*.deb
             .ci/build-manifests/*.json

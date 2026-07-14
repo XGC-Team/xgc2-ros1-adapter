@@ -4,3 +4,5 @@
 /devel/
 /install/
 /logs/
+__pycache__/
+*.pyc

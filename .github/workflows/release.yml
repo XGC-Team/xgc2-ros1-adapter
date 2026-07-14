@@ -101,14 +101,14 @@ jobs:
         run: |
           python3 .xgc2/scripts/xgc2_artifact_manifest.py build \
             --deb-dir debs --output-dir .ci/build-manifests \
-            --product xgc2-ros1-adapter --product-version "${{ inputs.expected_version }}" \
+            --product xgc2-ros1-adapters --product-version "${{ inputs.expected_version }}" \
             --distribution focal --architecture "${{ matrix.arch }}" \
             --source-sha "${{ inputs.expected_source_sha }}" --ci-run-id "$GITHUB_RUN_ID" \
             --ci-workflow "$GITHUB_WORKFLOW" --ci-workflow-ref "$GITHUB_WORKFLOW_REF"
       - uses: actions/upload-artifact@v4
         if: ${{ inputs.prepare_action == 'release' }}
         with:
-          name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
+          name: xgc2-ros1-adapters-debs-${{ matrix.arch }}
           path: |
             debs/*.deb
             .ci/build-manifests/*.json

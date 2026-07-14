@@ -9,7 +9,7 @@ pipeline {
   }
 
   stages {
-    stage('Catkin make in Docker') {
+    stage('Build split ROS1 adapter debs') {
       steps {
         sh '''#!/usr/bin/env bash
 set -euo pipefail

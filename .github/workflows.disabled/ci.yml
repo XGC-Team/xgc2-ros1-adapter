@@ -32,5 +32,5 @@ jobs:
       - name: Upload deb artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xgc2-ros1-adapter-debs-${{ matrix.arch }}
+          name: xgc2-ros1-adapters-debs-${{ matrix.arch }}
           path: debs/*.deb

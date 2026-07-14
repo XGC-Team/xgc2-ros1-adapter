@@ -72,7 +72,9 @@ esac
 
 if [[ "${COPY_OUTPUT}" == "true" ]]; then
   mkdir -p "${OUTPUT_DIR}"
-  rm -f "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter_"*.deb
+  rm -f \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb
 fi
 
 docker_network_args=()
@@ -91,6 +93,13 @@ docker_env_args=(
   -e DEBIAN_FRONTEND=noninteractive
   -e EXPECTED_DEB_ARCH="${expected_deb_arch}"
   -e INSTALL_CHECK="${INSTALL_CHECK}"
+  -e ADAPTER_LINK_CLIENT_DEB_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION:-0.1.0-1~focal}"
+  -e XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.2.0-1~focal}"
+  -e XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-true}"
+  -e XGC2_PROTOBUF_GIT_URL="${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
+  -e XGC2_PROTOBUF_GIT_TAG="${XGC2_PROTOBUF_GIT_TAG:-v0.2.0-1}"
+  -e XGC2_ADAPTER_CLIENT_GIT_URL="${XGC2_ADAPTER_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-link-client-cpp.git}"
+  -e XGC2_ADAPTER_CLIENT_GIT_TAG="${XGC2_ADAPTER_CLIENT_GIT_TAG:-v0.1.0-1}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -99,7 +108,7 @@ for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
   fi
 done
 
-container_name="xgc2-ros1-adapter-build-$(date +%s)-$$"
+container_name="xgc2-ros1-adapters-build-$(date +%s)-$$"
 container_created=false
 cleanup() {
   if [[ "${container_created}" == "true" ]]; then
@@ -108,7 +117,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker_pull_lock_file="${DOCKER_PULL_LOCK_FILE:-/tmp/xgc2-ros1-adapter-docker-pull.lock}"
+docker_pull_lock_file="${DOCKER_PULL_LOCK_FILE:-/tmp/xgc2-ros1-adapters-docker-pull.lock}"
 exec {docker_pull_lock_fd}>"${docker_pull_lock_file}"
 flock "${docker_pull_lock_fd}"
 
@@ -136,6 +145,17 @@ docker exec "${container_name}" bash -lc '
     echo "Building Debian package for ${actual_deb_arch}"
 
     apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
+      -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] https://xgc2.apt.xiaokang.ink focal main" \
+      > /etc/apt/sources.list.d/xgc2.list
+    if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
+      echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] ${XGC2_APT_OVERLAY_URL%/} focal main" \
+        > /etc/apt/sources.list.d/00-xgc2-release-train.list
+    fi
+    apt-get update
     apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
@@ -149,26 +169,73 @@ docker exec "${container_name}" bash -lc '
       pkg-config \
       protobuf-compiler \
       protobuf-compiler-grpc \
+      python3-jsonschema \
+      python3-protobuf \
+      python3-yaml \
       rsync \
       ros-noetic-geometry-msgs \
       ros-noetic-mavros-msgs \
+      ros-noetic-nav-msgs \
       ros-noetic-roscpp \
       ros-noetic-roslaunch \
       ros-noetic-rosmsg \
       ros-noetic-rospack \
-      ros-noetic-sensor-msgs \
-      ros-noetic-std-msgs \
-      ros-noetic-tf2
+      ros-noetic-scout-msgs \
+      ros-noetic-sensor-msgs
+
+    if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
+      rm -rf /tmp/xgc2-common-bootstrap
+      mkdir -p /tmp/xgc2-common-bootstrap/debs
+
+      git clone --depth 1 --branch "${XGC2_PROTOBUF_GIT_TAG}" \
+        "${XGC2_PROTOBUF_GIT_URL}" \
+        /tmp/xgc2-common-bootstrap/protobuf
+      test "$(git -C /tmp/xgc2-common-bootstrap/protobuf describe --tags --exact-match)" = \
+        "${XGC2_PROTOBUF_GIT_TAG}"
+      PACKAGE_DISTRIBUTION=focal \
+      PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
+      XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
+        /tmp/xgc2-common-bootstrap/protobuf/.xgc2/scripts/build_deb.sh
+      apt-get install -y \
+        /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
+
+      git clone --depth 1 --branch "${XGC2_ADAPTER_CLIENT_GIT_TAG}" \
+        "${XGC2_ADAPTER_CLIENT_GIT_URL}" \
+        /tmp/xgc2-common-bootstrap/adapter-link-client-cpp
+      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-link-client-cpp describe --tags --exact-match)" = \
+        "${XGC2_ADAPTER_CLIENT_GIT_TAG}"
+      PACKAGE_DISTRIBUTION=focal \
+      PACKAGE_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION}" \
+      XGC2_ADAPTER_CLIENT_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
+        /tmp/xgc2-common-bootstrap/adapter-link-client-cpp/.xgc2/scripts/build_deb.sh
+      apt-get install -y \
+        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-link-client-dev_*.deb
+    else
+      apt-get install -y \
+        "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
+        "libxgc2-adapter-link-client-dev=${ADAPTER_LINK_CLIENT_DEB_VERSION}"
+    fi
+
+    installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-link-client-dev)"
+    if [[ "${installed_client_version}" != "${ADAPTER_LINK_CLIENT_DEB_VERSION}" ]]; then
+      echo "AdapterLink client version mismatch: expected ${ADAPTER_LINK_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
+      exit 1
+    fi
+    installed_protobuf_version="$(dpkg-query -W -f="\${Version}" xgc2-protobuf-dev)"
+    if [[ "${installed_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+      echo "XGC2 protobuf version mismatch: expected ${XGC2_PROTOBUF_DEB_VERSION}, got ${installed_protobuf_version}" >&2
+      exit 1
+    fi
 
     rm -rf /tmp/work /tmp/out
     mkdir -p /tmp/work /tmp/out
     rsync -a --delete /tmp/ros1-adapter/ /tmp/work/
+    rm -rf /tmp/work/build /tmp/work/devel /tmp/work/install /tmp/work/logs /tmp/work/debs
 
     cd /tmp/work
     set +u
     source /opt/ros/noetic/setup.bash
     set -u
-    export XGC2_CONTRACTS_DIR=/tmp/work/contracts
     parallel_jobs="${BUILD_JOBS:-$(nproc)}"
     DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
@@ -176,12 +243,17 @@ docker exec "${container_name}" bash -lc '
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
+    catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
+    catkin_test_results --verbose build/test_results
+
     /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
       --output-dir /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
-      apt-get install -y /tmp/out/ros-noetic-xgc2-ros1-adapter_*.deb
+      apt-get install -y \
+        /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb
       /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
     fi
   '
