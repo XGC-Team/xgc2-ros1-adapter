@@ -269,19 +269,16 @@ xgc::v1::Message RobotRuntime::makeEnvelopeLocked(
   envelope.set_robot_id(robot_id_);
   envelope.set_channel_id(channel_id);
   envelope.set_sequence(++sequences_[channel_id]);
-  auto *time = envelope.mutable_source_time();
-  const ros::Time effective_stamp =
-      source_stamp.isZero() ? ros::Time::now() : source_stamp;
-  time->set_nanoseconds(static_cast<std::int64_t>(effective_stamp.toNSec()));
-  time->set_clock_domain(ros::Time::isSimTime()
-                             ? xgc::v1::CLOCK_DOMAIN_SIMULATION
-                             : xgc::v1::CLOCK_DOMAIN_ROS);
+  if (!source_stamp.isZero()) {
+    auto *time = envelope.mutable_source_time();
+    time->set_nanoseconds(static_cast<std::int64_t>(source_stamp.toNSec()));
+    time->set_clock_domain(ros::Time::isSimTime()
+                               ? xgc::v1::CLOCK_DOMAIN_SIMULATION
+                               : xgc::v1::CLOCK_DOMAIN_ROS);
+  }
   envelope.set_observed_unix_nanos(
       static_cast<std::int64_t>(ros::WallTime::now().toNSec()));
   envelope.set_message_id(message_id);
-  envelope.set_schema_version(metadata.version);
-  envelope.set_schema_fingerprint(metadata.fingerprint);
-  envelope.set_encoding(xgc::v1::PAYLOAD_ENCODING_PROTOBUF);
   if (!payload.SerializeToString(envelope.mutable_payload())) {
     throw std::runtime_error("failed to serialize semantic telemetry payload");
   }

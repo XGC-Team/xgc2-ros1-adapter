@@ -16,19 +16,29 @@ import yaml
 
 
 PROFILE_FILES = {
-    "px4.multirotor.ros1.v1": "ros1/px4-multirotor-ros1-v1.yaml",
+    "px4.multirotor.ros1.v2": "ros1/px4-multirotor-ros1-v2.yaml",
     "scout-mini.ros1.v1": "ros1/scout-mini-ros1-v1.yaml",
 }
 
+EXPECTED_PARAMETERS = {
+    "px4.multirotor.ros1.v2": {"namespace", "mocap_rigid_body"},
+    "scout-mini.ros1.v1": {"namespace"},
+}
+
 EXPECTED_CHANNELS = {
-    "px4.multirotor.ros1.v1": {
+    "px4.multirotor.ros1.v2": {
         "state.pose": ("stream_out", 0, 2001, 10.0),
+        "state.mocap.pose": ("stream_out", 0, 2001, 10.0),
         "state.velocity": ("stream_out", 0, 2002, 10.0),
         "state.imu": ("stream_out", 0, 2003, 10.0),
         "state.power": ("stream_out", 0, 2004, 1.0),
         "state.health": ("stream_out", 0, 2005, 2.0),
         "state.flight": ("stream_out", 0, 3001, 2.0),
-        "diagnostic.channel-health": ("stream_out", 0, 2010, 1.0),
+        "setpoint.local": ("stream_out", 0, 3002, 10.0),
+        "setpoint.attitude": ("stream_out", 0, 3003, 10.0),
+        "diagnostic.fcu-link": ("stream_out", 0, 3004, 2.0),
+        "diagnostic.offboard-input": ("stream_out", 0, 3005, 2.0),
+        "diagnostic.stream-health": ("stream_out", 0, 2011, 1.0),
         "operation.arm": ("operation", 3201, 0, 0.0),
         "operation.mode": ("operation", 3202, 0, 0.0),
         "operation.autopilot-reboot": ("operation", 3203, 0, 0.0),
@@ -44,10 +54,31 @@ EXPECTED_CHANNELS = {
 }
 
 EXPECTED_PROCESSORS = {
-    "px4.multirotor.ros1.v1": {
+    "px4.multirotor.ros1.v2": {
         "state.pose": {
             "processor": "px4.pose-estimate",
             "inputs": {"pose": {"name": "mavros/local_position/pose", "type": "geometry_msgs/PoseStamped"}},
+        },
+        "state.mocap.pose": {
+            "processor": "px4.mocap-vision-relay",
+            "inputs": {
+                "pose": {
+                    "name": "vrpn_client_node/{mocap_rigid_body}/pose",
+                    "type": "geometry_msgs/PoseStamped",
+                    "scope": "global",
+                }
+            },
+            "output": {
+                "name": "mavros/vision_pose/pose",
+                "type": "geometry_msgs/PoseStamped",
+            },
+            "policy": {
+                "vision_publish_rate_hz": 50,
+                "source_timeout_ms": 200,
+                "coordinate_transform": "none",
+                "interpolate": False,
+                "repeat_last_sample": False,
+            },
         },
         "state.velocity": {
             "processor": "px4.velocity-estimate",
@@ -75,9 +106,53 @@ EXPECTED_PROCESSORS = {
                 "extended_state": {"name": "mavros/extended_state", "type": "mavros_msgs/ExtendedState"},
             },
         },
-        "diagnostic.channel-health": {
-            "processor": "common.channel-health",
-            "observes": ["state.pose", "state.velocity", "state.imu", "state.power", "state.health", "state.flight"],
+        "setpoint.local": {
+            "processor": "px4.local-trajectory-setpoint",
+            "inputs": {
+                "setpoint": {
+                    "name": "mavros/setpoint_raw/local",
+                    "type": "mavros_msgs/PositionTarget",
+                }
+            },
+        },
+        "setpoint.attitude": {
+            "processor": "px4.attitude-setpoint",
+            "inputs": {
+                "setpoint": {
+                    "name": "mavros/setpoint_raw/attitude",
+                    "type": "mavros_msgs/AttitudeTarget",
+                }
+            },
+        },
+        "diagnostic.fcu-link": {
+            "processor": "px4.fcu-link-status",
+            "inputs": {
+                "timesync": {
+                    "name": "mavros/timesync_status",
+                    "type": "mavros_msgs/TimesyncStatus",
+                }
+            },
+        },
+        "diagnostic.offboard-input": {
+            "processor": "px4.offboard-input-status",
+            "observes": ["setpoint.local", "setpoint.attitude", "state.flight"],
+            "policy": {"minimum_rate_hz": 2.5, "source_timeout_ms": 500},
+        },
+        "diagnostic.stream-health": {
+            "processor": "common.stream-health-report",
+            "observes": [
+                "state.pose",
+                "state.mocap.pose",
+                "state.velocity",
+                "state.imu",
+                "state.power",
+                "state.health",
+                "state.flight",
+                "setpoint.local",
+                "setpoint.attitude",
+                "diagnostic.fcu-link",
+                "diagnostic.offboard-input",
+            ],
         },
         "operation.arm": {
             "processor": "px4.arm",
@@ -172,7 +247,7 @@ def load_profile(root, profile_id):
         if profile.get("namespace_parameter") != "namespace":
             raise ValueError("{} must use the namespace plan parameter".format(path))
         parameters = profile.get("parameters") or {}
-        if set(parameters) != {"namespace"}:
+        if set(parameters) != EXPECTED_PARAMETERS[profile_id]:
             raise ValueError("{} has unsupported profile parameters: {}".format(path, sorted(parameters)))
 
         actual = {}
@@ -251,7 +326,7 @@ def generate(registry_fingerprint, messages, profiles, cpp_namespace):
         "namespace {} {{".format(cpp_namespace),
         "namespace contract {",
         "",
-        "constexpr std::uint32_t kProtocolVersion = 1u;",
+        "constexpr std::uint32_t kProtocolVersion = 2u;",
         "constexpr std::uint64_t kRegistryFingerprint = {}ULL;".format(registry_fingerprint),
         "",
         "struct MessageMetadata {",

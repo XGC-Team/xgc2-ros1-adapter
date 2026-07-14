@@ -11,11 +11,14 @@
 
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
+#include <mavros_msgs/AttitudeTarget.h>
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/CommandLong.h>
 #include <mavros_msgs/ExtendedState.h>
+#include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
+#include <mavros_msgs/TimesyncStatus.h>
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
 #include <sensor_msgs/Imu.h>
@@ -29,9 +32,16 @@ namespace xgc_px4_multirotor_ros1_adapter {
 std::string topicName(const std::string &robot_namespace,
                       const std::string &relative_name);
 bool validRobotNamespace(const std::string &value, std::string *error);
+bool validMocapRigidBodyName(const std::string &value, std::string *error);
+bool validVisionPose(const geometry_msgs::PoseStamped &message);
+std::uint32_t localSetpointValidFields(std::uint16_t type_mask);
+std::uint32_t attitudeSetpointValidFields(std::uint8_t type_mask);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
 constexpr double kPx4PoseStaleAfterSeconds = 1.0;
+constexpr double kMocapStaleAfterSeconds = 0.2;
+constexpr double kSetpointStaleAfterSeconds = 0.5;
+constexpr double kVisionMinimumPeriodSeconds = 0.02;
 bool px4IsOnline(bool state_known, bool state_fresh, bool connected);
 bool isAllowedPx4Mode(const std::string &mode);
 bool validateNonEmptyAdapterPlan(const xgc::adapter::v1::AdapterPlan &plan,
@@ -82,10 +92,12 @@ private:
     double source_rate_hz = 0.0;
     double output_rate_hz = 0.0;
     double stale_after_seconds = 1.0;
+    std::string stream_id;
   };
 
   RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                std::string profile_id, std::string robot_namespace,
+               std::string mocap_rigid_body,
                std::uint64_t plan_revision,
                std::set<std::string> enabled_channels, EnvelopeEmitter emitter);
 
@@ -100,7 +112,8 @@ private:
                                       const google::protobuf::Message &payload);
   void emit(std::vector<xgc::v1::Message> messages);
   void ensureSourceLocked(const std::string &endpoint,
-                          double stale_after_seconds);
+                          double stale_after_seconds,
+                          const std::string &stream_id);
   void recordSourceLocked(const std::string &endpoint,
                           const ros::WallTime &now);
   void recordOutputLocked(const std::string &endpoint);
@@ -110,6 +123,7 @@ private:
                                       const ros::WallTime &now) const;
 
   void px4PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
   void
   px4VelocityCallback(const geometry_msgs::TwistStamped::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
@@ -117,16 +131,23 @@ private:
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr &message);
   void mavrosExtendedStateCallback(
       const mavros_msgs::ExtendedState::ConstPtr &message);
+  void localSetpointCallback(
+      const mavros_msgs::PositionTarget::ConstPtr &message);
+  void attitudeSetpointCallback(
+      const mavros_msgs::AttitudeTarget::ConstPtr &message);
+  void timesyncStatusCallback(
+      const mavros_msgs::TimesyncStatus::ConstPtr &message);
 
   void emitPx4PeriodicLocked(const ros::WallTime &now,
                              std::vector<xgc::v1::Message> *messages);
-  void emitChannelHealthLocked(const ros::WallTime &now,
-                               std::vector<xgc::v1::Message> *messages);
+  void emitStreamHealthLocked(const ros::WallTime &now,
+                              std::vector<xgc::v1::Message> *messages);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
   const std::string profile_id_;
   const std::string robot_namespace_;
+  const std::string mocap_rigid_body_;
   const std::uint64_t plan_revision_;
   const std::set<std::string> enabled_channels_;
   const EnvelopeEmitter emitter_;
@@ -137,6 +158,11 @@ private:
   const std::string power_endpoint_;
   const std::string state_endpoint_;
   const std::string extended_state_endpoint_;
+  const std::string mocap_endpoint_;
+  const std::string vision_pose_endpoint_;
+  const std::string local_setpoint_endpoint_;
+  const std::string attitude_setpoint_endpoint_;
+  const std::string timesync_endpoint_;
   const std::string arm_endpoint_;
   const std::string mode_endpoint_;
   const std::string command_endpoint_;
@@ -148,15 +174,27 @@ private:
 
   mavros_msgs::State mavros_state_;
   mavros_msgs::ExtendedState mavros_extended_state_;
+  mavros_msgs::PositionTarget local_setpoint_;
+  mavros_msgs::AttitudeTarget attitude_setpoint_;
   bool has_mavros_state_ = false;
   bool has_mavros_extended_state_ = false;
+  bool has_local_setpoint_ = false;
+  bool has_attitude_setpoint_ = false;
+  bool valid_local_setpoint_ = false;
+  bool valid_attitude_setpoint_ = false;
+  ros::WallTime last_vision_publish_;
 
   ros::Subscriber pose_subscriber_;
+  ros::Subscriber mocap_subscriber_;
   ros::Subscriber velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber power_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber extended_state_subscriber_;
+  ros::Subscriber local_setpoint_subscriber_;
+  ros::Subscriber attitude_setpoint_subscriber_;
+  ros::Subscriber timesync_subscriber_;
+  ros::Publisher vision_pose_publisher_;
   ros::ServiceClient arm_client_;
   ros::ServiceClient mode_client_;
   ros::ServiceClient command_client_;

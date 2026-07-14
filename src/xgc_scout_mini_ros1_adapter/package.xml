@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>xgc_scout_mini_ros1_adapter</name>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
   <description>Scout Mini ROS1 semantic adapter for XGC2 AdapterLink.</description>
 
   <maintainer email="lxk@example.com">XGC</maintainer>

@@ -22,7 +22,7 @@ namespace xgc_scout_mini_ros1_adapter {
 namespace {
 
 constexpr const char *kProfile = "scout-mini.ros1.v1";
-constexpr const char *kSoftwareVersion = "0.3.0";
+constexpr const char *kSoftwareVersion = "0.4.0";
 
 void logFromClient(xgc2::adapter_link::LogLevel level,
                    const std::string &message) {

@@ -18,7 +18,7 @@ product_version() {
 }
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
-ADAPTER_LINK_CLIENT_DEB_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION:-0.1.0-1~focal}"
+ADAPTER_LINK_CLIENT_DEB_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION:-0.2.0-1~focal}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

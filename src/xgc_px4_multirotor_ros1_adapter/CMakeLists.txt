@@ -15,7 +15,7 @@ find_package(xgc2_adapter_link_client CONFIG REQUIRED)
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
   message(FATAL_ERROR "AdapterLink client dependency did not expose the XGC2 registry")
 endif()
-if(NOT EXISTS "${XGC2_PROTOBUF_PROFILES_DIR}/ros1/px4-multirotor-ros1-v1.yaml")
+if(NOT EXISTS "${XGC2_PROTOBUF_PROFILES_DIR}/ros1/px4-multirotor-ros1-v2.yaml")
   message(FATAL_ERROR "installed XGC2 contract does not provide the PX4 ROS1 profile")
 endif()
 
@@ -24,7 +24,7 @@ set(CONTRACT_METADATA_HDR
 set(CONTRACT_GENERATOR
   "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_contract_metadata.py")
 set(PROFILE_FILE
-  "${XGC2_PROTOBUF_PROFILES_DIR}/ros1/px4-multirotor-ros1-v1.yaml")
+  "${XGC2_PROTOBUF_PROFILES_DIR}/ros1/px4-multirotor-ros1-v2.yaml")
 
 add_custom_command(
   OUTPUT "${CONTRACT_METADATA_HDR}"
@@ -33,7 +33,7 @@ add_custom_command(
   COMMAND ${PYTHON_EXECUTABLE} "${CONTRACT_GENERATOR}"
     --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
     --profiles-dir "${XGC2_PROTOBUF_PROFILES_DIR}"
-    --profile-id "px4.multirotor.ros1.v1"
+    --profile-id "px4.multirotor.ros1.v2"
     --cpp-namespace "${PROJECT_NAME}"
     --output "${CONTRACT_METADATA_HDR}"
   DEPENDS

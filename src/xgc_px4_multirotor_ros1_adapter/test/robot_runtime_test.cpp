@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,45 @@ TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
   error.clear();
   EXPECT_FALSE(validRobotNamespace("/", &error));
   EXPECT_FALSE(error.empty());
+}
+
+TEST(RosNames, AcceptsOnlyAssetSafeMocapRigidBodyNames) {
+  std::string error;
+  EXPECT_TRUE(validMocapRigidBodyName("fs150_01", &error));
+  EXPECT_TRUE(validMocapRigidBodyName("FS150-01", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("/vrpn/arbitrary/topic", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("body name", &error));
+}
+
+TEST(VisionRelay, RejectsNonFiniteOrDegeneratePoses) {
+  geometry_msgs::PoseStamped pose;
+  pose.pose.orientation.w = 1.0;
+  EXPECT_TRUE(validVisionPose(pose));
+
+  pose.pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(validVisionPose(pose));
+  pose.pose.position.x = 0.0;
+  pose.pose.orientation.w = 0.0;
+  EXPECT_FALSE(validVisionPose(pose));
+  EXPECT_DOUBLE_EQ(0.02, kVisionMinimumPeriodSeconds);
+  EXPECT_DOUBLE_EQ(0.2, kMocapStaleAfterSeconds);
+}
+
+TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
+  EXPECT_EQ(0x7ffu, localSetpointValidFields(0));
+  EXPECT_EQ(0x7feu, localSetpointValidFields(
+                        mavros_msgs::PositionTarget::IGNORE_PX));
+
+  EXPECT_EQ(0x1fu, attitudeSetpointValidFields(0));
+  EXPECT_EQ(0x0fu, attitudeSetpointValidFields(
+                       mavros_msgs::AttitudeTarget::IGNORE_THRUST));
+  const std::uint8_t ignore_all =
+      mavros_msgs::AttitudeTarget::IGNORE_ROLL_RATE |
+      mavros_msgs::AttitudeTarget::IGNORE_PITCH_RATE |
+      mavros_msgs::AttitudeTarget::IGNORE_YAW_RATE |
+      mavros_msgs::AttitudeTarget::IGNORE_THRUST |
+      mavros_msgs::AttitudeTarget::IGNORE_ATTITUDE;
+  EXPECT_EQ(0u, attitudeSetpointValidFields(ignore_all));
 }
 
 TEST(Freshness, AppliesThePx4PoseBoundary) {
@@ -106,7 +146,7 @@ TEST(InstalledContract, AdvertisesOnlyThePx4Profile) {
   std::vector<xgc::adapter::v1::ProfileAdvertisement> profiles;
   contract::addSupportedProfiles(&profiles);
   ASSERT_EQ(1u, profiles.size());
-  EXPECT_EQ("px4.multirotor.ros1.v1", profiles.front().profile_id());
+  EXPECT_EQ("px4.multirotor.ros1.v2", profiles.front().profile_id());
   EXPECT_EQ(64u, profiles.front().profile_digest().size());
   for (const auto &channel : profiles.front().channels()) {
     EXPECT_NE(xgc::adapter::v1::CHANNEL_KIND_STREAM_IN, channel.kind());
@@ -120,6 +160,10 @@ TEST(InstalledContract, ContainsPx4OperationMetadataOnly) {
   EXPECT_EQ(1u, metadata.version);
   EXPECT_NE(0u, metadata.fingerprint);
   EXPECT_FALSE(contract::messageMetadata(5001, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3002, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3003, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3004, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3005, &metadata));
 }
 
 } // namespace

@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.3.0-2
+version: 0.4.0-1
 kind: ros1-apt
 summary: Separate PX4 multirotor and Scout Mini ROS1 semantic adapters.
 ros:

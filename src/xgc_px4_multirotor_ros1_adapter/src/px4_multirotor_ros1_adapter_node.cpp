@@ -23,8 +23,8 @@
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace {
 
-constexpr const char *kProfile = "px4.multirotor.ros1.v1";
-constexpr const char *kSoftwareVersion = "0.3.0";
+constexpr const char *kProfile = "px4.multirotor.ros1.v2";
+constexpr const char *kSoftwareVersion = "0.4.0";
 
 std::int64_t wallUnixNanos() {
   return static_cast<std::int64_t>(ros::WallTime::now().toNSec());
@@ -157,11 +157,13 @@ private:
         *error = "profile digest mismatch for robot " + robot_plan.robot_id();
         return false;
       }
-      if (robot_plan.parameters().size() != 1 ||
+      if (robot_plan.parameters().size() != 2 ||
           robot_plan.parameters().find("namespace") ==
+              robot_plan.parameters().end() ||
+          robot_plan.parameters().find("mocap_rigid_body") ==
               robot_plan.parameters().end()) {
         *error = "robot " + robot_plan.robot_id() +
-                 " must contain exactly the namespace profile parameter";
+                 " must contain exactly namespace and mocap_rigid_body profile parameters";
         return false;
       }
       const std::string &robot_namespace =
@@ -278,12 +280,9 @@ private:
           xgc::adapter::v1::RESULT_CODE_INVALID_ARGUMENT);
     }
     contract::MessageMetadata metadata;
-    if (!contract::messageMetadata(message.message_id(), &metadata) ||
-        message.schema_version() != metadata.version ||
-        message.schema_fingerprint() != metadata.fingerprint ||
-        message.encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
+    if (!contract::messageMetadata(message.message_id(), &metadata)) {
       return xgc2::adapter_link::OperationExecutionResult::Rejected(
-          "operation schema metadata does not match the installed registry",
+          "operation message_id does not exist in the installed registry",
           xgc::adapter::v1::RESULT_CODE_INVALID_ARGUMENT);
     }
     if (message.payload().size() > 64 * 1024) {

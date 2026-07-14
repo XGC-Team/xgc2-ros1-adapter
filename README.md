@@ -15,7 +15,7 @@ idempotency. This repository contains only ROS/native robot mappings.
 
 | ROS package | Debian package | Profile | Native dependency |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `px4.multirotor.ros1.v1` | `mavros_msgs` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `px4.multirotor.ros1.v2` | `mavros_msgs` |
 | `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `scout-mini.ros1.v1` | `scout_msgs` |
 
 The PX4 package has no Scout dependency. The Scout package has no MAVROS
@@ -38,6 +38,14 @@ For each plan namespace such as `/uav1`, the adapter consumes:
 - `mavros/battery`
 - `mavros/state`
 - `mavros/extended_state`
+- `mavros/timesync_status`
+- `mavros/setpoint_raw/local`
+- `mavros/setpoint_raw/attitude`
+- `/vrpn_client_node/{mocap_rigid_body}/pose`
+
+It republishes each valid, new VRPN sample unchanged to
+`mavros/vision_pose/pose`, capped at 50 Hz. It applies no position offset or
+coordinate transform, and never interpolates or repeats stale samples.
 
 It publishes typed pose, velocity, IMU, power, health, flight, and channel
 health messages. It implements only the profile's typed operations:
@@ -114,8 +122,8 @@ The release path builds and install-checks both independent Debian packages:
 ```
 
 CI bootstraps its common dependencies from the public pinned tags
-`xgc2-protobuf@v0.2.0-1` and
-`xgc2-adapter-link-client-cpp@v0.1.0-1`, builds their Debian packages inside
+`xgc2-protobuf@v0.3.0-1` and
+`xgc2-adapter-link-client-cpp@v0.2.0-1`, builds their Debian packages inside
 the clean container, and installs those packages before building this
 workspace. It therefore does not depend on a new production APT publication
 having completed. Set `XGC2_BOOTSTRAP_COMMON_FROM_GIT=false` to exercise the
