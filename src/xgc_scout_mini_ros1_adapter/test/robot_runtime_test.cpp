@@ -67,19 +67,24 @@ TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v2");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v3");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v2", "state.pose",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v3", "state.pose",
                                         &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v2",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v3",
                                          "operation.arm", &unknown));
+
+  std::size_t operation_count = 1u;
+  EXPECT_EQ(nullptr, contract::profileOperations("scout-mini.ros1.v3",
+                                                 &operation_count));
+  EXPECT_EQ(0u, operation_count);
 }
 
 TEST(InstalledContract, DoesNotContainPx4OperationMetadata) {

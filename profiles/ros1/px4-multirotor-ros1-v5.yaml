@@ -1,6 +1,6 @@
-schema: xgc.robot.adapter-profile/v2
-profile_id: px4.multirotor.ros1.v4
-profile_version: 4
+schema: xgc.robot.adapter-profile/v3
+profile_id: px4.multirotor.ros1.v5
+profile_version: 5
 native_protocol: ros1
 robot_kind: px4_multirotor
 description: PX4 multirotor telemetry, mocap relay, diagnostics, and native commands through MAVROS.

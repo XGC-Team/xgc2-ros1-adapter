@@ -29,9 +29,9 @@ VERIFY_SPEC = importlib.util.spec_from_file_location(
 VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
-SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v2.schema.json"
-PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v4.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v2.yaml"
+SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v3.schema.json"
+PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v5.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v3.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -121,7 +121,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
 
     def test_catalog_carries_exact_kind_and_semantic_traits(self):
         _, _, catalog = GENERATOR.build_documents(self.arguments(PX4_PROFILE))
-        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v2")
+        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v3")
         profile = catalog["profiles"][0]
         self.assertEqual(
             set(profile),
@@ -143,12 +143,49 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(
             profile["semantics"]["operations"],
             [
-                {"id": "arm", "channelId": "operation.arm"},
+                {
+                    "id": "arm",
+                    "channelId": "operation.arm",
+                    "timeoutMillis": 5000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": ["armed"],
+                        "properties": {"armed": {"type": "boolean"}},
+                        "additionalProperties": False,
+                    },
+                },
                 {
                     "id": "reboot-autopilot",
                     "channelId": "operation.autopilot-reboot",
+                    "timeoutMillis": 5000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": [],
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
                 },
-                {"id": "set-flight-mode", "channelId": "operation.mode"},
+                {
+                    "id": "set-flight-mode",
+                    "channelId": "operation.mode",
+                    "timeoutMillis": 5000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": ["mode"],
+                        "properties": {
+                            "mode": {
+                                "type": "string",
+                                "enum": [
+                                    "OFFBOARD",
+                                    "POSCTL",
+                                    "ALTCTL",
+                                    "STABILIZED",
+                                ],
+                            }
+                        },
+                        "additionalProperties": False,
+                    },
+                },
             ],
         )
         self.assertEqual(
@@ -167,6 +204,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         )
         scout = scout_catalog["profiles"][0]
         self.assertEqual(scout["robotKind"], "scout_mini")
+        self.assertEqual(scout["semantics"]["operations"], [])
         self.assertEqual(
             [
                 condition["channelId"]
@@ -179,6 +217,22 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             "xgc.semantic.common.vehicle-health.online",
         )
 
+    def test_profile_v3_contract_has_no_v2_aliases(self):
+        self.assertEqual(
+            CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
+            "xgc.robot.adapter-profile/v3",
+        )
+        self.assertEqual(
+            CONTRACT_GENERATOR.PROFILE_CONTRACT_DIGEST_SCHEMA,
+            "xgc.robot.profile-contract-digest/v3",
+        )
+        for legacy in (
+            "profiles/schema/robot-adapter-profile-v{}.schema.json".format(2),
+            "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(4),
+            "profiles/ros1/scout-mini-ros1-v{}.yaml".format(2),
+        ):
+            self.assertFalse((REPOSITORY_ROOT / legacy).exists(), legacy)
+
     def test_header_and_catalog_share_the_canonical_profile_digest(self):
         _, _, catalog = GENERATOR.build_documents(self.arguments(PX4_PROFILE))
         installed_profile = catalog["profiles"][0]
@@ -190,7 +244,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         expected_digest = hashlib.sha256(
             json.dumps(
                 {
-                    "schema": "xgc.robot.profile-contract-digest/v2",
+                    "schema": "xgc.robot.profile-contract-digest/v3",
                     "profile": profile_body,
                 },
                 sort_keys=True,
@@ -216,7 +270,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn(expected_digest, header)
 
     def test_capabilities_and_direct_process_environment_are_exact(self):
-        px4_adapter, px4_process, _ = GENERATOR.build_documents(
+        px4_adapter, px4_process, px4_catalog = GENERATOR.build_documents(
             self.arguments(PX4_PROFILE)
         )
         self.assertEqual(
@@ -246,6 +300,22 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             endpoint["endpointId"]: endpoint
             for endpoint in command_capability["endpoints"]
         }
+        profile_operations = {
+            operation["id"]: operation
+            for operation in px4_catalog["profiles"][0]["semantics"][
+                "operations"
+            ]
+        }
+        self.assertEqual(set(profile_operations), set(endpoints))
+        for operation_id, operation in profile_operations.items():
+            self.assertEqual(
+                operation["timeoutMillis"],
+                endpoints[operation_id]["defaultTimeoutMillis"],
+            )
+            self.assertLessEqual(
+                operation["timeoutMillis"],
+                endpoints[operation_id]["maximumTimeoutMillis"],
+            )
         self.assertEqual(endpoints["arm"]["sideEffect"], "idempotent")
         self.assertEqual(
             endpoints["reboot-autopilot"]["sideEffect"], "non-idempotent"
@@ -330,13 +400,21 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
 
     def test_duplicate_operation_identity_is_rejected_without_fallback(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))
-        profile["channels"][-1]["operation_id"] = "arm"
+        duplicate_arm = copy.deepcopy(
+            next(
+                channel
+                for channel in profile["channels"]
+                if channel.get("operation_id") == "arm"
+            )
+        )
+        duplicate_arm["id"] = "operation.arm-duplicate"
+        profile["channels"].append(duplicate_arm)
         path = self.temp / "duplicate-operation.yaml"
         path.write_text(yaml.safe_dump(profile, sort_keys=False), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate operation identity|operation identities must be unique"):
             GENERATOR.build_documents(self.arguments(path))
 
-    def test_operation_capability_is_derived_without_a_central_allowlist(self):
+    def test_unknown_operation_contract_is_rejected_without_fallback(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))
         extra = copy.deepcopy(
             next(channel for channel in profile["channels"] if channel["id"] == "operation.arm")
@@ -347,33 +425,10 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         profile["channels"].append(extra)
         path = self.temp / "extra-operation.yaml"
         path.write_text(yaml.safe_dump(profile, sort_keys=False), encoding="utf-8")
-
-        adapter, _, catalog = GENERATOR.build_documents(self.arguments(path))
-        command = next(
-            capability
-            for capability in adapter["adapters"][0]["capabilityManifest"][
-                "capabilities"
-            ]
-            if capability["ref"]["id"] == "xgc.robot.command"
-        )
-        endpoints = {
-            endpoint["endpointId"]: endpoint for endpoint in command["endpoints"]
-        }
-        self.assertEqual(set(endpoints), {
-            "arm",
-            "arm-secondary",
-            "reboot-autopilot",
-            "set-flight-mode",
-        })
-        self.assertEqual(
-            endpoints["arm-secondary"]["sideEffect"], "non-idempotent"
-        )
-        self.assertIn(
-            {"id": "arm-secondary", "channelId": "operation.arm-secondary"},
-            catalog["profiles"][0]["semantics"]["operations"],
-        )
-        self.assertFalse(hasattr(GENERATOR, "PX4_COMMANDS"))
-        self.assertFalse(hasattr(VERIFIER, "PX4_COMMANDS"))
+        with self.assertRaisesRegex(
+            ValueError, "schema validation failed|no owned parameter contract"
+        ):
+            GENERATOR.build_documents(self.arguments(path))
 
     def test_native_operation_timeout_limit_is_enforced_before_manifest_generation(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))
@@ -511,6 +566,14 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         def mutate_channel_kind(profile):
             profile["channels"][0]["kind"] = "operation"
 
+        def mutate_operation_parameter_schema(profile):
+            profile["semantics"]["operations"][0]["parameterSchema"][
+                "legacy"
+            ] = True
+
+        def mutate_operation_timeout(profile):
+            profile["semantics"]["operations"][0]["timeoutMillis"] += 1
+
         for name, mutate in (
             ("profileId", mutate_profile_id),
             ("profile digest", mutate_profile_digest),
@@ -523,6 +586,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ("parameter contract", mutate_parameter_contract),
             ("removed namespace parameter role", mutate_removed_namespace_role),
             ("channel kind", mutate_channel_kind),
+            ("operation parameter schema", mutate_operation_parameter_schema),
+            ("operation timeout", mutate_operation_timeout),
         ):
             with self.subTest(name):
                 tampered = copy.deepcopy(catalog)

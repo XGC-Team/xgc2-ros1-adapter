@@ -132,6 +132,48 @@ def contract(capability_id: str, endpoints: list[dict[str, Any]]) -> dict[str, A
     }
 
 
+def validate_profile_operation_endpoints(
+    profile_body: dict[str, Any], capability_manifest: dict[str, Any]
+) -> None:
+    profile_operations = {
+        operation["id"]: operation
+        for operation in profile_body["semantics"]["operations"]
+    }
+    command_capability = next(
+        (
+            capability
+            for capability in capability_manifest["capabilities"]
+            if capability["ref"]["id"] == "xgc.robot.command"
+        ),
+        None,
+    )
+    endpoints = {
+        endpoint["endpointId"]: endpoint
+        for endpoint in (
+            command_capability["endpoints"] if command_capability else []
+        )
+    }
+    if set(profile_operations) != set(endpoints):
+        raise ValueError(
+            "Profile operations and provider command endpoints disagree"
+        )
+    for operation_id, operation in profile_operations.items():
+        endpoint = endpoints[operation_id]
+        timeout = operation["timeoutMillis"]
+        if (
+            not isinstance(timeout, int)
+            or isinstance(timeout, bool)
+            or timeout <= 0
+            or timeout != endpoint["defaultTimeoutMillis"]
+            or timeout > endpoint["maximumTimeoutMillis"]
+        ):
+            raise ValueError(
+                "Profile operation {} timeout disagrees with its provider endpoint".format(
+                    operation_id
+                )
+            )
+
+
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -271,6 +313,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
     profile_body = catalog_profile_body(
         generated_profile, messages, args.definition_id
     )
+    validate_profile_operation_endpoints(profile_body, capability_manifest)
     installed_profile = {
         "profileId": profile_body["profileId"],
         "profileDigest": profile_contract_digest(profile_body),
@@ -281,7 +324,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
         },
     }
     profile_catalog = {
-        "schema": "xgc.robot.adapter-profile-catalog/v2",
+        "schema": "xgc.robot.adapter-profile-catalog/v3",
         "profiles": [installed_profile],
     }
     return adapter_manifest, process_manifest, profile_catalog

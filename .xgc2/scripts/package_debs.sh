@@ -106,7 +106,7 @@ package_adapter() {
     echo "missing installed ${ros_package} native profile" >&2
     exit 1
   fi
-  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v2.schema.json" ]]; then
+  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v3.schema.json" ]]; then
     echo "missing installed ${ros_package} profile schema" >&2
     exit 1
   fi
@@ -155,7 +155,7 @@ package_adapter \
   "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
-  "px4-multirotor-ros1-v4.yaml" \
+  "px4-multirotor-ros1-v5.yaml" \
   "xgc2-px4-multirotor-ros1-adapter" \
   "xgc_px4_multirotor_ros1_adapter_service_helper"
 
@@ -165,7 +165,7 @@ package_adapter \
   "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini telemetry and channel-diagnostic capabilities." \
-  "scout-mini-ros1-v2.yaml" \
+  "scout-mini-ros1-v3.yaml" \
   "xgc2-scout-mini-ros1-adapter"
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \

@@ -19,8 +19,8 @@ import jsonschema
 import yaml
 
 
-PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v2"
-PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v2"
+PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v3"
+PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v3"
 KINDS = {"stream_out", "operation"}
 INPUT_KINDS = {"operation"}
 OUTPUT_KINDS = {"stream_out", "operation"}
@@ -35,6 +35,12 @@ INT64_MIN = -(1 << 63)
 INT64_MAX = (1 << 63) - 1
 MAX_PARAMETER_PATTERN_LENGTH = 256
 NATIVE_OPERATION_TIMEOUT_MAX_MILLIS = 5000
+
+OPERATION_INPUT_TYPES = {
+    "arm": "xgc.semantic.aerial.v1.ArmRequest",
+    "set-flight-mode": "xgc.semantic.aerial.v1.ModeRequest",
+    "reboot-autopilot": "xgc.semantic.aerial.v1.AutopilotRebootRequest",
+}
 
 KIND_ENUM = {
     "stream_out": "ChannelKind::kStreamOut",
@@ -113,6 +119,118 @@ def validate_policy_value(value, label):
     ):
         return value
     raise ValueError("{} has an unsupported value".format(label))
+
+
+def validate_operation_parameter_schema(schema, label):
+    if not isinstance(schema, dict) or set(schema) != {
+        "type",
+        "required",
+        "properties",
+        "additionalProperties",
+    }:
+        raise ValueError("{} must be an exact strict object schema".format(label))
+    if schema["type"] != "object" or schema["additionalProperties"] is not False:
+        raise ValueError("{} root must be a closed object".format(label))
+    required = schema["required"]
+    properties = schema["properties"]
+    if (
+        not isinstance(required, list)
+        or any(not isinstance(name, str) or not name for name in required)
+        or len(required) != len(set(required))
+        or not isinstance(properties, dict)
+        or set(required) != set(properties)
+    ):
+        raise ValueError(
+            "{} required must name every property exactly once".format(label)
+        )
+    for name, definition in properties.items():
+        property_label = "{} property {}".format(label, name)
+        if not isinstance(name, str) or not name:
+            raise ValueError("{} has an invalid property name".format(label))
+        if not isinstance(definition, dict) or set(definition) not in (
+            {"type"},
+            {"type", "enum"},
+        ):
+            raise ValueError(
+                "{} must declare only type and an optional enum".format(
+                    property_label
+                )
+            )
+        if definition["type"] not in {
+            "string",
+            "integer",
+            "number",
+            "boolean",
+        }:
+            raise ValueError("{} has an invalid type".format(property_label))
+        if "enum" in definition:
+            values = definition["enum"]
+            if (
+                definition["type"] != "string"
+                or not isinstance(values, list)
+                or not values
+                or any(not isinstance(value, str) or not value for value in values)
+                or len(values) != len(set(values))
+            ):
+                raise ValueError(
+                    "{} enum must be unique non-empty strings".format(
+                        property_label
+                    )
+                )
+    return schema
+
+
+def operation_parameter_schema(profile_path, channel, messages):
+    operation_id = channel["operation_id"]
+    expected_input_type = OPERATION_INPUT_TYPES.get(operation_id)
+    if expected_input_type is None:
+        raise ValueError(
+            "{}: operation {} has no owned parameter contract".format(
+                profile_path, operation_id
+            )
+        )
+    input_message = messages.get(channel["input_message_id"])
+    actual_input_type = input_message.get("type") if input_message else None
+    if actual_input_type != expected_input_type:
+        raise ValueError(
+            "{}: operation {} input must be {}, got {}".format(
+                profile_path,
+                operation_id,
+                expected_input_type,
+                actual_input_type or "<missing>",
+            )
+        )
+
+    if operation_id == "arm":
+        properties = {"armed": {"type": "boolean"}}
+    elif operation_id == "set-flight-mode":
+        allowed_modes = channel.get("policy", {}).get("allowed_modes")
+        if (
+            not isinstance(allowed_modes, list)
+            or not allowed_modes
+            or any(not isinstance(mode, str) or not mode for mode in allowed_modes)
+            or len(allowed_modes) != len(set(allowed_modes))
+        ):
+            raise ValueError(
+                "{}: operation {} policy.allowed_modes must be unique non-empty strings".format(
+                    profile_path, operation_id
+                )
+            )
+        properties = {
+            "mode": {"type": "string", "enum": list(allowed_modes)}
+        }
+    else:
+        properties = {}
+
+    return validate_operation_parameter_schema(
+        {
+            "type": "object",
+            "required": sorted(properties),
+            "properties": properties,
+            "additionalProperties": False,
+        },
+        "{}: operation {} parameterSchema".format(profile_path, operation_id),
+    )
 
 
 def require_positive_integer(value, label, maximum):
@@ -491,6 +609,11 @@ def validate_profile_document(profile_path, profile, schema, messages):
                     profile_path, channel_id, key
                 ),
             )
+        parameter_schema = (
+            operation_parameter_schema(profile_path, channel, messages)
+            if kind == "operation"
+            else None
+        )
 
         ordered_channels.append(
             {
@@ -506,6 +629,7 @@ def validate_profile_document(profile_path, profile, schema, messages):
                 "observes": list(channel.get("observes", [])),
                 "policy": policy,
                 "operation_contract": dict(operation_contract or {}),
+                "operation_parameter_schema": parameter_schema,
             }
         )
         seen_channels.add(channel_id)
@@ -674,7 +798,14 @@ def catalog_semantics(source_profile):
     return {
         "operations": sorted(
             [
-                {"id": channel["operation_id"], "channelId": channel["id"]}
+                {
+                    "id": channel["operation_id"],
+                    "channelId": channel["id"],
+                    "timeoutMillis": channel["operation_timeout_millis"],
+                    "parameterSchema": channel[
+                        "operation_parameter_schema"
+                    ],
+                }
                 for channel in source_profile["channels"]
                 if channel["kind"] == "operation"
             ],
@@ -879,6 +1010,13 @@ def generate(
         "  bool deadline_required;",
         "};",
         "",
+        "struct OperationMetadata {",
+        "  const char* operation_id;",
+        "  const char* channel_id;",
+        "  std::uint32_t timeout_millis;",
+        "  const char* parameter_schema_json;",
+        "};",
+        "",
         "struct ChannelMetadata {",
         "  const char* channel_id;",
         "  ChannelKind kind;",
@@ -990,6 +1128,71 @@ def generate(
             "  const ParameterMetadata* values = profileParameters(profile_id, &count);",
             "  for (std::size_t index = 0u; index < count; ++index) {",
             "    if (name == values[index].name) {",
+            "      *out = values[index];",
+            "      return true;",
+            "    }",
+            "  }",
+            "  return false;",
+            "}",
+            "",
+            "inline const OperationMetadata* profileOperations(",
+            "    const std::string& profile_id, std::size_t* count) {",
+            "  if (count == nullptr) {",
+            "    return nullptr;",
+            "  }",
+        ]
+    )
+    for profile_id, profile in profiles.items():
+        operations = catalog_semantics(profile)["operations"]
+        lines.append("  if (profile_id == {}) {{".format(cpp_string(profile_id)))
+        if not operations:
+            lines.extend(
+                [
+                    "    *count = 0u;",
+                    "    return nullptr;",
+                    "  }",
+                ]
+            )
+            continue
+        lines.append("    static const OperationMetadata values[] = {")
+        for operation in operations:
+            parameter_schema_json = json.dumps(
+                operation["parameterSchema"],
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            lines.append(
+                "      {{{}, {}, {}u, {}}},".format(
+                    cpp_string(operation["id"]),
+                    cpp_string(operation["channelId"]),
+                    operation["timeoutMillis"],
+                    cpp_string(parameter_schema_json),
+                )
+            )
+        lines.extend(
+            [
+                "    };",
+                "    *count = sizeof(values) / sizeof(values[0]);",
+                "    return values;",
+                "  }",
+            ]
+        )
+    lines.extend(
+        [
+            "  *count = 0u;",
+            "  return nullptr;",
+            "}",
+            "",
+            "inline bool operationMetadata(",
+            "    const std::string& profile_id, const std::string& operation_id, OperationMetadata* out) {",
+            "  if (out == nullptr) {",
+            "    return false;",
+            "  }",
+            "  std::size_t count = 0u;",
+            "  const OperationMetadata* values = profileOperations(profile_id, &count);",
+            "  for (std::size_t index = 0u; index < count; ++index) {",
+            "    if (operation_id == values[index].operation_id) {",
             "      *out = values[index];",
             "      return true;",
             "    }",

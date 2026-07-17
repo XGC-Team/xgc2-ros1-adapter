@@ -248,7 +248,7 @@ def verify(args: argparse.Namespace) -> None:
         "Adapter process command mismatch",
     )
 
-    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v2", "invalid profile catalog schema")
+    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v3", "invalid profile catalog schema")
     require(len(profile["profiles"]) == 1, "profile catalog must contain exactly one profile")
     installed_profile = profile["profiles"][0]
     expected_profile_body = catalog_profile_body(
@@ -267,6 +267,28 @@ def verify(args: argparse.Namespace) -> None:
         installed_profile == expected_profile,
         "installed profile catalog entry does not exactly match its canonical public contract",
     )
+    profile_operations = {
+        operation["id"]: operation
+        for operation in installed_profile["semantics"]["operations"]
+    }
+    command_capability = capabilities_by_id.get("xgc.robot.command")
+    command_endpoints = {
+        endpoint["endpointId"]: endpoint
+        for endpoint in (
+            command_capability["endpoints"] if command_capability else []
+        )
+    }
+    require(
+        set(profile_operations) == set(command_endpoints),
+        "Profile operations and provider command endpoints disagree",
+    )
+    for operation_id, operation in profile_operations.items():
+        endpoint = command_endpoints[operation_id]
+        require(
+            operation["timeoutMillis"] == endpoint["defaultTimeoutMillis"]
+            and operation["timeoutMillis"] <= endpoint["maximumTimeoutMillis"],
+            "Profile operation timeout disagrees with provider endpoint",
+        )
 
 
 def main() -> int:

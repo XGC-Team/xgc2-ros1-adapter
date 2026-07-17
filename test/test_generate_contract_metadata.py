@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import copy
 import importlib.util
 import json
 import shutil
@@ -17,10 +18,10 @@ SCHEMA_PATH = (
     REPOSITORY_ROOT
     / "profiles"
     / "schema"
-    / "robot-adapter-profile-v2.schema.json"
+    / "robot-adapter-profile-v3.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v4.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v2.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v5.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v3.yaml"
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
@@ -52,6 +53,9 @@ MESSAGE_ROLES = {
 TYPE_NAMES = {
     2005: "xgc.semantic.common.v1.VehicleHealth",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
+    3201: "xgc.semantic.aerial.v1.ArmRequest",
+    3202: "xgc.semantic.aerial.v1.ModeRequest",
+    3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
 }
 
 
@@ -100,7 +104,7 @@ class ContractGeneratorTest(unittest.TestCase):
             SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v4"]
+        px4 = px4_profiles["px4.multirotor.ros1.v5"]
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
@@ -156,9 +160,42 @@ class ContractGeneratorTest(unittest.TestCase):
         px4_body = GENERATOR.catalog_profile_body(
             px4, self.messages, PX4_DEFINITION_ID
         )
+        operations = {
+            operation["id"]: operation
+            for operation in px4_body["semantics"]["operations"]
+        }
+        self.assertEqual(
+            operations["arm"],
+            {
+                "id": "arm",
+                "channelId": "operation.arm",
+                "timeoutMillis": 5000,
+                "parameterSchema": {
+                    "type": "object",
+                    "required": ["armed"],
+                    "properties": {"armed": {"type": "boolean"}},
+                    "additionalProperties": False,
+                },
+            },
+        )
+        self.assertEqual(
+            operations["set-flight-mode"]["parameterSchema"]["properties"][
+                "mode"
+            ]["enum"],
+            ["OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"],
+        )
+        self.assertEqual(
+            operations["reboot-autopilot"]["parameterSchema"],
+            {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": False,
+            },
+        )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v2"]
+        scout = scout_profiles["scout-mini.ros1.v3"]
         self.assertFalse(
             any(channel["kind"] == "operation" for channel in scout["channels"])
         )
@@ -170,12 +207,14 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v4")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v4"', header)
+        self.assertIn('if (profile_id == "px4.multirotor.ros1.v5")', header)
+        self.assertIn('kProfileId = "px4.multirotor.ros1.v5"', header)
         self.assertIn('"namespace", ParameterType::kString, true', header)
         self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
         self.assertIn("struct EndpointMetadata", header)
+        self.assertIn("struct OperationMetadata", header)
+        self.assertIn("inline const OperationMetadata* profileOperations(", header)
         self.assertIn("struct PolicyMetadata", header)
         self.assertIn("inline const ChannelMetadata* profileChannels(", header)
         self.assertIn('"operation.arm", ChannelKind::kOperation', header)
@@ -183,7 +222,7 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertIn('"mavros/cmd/arming", "mavros_msgs/CommandBool"', header)
         self.assertIn('"source_timeout_ms", PolicyValueKind::kInteger', header)
         self.assertIn("inline bool channelPolicyStringArray(", header)
-        self.assertIn('"test.semantic.Message3202"', header)
+        self.assertIn('"xgc.semantic.aerial.v1.ModeRequest"', header)
         self.assertIn(px4_digest, header)
         self.assertNotIn("xgc::adapter::v1", header)
         self.assertNotIn("ProfileAdvertisement", header)
@@ -269,6 +308,30 @@ class ContractGeneratorTest(unittest.TestCase):
         public_change["semantic_traits"]["default_stale_after_ms"] += 1
         public_path = self.write_profile(public_change)
         self.assertNotEqual(contract_digest(public_path), baseline)
+
+        operation_schema_change = yaml.safe_load(
+            PX4_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        mode_channel = next(
+            channel
+            for channel in operation_schema_change["channels"]
+            if channel.get("operation_id") == "set-flight-mode"
+        )
+        mode_channel["policy"]["allowed_modes"].append("ACRO")
+        operation_schema_path = self.write_profile(operation_schema_change)
+        self.assertNotEqual(contract_digest(operation_schema_path), baseline)
+
+        operation_timeout_change = yaml.safe_load(
+            PX4_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        arm_channel = next(
+            channel
+            for channel in operation_timeout_change["channels"]
+            if channel.get("operation_id") == "arm"
+        )
+        arm_channel["policy"]["timeout_ms"] = 4999
+        operation_timeout_path = self.write_profile(operation_timeout_change)
+        self.assertNotEqual(contract_digest(operation_timeout_path), baseline)
         self.assertNotEqual(
             contract_digest(PX4_PROFILE_PATH, "another-provider"), baseline
         )
@@ -342,7 +405,17 @@ int main() {
       !channelPolicyInteger(arm, "timeout_ms", &timeout)) {
     return 2;
   }
-  return timeout == 5000 && arm.output_message_id == 1u ? 0 : 3;
+  OperationMetadata mode{};
+  if (!operationMetadata(kProfileId, "set-flight-mode", &mode)) {
+    return 3;
+  }
+  const std::string schema(mode.parameter_schema_json);
+  return timeout == 5000 && arm.output_message_id == 1u &&
+                 mode.timeout_millis == 5000u &&
+                 schema.find("additionalProperties") != std::string::npos &&
+                 schema.find("OFFBOARD") != std::string::npos
+             ? 0
+             : 4;
 }
 """,
             encoding="utf-8",
@@ -398,11 +471,11 @@ int main() {
 
     def test_profile_identity_and_parameters_have_exact_source_bounds(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["profile_id"] = "a" * 125 + ".v4"
+        profile["profile_id"] = "a" * 125 + ".v5"
         path = self.write_profile(profile)
         GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
-        profile["profile_id"] = "a" * 126 + ".v4"
+        profile["profile_id"] = "a" * 126 + ".v5"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -493,7 +566,15 @@ int main() {
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["channels"][-1]["operation_id"] = "arm"
+        duplicate_arm = copy.deepcopy(
+            next(
+                channel
+                for channel in profile["channels"]
+                if channel.get("operation_id") == "arm"
+            )
+        )
+        duplicate_arm["id"] = "operation.arm-duplicate"
+        profile["channels"].append(duplicate_arm)
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "duplicate operation identity"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -527,6 +608,54 @@ int main() {
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+    def test_operation_parameter_contracts_reject_unknown_or_malformed_sources(self):
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        mode = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "set-flight-mode"
+        )
+        mode["policy"]["allowed_modes"] = []
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed|allowed_modes"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        arm = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "arm"
+        )
+        arm["operation_id"] = "unknown-operation"
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(
+            ValueError, "schema validation failed|no owned parameter contract"
+        ):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        arm = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "arm"
+        )
+        arm["input_message_id"] = 3202
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed|input must be"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        malformed = {
+            "type": "object",
+            "required": ["armed"],
+            "properties": {"armed": {"type": "boolean"}},
+            "additionalProperties": False,
+            "legacy": True,
+        }
+        with self.assertRaisesRegex(ValueError, "exact strict object schema"):
+            GENERATOR.validate_operation_parameter_schema(
+                malformed, "fixture parameterSchema"
+            )
 
     def test_endpoint_parameters_must_be_declared_required_strings(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -588,7 +717,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v2") {\n'
+            'if (profile_id == "scout-mini.ros1.v3") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -623,8 +752,8 @@ int main() {
                 self.assertIn("contract::kProfileId", source)
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v4", source)
-                self.assertNotIn("scout-mini.ros1.v2", source)
+                self.assertNotIn("px4.multirotor.ros1.v5", source)
+                self.assertNotIn("scout-mini.ros1.v3", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
@@ -652,7 +781,7 @@ int main() {
         with self.assertRaisesRegex(ValueError, "duplicate message ID"):
             GENERATOR.load_registry(self.registry_path)
 
-    def test_endpoint_observes_policy_and_message_identity_are_source_driven(self):
+    def test_endpoint_observes_policy_and_owned_message_identity_are_generated(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
         profile["channels"][0]["inputs"]["pose"].update(
             {
@@ -663,13 +792,12 @@ int main() {
         )
         profile["channels"][1]["policy"]["source_timeout_ms"] = 321
         profile["channels"][10]["observes"] = ["state.flight"]
-        profile["channels"][12]["input_message_id"] = 3202
         path = self.write_profile(profile)
 
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v4"]["channels"]
+            for channel in profiles["px4.multirotor.ros1.v5"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],
@@ -687,8 +815,6 @@ int main() {
         self.assertEqual(
             channels["diagnostic.offboard-input"]["observes"], ["state.flight"]
         )
-        self.assertEqual(channels["operation.arm"]["input_message_id"], 3202)
-
         header = GENERATOR.generate(
             self.registry_fingerprint,
             self.messages,
@@ -706,7 +832,7 @@ int main() {
             header,
         )
         self.assertIn('"operation.arm", ChannelKind::kOperation', header)
-        self.assertIn('"arm", 3202u, 1u', header)
+        self.assertIn('"arm", 3201u, 1u', header)
 
     def test_operation_contract_fields_are_strict(self):
         for field, value in (

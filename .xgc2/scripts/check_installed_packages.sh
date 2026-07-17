@@ -58,7 +58,7 @@ check_ros_package() {
   test -f "${PREFIX}/share/${ros_package}/package.xml"
   test -f "${PREFIX}/share/${ros_package}/launch/${launch_file}"
   test -f "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}"
-  test -f "${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v2.schema.json"
+  test -f "${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v3.schema.json"
   test ! -e "${PREFIX}/include/${ros_package}"
   test -x "${executable}"
   ldd "${executable}" | grep -q 'libxgc2_adapter_runtime_client'
@@ -71,7 +71,7 @@ check_ros_package() {
     --definition-id "${definition_id}" \
     --registry "${PROTOBUF_REGISTRY}" \
     --profile-file "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" \
-    --profile-schema "${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v2.schema.json" \
+    --profile-schema "${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v3.schema.json" \
     --adapter-manifest "/usr/share/xgc2/adapter-definitions/${definition_id}.json" \
     --process-manifest "/usr/share/xgc2/process-definitions/${definition_id}.json" \
     --profile-catalog "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"
@@ -80,7 +80,7 @@ check_ros_package() {
 check_ros_package \
   "${PX4_ROS_PACKAGE}" \
   "px4_multirotor_ros1_adapter.launch" \
-  "px4-multirotor-ros1-v4.yaml" \
+  "px4-multirotor-ros1-v5.yaml" \
   "xgc2-px4-multirotor-ros1-adapter"
 PX4_SERVICE_HELPER="${PREFIX}/lib/${PX4_ROS_PACKAGE}/${PX4_ROS_PACKAGE}_service_helper"
 test -x "${PX4_SERVICE_HELPER}"
@@ -88,7 +88,7 @@ ldd "${PX4_SERVICE_HELPER}" | grep -q 'libroscpp'
 check_ros_package \
   "${SCOUT_ROS_PACKAGE}" \
   "scout_mini_ros1_adapter.launch" \
-  "scout-mini-ros1-v2.yaml" \
+  "scout-mini-ros1-v3.yaml" \
   "xgc2-scout-mini-ros1-adapter"
 
 test ! -e "${PREFIX}/share/xgc_ros1_adapter"

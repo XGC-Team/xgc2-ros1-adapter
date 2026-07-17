@@ -6,8 +6,8 @@ specialize that abstraction for PX4 multirotors and Scout Mini robots.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v4` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v2` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v5` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v3` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -36,6 +36,11 @@ PX4 command operations require deadlines and idempotency keys. A successful
 operation returns the registry-owned `xgc.v1.Empty` payload. Native ROS service
 calls are not advertised as cancellable after dispatch.
 
+The installed Profile v3 catalog owns each operation's closed JSON parameter
+schema and timeout. The flight-mode enum is projected directly from the PX4
+source Profile's `policy.allowed_modes`, and every Profile timeout is generated
+from the same `policy.timeout_ms` used by its provider endpoint.
+
 ## Native mappings
 
 PX4 telemetry and diagnostics consume MAVROS topics under each configured
@@ -43,8 +48,8 @@ robot namespace. Mocap samples from
 `/vrpn_client_node/{mocap_rigid_body}/pose` are relayed to
 `mavros/vision_pose/pose` without coordinate transformation, interpolation, or
 stale-sample repetition. Arm, flight-mode, and autopilot-reboot operations use
-typed MAVROS services. Flight modes are restricted to `OFFBOARD`, `POSCTL`,
-`ALTCTL`, and `STABILIZED`; reboot requires a known, fresh, connected, disarmed
+typed MAVROS services. Flight modes are restricted by the source Profile's
+single native allowlist; reboot requires a known, fresh, connected, disarmed
 vehicle state.
 
 Scout Mini telemetry consumes `odom`, `imu/data_raw`, and `scout_status` under

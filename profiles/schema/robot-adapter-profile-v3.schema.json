@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://xgc2.dev/schemas/robot-adapter-profile-v2.schema.json",
-  "title": "XGC2 Robot Adapter Profile v2",
+  "$id": "https://xgc2.dev/schemas/robot-adapter-profile-v3.schema.json",
+  "title": "XGC2 Robot Adapter Profile v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "xgc.robot.adapter-profile/v2"
+      "const": "xgc.robot.adapter-profile/v3"
     },
     "profile_id": {
       "type": "string",
@@ -240,7 +240,7 @@
         },
         "operation_id": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          "enum": ["arm", "set-flight-mode", "reboot-autopilot"]
         },
         "operation_contract": {
           "$ref": "#/definitions/operationContract"
@@ -320,6 +320,56 @@
                   }
                 }
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "arm"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3201},
+              "output_message_id": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "set-flight-mode"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3202},
+              "output_message_id": {"const": 1},
+              "policy": {
+                "required": ["allowed_modes"],
+                "properties": {
+                  "allowed_modes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "reboot-autopilot"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3203},
+              "output_message_id": {"const": 1}
             }
           }
         }

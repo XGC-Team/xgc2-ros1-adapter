@@ -17,9 +17,9 @@ xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support)
 
 set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
-  "${PROFILE_ROOT}/ros1/px4-multirotor-ros1-v4.yaml")
+  "${PROFILE_ROOT}/ros1/px4-multirotor-ros1-v5.yaml")
 set(PROFILE_SCHEMA
-  "${PROFILE_ROOT}/schema/robot-adapter-profile-v2.schema.json")
+  "${PROFILE_ROOT}/schema/robot-adapter-profile-v3.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-px4-multirotor-ros1-adapter")
 
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
