@@ -9,7 +9,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from generate_contract_metadata import load_profile, load_registry
+from generate_contract_metadata import (
+    catalog_profile_body,
+    load_profile,
+    load_registry,
+    profile_contract_digest,
+)
 
 
 ROBOT_CONFIGURATION_MESSAGE_ID = 4001
@@ -145,7 +150,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
     profiles = load_profile(profile_file, Path(args.profile_schema), messages)
     if len(profiles) != 1:
         raise ValueError("one robot profile is required")
-    profile_id, generated_profile = next(iter(profiles.items()))
+    _, generated_profile = next(iter(profiles.items()))
     operation_channels = sorted(
         [
             channel
@@ -263,91 +268,21 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
         ],
     }
 
-    profile_channels = []
-    for channel in generated_profile["channels"]:
-        message_id = (
-            channel["input_message_id"] or channel["output_message_id"]
-        )
-        reference = schema_reference(messages, message_id)
-        profile_channels.append(
-            {
-                "id": channel["id"],
-                "kind": channel["kind"],
-                "messageId": reference["messageId"],
-                "typeName": reference["typeName"],
-                "schemaVersion": reference["schemaVersion"],
-                "schemaFingerprint": reference["schemaFingerprint"],
-            }
-        )
+    profile_body = catalog_profile_body(
+        generated_profile, messages, args.definition_id
+    )
+    installed_profile = {
+        "profileId": profile_body["profileId"],
+        "profileDigest": profile_contract_digest(profile_body),
+        **{
+            key: value
+            for key, value in profile_body.items()
+            if key != "profileId"
+        },
+    }
     profile_catalog = {
         "schema": "xgc.robot.adapter-profile-catalog/v1",
-        "profiles": [
-            {
-                "profileId": profile_id,
-                "profileDigest": generated_profile["digest"],
-                "providerDefinitionId": args.definition_id,
-                "robotKind": generated_profile["robot_kind"],
-                "namespaceParameter": generated_profile["namespace_parameter"],
-                "parameters": {
-                    name: {
-                        "type": definition["type"],
-                        "required": definition["required"],
-                        **(
-                            {"pattern": definition["pattern"]}
-                            if "pattern" in definition
-                            else {}
-                        ),
-                    }
-                    for name, definition in sorted(
-                        generated_profile["parameters"].items()
-                    )
-                },
-                "semantics": {
-                    "operations": [
-                        {
-                            "id": channel["operation_id"],
-                            "channelId": channel["id"],
-                        }
-                        for channel in operation_channels
-                    ],
-                    "defaultStaleAfterMillis": generated_profile["semantic_traits"][
-                        "default_stale_after_ms"
-                    ],
-                    "channelStaleAfterMillis": generated_profile["semantic_traits"][
-                        "channel_stale_after_ms"
-                    ],
-                    "onlineConditions": [
-                        {
-                            "channelId": item["channel_id"],
-                            "maximumAgeMillis": item["maximum_age_ms"],
-                            **(
-                                {"predicate": item["predicate"]}
-                                if "predicate" in item
-                                else {}
-                            ),
-                        }
-                        for item in generated_profile["semantic_traits"][
-                            "online_conditions"
-                        ]
-                    ],
-                    "operationalReadyConditions": [
-                        {
-                            "channelId": item["channel_id"],
-                            "maximumAgeMillis": item["maximum_age_ms"],
-                            **(
-                                {"predicate": item["predicate"]}
-                                if "predicate" in item
-                                else {}
-                            ),
-                        }
-                        for item in generated_profile["semantic_traits"][
-                            "operational_ready_conditions"
-                        ]
-                    ],
-                },
-                "channels": profile_channels,
-            }
-        ],
+        "profiles": [installed_profile],
     }
     return adapter_manifest, process_manifest, profile_catalog
 

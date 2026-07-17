@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import hashlib
 import importlib.util
 import json
 import shutil
@@ -22,6 +21,7 @@ SCHEMA_PATH = (
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v3.yaml"
 SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v1.yaml"
+PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
 GENERATOR = importlib.util.module_from_spec(SPEC)
@@ -152,9 +152,11 @@ class ContractGeneratorTest(unittest.TestCase):
                 "deadline_required": True,
             },
         )
-        self.assertEqual(
-            px4["digest"], hashlib.sha256(PX4_PROFILE_PATH.read_bytes()).hexdigest()
+        self.assertNotIn("digest", px4)
+        px4_body = GENERATOR.catalog_profile_body(
+            px4, self.messages, PX4_DEFINITION_ID
         )
+        px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
         scout = scout_profiles["scout-mini.ros1.v1"]
         self.assertFalse(
@@ -165,6 +167,7 @@ class ContractGeneratorTest(unittest.TestCase):
             self.registry_fingerprint,
             self.messages,
             px4_profiles,
+            PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
         self.assertIn('if (profile_id == "px4.multirotor.ros1.v3")', header)
@@ -180,7 +183,7 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertIn('"source_timeout_ms", PolicyValueKind::kInteger', header)
         self.assertIn("inline bool channelPolicyStringArray(", header)
         self.assertIn('"test.semantic.Message3202"', header)
-        self.assertIn(px4["digest"], header)
+        self.assertIn(px4_digest, header)
         self.assertNotIn("xgc::adapter::v1", header)
         self.assertNotIn("ProfileAdvertisement", header)
 
@@ -216,6 +219,89 @@ class ContractGeneratorTest(unittest.TestCase):
         ):
             self.assertTrue(reboot_policy[condition])
 
+    def test_profile_digest_canonicalizes_public_contract_only(self):
+        def contract_digest(path, definition_id=PX4_DEFINITION_ID):
+            profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+            source_profile = next(iter(profiles.values()))
+            body = GENERATOR.catalog_profile_body(
+                source_profile, self.messages, definition_id
+            )
+            return GENERATOR.profile_contract_digest(body)
+
+        baseline = contract_digest(PX4_PROFILE_PATH)
+        document = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+
+        reordered = dict(reversed(list(document.items())))
+        reordered["channels"] = list(reversed(reordered["channels"]))
+        traits = reordered["semantic_traits"]
+        traits["channel_stale_after_ms"] = dict(
+            reversed(list(traits["channel_stale_after_ms"].items()))
+        )
+        traits["online_conditions"] = list(
+            reversed(traits["online_conditions"])
+        )
+        traits["operational_ready_conditions"] = list(
+            reversed(traits["operational_ready_conditions"])
+        )
+        reordered_path = self.temp / "reordered-profile.yaml"
+        reordered_path.write_text(
+            "# formatting and key order are not profile identity\n\n"
+            + yaml.safe_dump(reordered, sort_keys=True),
+            encoding="utf-8",
+        )
+        self.assertEqual(contract_digest(reordered_path), baseline)
+
+        implementation_only = yaml.safe_load(
+            PX4_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        implementation_only["description"] = "Changed package documentation."
+        implementation_only["channels"][0]["processor"] = "px4.pose-v2"
+        implementation_only["channels"][0]["inputs"]["pose"]["name"] = (
+            "mavros/alternate_pose"
+        )
+        implementation_path = self.write_profile(implementation_only)
+        self.assertEqual(contract_digest(implementation_path), baseline)
+
+        public_change = yaml.safe_load(
+            PX4_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        public_change["semantic_traits"]["default_stale_after_ms"] += 1
+        public_path = self.write_profile(public_change)
+        self.assertNotEqual(contract_digest(public_path), baseline)
+        self.assertNotEqual(
+            contract_digest(PX4_PROFILE_PATH, "another-provider"), baseline
+        )
+
+    def test_cmake_uses_one_provider_identity_for_header_and_catalog(self):
+        packages = (
+            (
+                "xgc_px4_multirotor_ros1_adapter",
+                "xgc2-px4-multirotor-ros1-adapter",
+            ),
+            (
+                "xgc_scout_mini_ros1_adapter",
+                "xgc2-scout-mini-ros1-adapter",
+            ),
+        )
+        for package, definition_id in packages:
+            cmake = (
+                REPOSITORY_ROOT / "src" / package / "CMakeLists.txt"
+            ).read_text(encoding="utf-8")
+            with self.subTest(package=package):
+                self.assertIn(
+                    'set(ADAPTER_DEFINITION_ID "{}")'.format(definition_id),
+                    cmake,
+                )
+                self.assertIn(
+                    '--definition-id "${ADAPTER_DEFINITION_ID}"', cmake
+                )
+                self.assertIn(
+                    "xgc2_add_robot_runtime_manifests(\n"
+                    "  ${PROJECT_NAME}_node\n"
+                    "  ${ADAPTER_DEFINITION_ID}",
+                    cmake,
+                )
+
     def test_complete_descriptor_header_compiles_as_cxx14(self):
         compiler = shutil.which("c++")
         if compiler is None:
@@ -229,6 +315,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 self.registry_fingerprint,
                 self.messages,
                 profiles,
+                PX4_DEFINITION_ID,
                 "fixture_robot_adapter",
             ),
             encoding="utf-8",
@@ -431,6 +518,7 @@ int main() {
             self.registry_fingerprint,
             self.messages,
             profiles,
+            "fixture-robot-adapter",
             "fixture_robot_adapter",
         )
 
@@ -536,6 +624,7 @@ int main() {
             self.registry_fingerprint,
             self.messages,
             profiles,
+            "fixture-robot-adapter",
             "fixture_robot_adapter",
         )
         self.assertIn(

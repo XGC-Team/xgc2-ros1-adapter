@@ -20,6 +20,7 @@ set(PROFILE_FILE
   "${PROFILE_ROOT}/ros1/scout-mini-ros1-v1.yaml")
 set(PROFILE_SCHEMA
   "${PROFILE_ROOT}/schema/robot-adapter-profile-v1.schema.json")
+set(ADAPTER_DEFINITION_ID "xgc2-scout-mini-ros1-adapter")
 
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
   message(FATAL_ERROR "Adapter Runtime dependencies did not expose the XGC2 registry")
@@ -41,6 +42,7 @@ add_custom_command(
     --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
     --profile-file "${PROFILE_FILE}"
     --profile-schema "${PROFILE_SCHEMA}"
+    --definition-id "${ADAPTER_DEFINITION_ID}"
     --cpp-namespace "${PROJECT_NAME}"
     --output "${CONTRACT_METADATA_HDR}"
   DEPENDS
@@ -104,7 +106,7 @@ install(TARGETS ${PROJECT_NAME}_node
 )
 xgc2_add_robot_runtime_manifests(
   ${PROJECT_NAME}_node
-  xgc2-scout-mini-ros1-adapter
+  ${ADAPTER_DEFINITION_ID}
   ${PROJECT_VERSION}
   "XGC2 Scout Mini ROS1 Adapter"
   "Scout Mini telemetry and channel-diagnostic capabilities."

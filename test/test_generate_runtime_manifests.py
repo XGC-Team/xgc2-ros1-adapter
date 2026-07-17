@@ -22,6 +22,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 GENERATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GENERATOR)
+CONTRACT_GENERATOR = sys.modules["generate_contract_metadata"]
 VERIFY_SPEC = importlib.util.spec_from_file_location(
     "runtime_manifest_verifier", TOOLS / "verify_runtime_manifests.py"
 )
@@ -151,9 +152,52 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         scout = scout_catalog["profiles"][0]
         self.assertEqual(scout["robotKind"], "scout_mini")
         self.assertEqual(
-            scout["semantics"]["onlineConditions"][1]["predicate"],
+            [
+                condition["channelId"]
+                for condition in scout["semantics"]["onlineConditions"]
+            ],
+            ["state.health", "state.pose"],
+        )
+        self.assertEqual(
+            scout["semantics"]["onlineConditions"][0]["predicate"],
             "xgc.semantic.common.vehicle-health.online",
         )
+
+    def test_header_and_catalog_share_the_canonical_profile_digest(self):
+        _, _, catalog = GENERATOR.build_documents(self.arguments(PX4_PROFILE))
+        installed_profile = catalog["profiles"][0]
+        profile_body = {
+            key: value
+            for key, value in installed_profile.items()
+            if key != "profileDigest"
+        }
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "schema": "xgc.robot.profile-contract-digest/v1",
+                    "profile": profile_body,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(installed_profile["profileDigest"], expected_digest)
+
+        registry_fingerprint, messages = CONTRACT_GENERATOR.load_registry(
+            self.registry
+        )
+        profiles = CONTRACT_GENERATOR.load_profile(
+            PX4_PROFILE, SCHEMA, messages
+        )
+        header = CONTRACT_GENERATOR.generate(
+            registry_fingerprint,
+            messages,
+            profiles,
+            "fixture-robot-adapter",
+            "fixture_robot_adapter",
+        )
+        self.assertIn(expected_digest, header)
 
     def test_capabilities_and_direct_process_environment_are_exact(self):
         px4_adapter, px4_process, _ = GENERATOR.build_documents(
@@ -421,6 +465,9 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         def mutate_profile_id(profile):
             profile["profileId"] = "tampered.profile.v1"
 
+        def mutate_profile_digest(profile):
+            profile["profileDigest"] = "0" * 64
+
         def mutate_default_staleness(profile):
             profile["semantics"]["defaultStaleAfterMillis"] += 1
 
@@ -450,6 +497,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
 
         for name, mutate in (
             ("profileId", mutate_profile_id),
+            ("profile digest", mutate_profile_digest),
             ("default staleness", mutate_default_staleness),
             ("channel staleness", mutate_channel_staleness),
             ("online condition", mutate_online),

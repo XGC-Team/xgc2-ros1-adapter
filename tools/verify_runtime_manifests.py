@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from generate_contract_metadata import (
+    catalog_profile_body,
     load_profile,
     load_registry,
-    validate_portable_parameter_pattern,
+    profile_contract_digest,
 )
 
 
@@ -144,86 +145,6 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def catalog_semantics(source_profile: dict[str, Any]) -> dict[str, Any]:
-    operations = sorted(
-        [
-            {"id": item["operation_id"], "channelId": item["id"]}
-            for item in source_profile["channels"]
-            if item["kind"] == "operation"
-        ],
-        key=lambda item: item["id"],
-    )
-
-    def conditions(name: str) -> list[dict[str, Any]]:
-        return [
-            {
-                "channelId": item["channel_id"],
-                "maximumAgeMillis": item["maximum_age_ms"],
-                **(
-                    {"predicate": item["predicate"]}
-                    if "predicate" in item
-                    else {}
-                ),
-            }
-            for item in source_profile["semantic_traits"][name]
-        ]
-
-    return {
-        "operations": operations,
-        "defaultStaleAfterMillis": source_profile["semantic_traits"][
-            "default_stale_after_ms"
-        ],
-        "channelStaleAfterMillis": source_profile["semantic_traits"][
-            "channel_stale_after_ms"
-        ],
-        "onlineConditions": conditions("online_conditions"),
-        "operationalReadyConditions": conditions(
-            "operational_ready_conditions"
-        ),
-    }
-
-
-def catalog_parameters(source_profile: dict[str, Any]) -> dict[str, Any]:
-    for name, definition in source_profile["parameters"].items():
-        if "pattern" in definition:
-            validate_portable_parameter_pattern(
-                definition["pattern"], "source parameter {} pattern".format(name)
-            )
-    return {
-        name: {
-            "type": definition["type"],
-            "required": definition["required"],
-            **(
-                {"pattern": definition["pattern"]}
-                if "pattern" in definition
-                else {}
-            ),
-        }
-        for name, definition in sorted(source_profile["parameters"].items())
-    }
-
-
-def catalog_channels(
-    source_profile: dict[str, Any], messages: dict[int, dict[str, Any]]
-) -> list[dict[str, Any]]:
-    channels = []
-    for source in source_profile["channels"]:
-        message_id = source["input_message_id"] or source["output_message_id"]
-        message = messages.get(message_id)
-        require(message is not None, "profile channel message is absent from registry")
-        channels.append(
-            {
-                "id": source["id"],
-                "kind": source["kind"],
-                "messageId": message_id,
-                "typeName": message["type"],
-                "schemaVersion": message["version"],
-                "schemaFingerprint": message["fingerprint"],
-            }
-        )
-    return channels
-
-
 def verify(args: argparse.Namespace) -> None:
     executable = Path(args.executable)
     require(executable.is_file(), "Adapter executable does not exist")
@@ -330,19 +251,21 @@ def verify(args: argparse.Namespace) -> None:
     require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v1", "invalid profile catalog schema")
     require(len(profile["profiles"]) == 1, "profile catalog must contain exactly one profile")
     installed_profile = profile["profiles"][0]
+    expected_profile_body = catalog_profile_body(
+        source_profile, messages, definition["id"]
+    )
     expected_profile = {
-        "profileId": source_profile["profile_id"],
-        "profileDigest": hashlib.sha256(Path(args.profile_file).read_bytes()).hexdigest(),
-        "providerDefinitionId": definition["id"],
-        "robotKind": source_profile["robot_kind"],
-        "namespaceParameter": source_profile["namespace_parameter"],
-        "parameters": catalog_parameters(source_profile),
-        "semantics": catalog_semantics(source_profile),
-        "channels": catalog_channels(source_profile, messages),
+        "profileId": expected_profile_body["profileId"],
+        "profileDigest": profile_contract_digest(expected_profile_body),
+        **{
+            key: value
+            for key, value in expected_profile_body.items()
+            if key != "profileId"
+        },
     }
     require(
         installed_profile == expected_profile,
-        "installed profile catalog entry does not exactly match its digested source profile and registry",
+        "installed profile catalog entry does not exactly match its canonical public contract",
     )
 
 

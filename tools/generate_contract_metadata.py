@@ -20,6 +20,7 @@ import yaml
 
 
 PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v1"
+PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v1"
 KINDS = {"stream_out", "stream_in", "request_response", "operation"}
 INPUT_KINDS = {"stream_in", "request_response", "operation"}
 OUTPUT_KINDS = {"stream_out", "request_response", "operation"}
@@ -69,6 +70,7 @@ def parse_args():
     parser.add_argument("--registry", required=True)
     parser.add_argument("--profile-file", required=True)
     parser.add_argument("--profile-schema", required=True)
+    parser.add_argument("--definition-id", required=True)
     parser.add_argument("--cpp-namespace", required=True)
     parser.add_argument("--output", required=True)
     return parser.parse_args()
@@ -643,7 +645,6 @@ def load_profile(profile_path, schema_path, messages):
     return {
         profile["profile_id"]: {
             "profile_id": profile["profile_id"],
-            "digest": hashlib.sha256(raw).hexdigest(),
             "profile_version": profile["profile_version"],
             "robot_kind": profile["robot_kind"],
             "description": profile.get("description", ""),
@@ -655,7 +656,133 @@ def load_profile(profile_path, schema_path, messages):
     }
 
 
-def generate(registry_fingerprint, messages, profiles, cpp_namespace):
+def catalog_parameters(source_profile):
+    return {
+        name: {
+            "type": definition["type"],
+            "required": definition["required"],
+            **(
+                {"pattern": definition["pattern"]}
+                if "pattern" in definition
+                else {}
+            ),
+        }
+        for name, definition in sorted(source_profile["parameters"].items())
+    }
+
+
+def catalog_conditions(source_profile, name):
+    conditions = [
+        {
+            "channelId": item["channel_id"],
+            "maximumAgeMillis": item["maximum_age_ms"],
+            **(
+                {"predicate": item["predicate"]}
+                if "predicate" in item
+                else {}
+            ),
+        }
+        for item in source_profile["semantic_traits"][name]
+    ]
+    return sorted(
+        conditions,
+        key=lambda item: (
+            item["channelId"],
+            item.get("predicate", ""),
+            item["maximumAgeMillis"],
+        ),
+    )
+
+
+def catalog_semantics(source_profile):
+    return {
+        "operations": sorted(
+            [
+                {"id": channel["operation_id"], "channelId": channel["id"]}
+                for channel in source_profile["channels"]
+                if channel["kind"] == "operation"
+            ],
+            key=lambda item: item["id"],
+        ),
+        "defaultStaleAfterMillis": source_profile["semantic_traits"][
+            "default_stale_after_ms"
+        ],
+        "channelStaleAfterMillis": {
+            channel_id: maximum_age
+            for channel_id, maximum_age in sorted(
+                source_profile["semantic_traits"][
+                    "channel_stale_after_ms"
+                ].items()
+            )
+        },
+        "onlineConditions": catalog_conditions(
+            source_profile, "online_conditions"
+        ),
+        "operationalReadyConditions": catalog_conditions(
+            source_profile, "operational_ready_conditions"
+        ),
+    }
+
+
+def catalog_channels(source_profile, messages):
+    channels = []
+    for source in source_profile["channels"]:
+        message_id = source["input_message_id"] or source["output_message_id"]
+        message = messages.get(message_id)
+        if message is None:
+            raise ValueError(
+                "profile channel {} message {} is absent from registry".format(
+                    source["id"], message_id
+                )
+            )
+        channels.append(
+            {
+                "id": source["id"],
+                "kind": source["kind"],
+                "messageId": message_id,
+                "typeName": message["type"],
+                "schemaVersion": message["version"],
+                "schemaFingerprint": message["fingerprint"],
+            }
+        )
+    return sorted(channels, key=lambda item: item["id"])
+
+
+def catalog_profile_body(source_profile, messages, provider_definition_id):
+    if not isinstance(provider_definition_id, str) or not provider_definition_id:
+        raise ValueError("provider definition ID must be a non-empty string")
+    return {
+        "profileId": source_profile["profile_id"],
+        "providerDefinitionId": provider_definition_id,
+        "robotKind": source_profile["robot_kind"],
+        "namespaceParameter": source_profile["namespace_parameter"],
+        "parameters": catalog_parameters(source_profile),
+        "semantics": catalog_semantics(source_profile),
+        "channels": catalog_channels(source_profile, messages),
+    }
+
+
+def profile_contract_digest(profile_body):
+    envelope = {
+        "schema": PROFILE_CONTRACT_DIGEST_SCHEMA,
+        "profile": profile_body,
+    }
+    canonical = json.dumps(
+        envelope,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def generate(
+    registry_fingerprint,
+    messages,
+    profiles,
+    provider_definition_id,
+    cpp_namespace,
+):
     if not CPP_NAMESPACE.fullmatch(cpp_namespace):
         raise ValueError("invalid C++ namespace: {}".format(cpp_namespace))
     if len(profiles) != 1:
@@ -682,6 +809,12 @@ def generate(registry_fingerprint, messages, profiles, cpp_namespace):
                 missing_runtime_messages
             )
         )
+    profile_digests = {
+        profile_id: profile_contract_digest(
+            catalog_profile_body(profile, messages, provider_definition_id)
+        )
+        for profile_id, profile in profiles.items()
+    }
     lines = [
         "#pragma once",
         "",
@@ -828,7 +961,7 @@ def generate(registry_fingerprint, messages, profiles, cpp_namespace):
     for profile_id, profile in profiles.items():
         lines.append(
             "  if (profile_id == {}) return {};".format(
-                cpp_string(profile_id), cpp_string(profile["digest"])
+                cpp_string(profile_id), cpp_string(profile_digests[profile_id])
             )
         )
     lines.extend(
@@ -1176,7 +1309,13 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        generate(registry_fingerprint, messages, profiles, args.cpp_namespace),
+        generate(
+            registry_fingerprint,
+            messages,
+            profiles,
+            args.definition_id,
+            args.cpp_namespace,
+        ),
         encoding="utf-8",
     )
 
