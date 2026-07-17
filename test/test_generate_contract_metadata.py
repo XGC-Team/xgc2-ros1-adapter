@@ -17,10 +17,10 @@ SCHEMA_PATH = (
     REPOSITORY_ROOT
     / "profiles"
     / "schema"
-    / "robot-adapter-profile-v1.schema.json"
+    / "robot-adapter-profile-v2.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v3.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v1.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v4.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v2.yaml"
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
@@ -100,7 +100,7 @@ class ContractGeneratorTest(unittest.TestCase):
             SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v3"]
+        px4 = px4_profiles["px4.multirotor.ros1.v4"]
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
@@ -158,7 +158,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v1"]
+        scout = scout_profiles["scout-mini.ros1.v2"]
         self.assertFalse(
             any(channel["kind"] == "operation" for channel in scout["channels"])
         )
@@ -170,9 +170,10 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v3")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v3"', header)
-        self.assertIn('kNamespaceParameter = "namespace"', header)
+        self.assertIn('if (profile_id == "px4.multirotor.ros1.v4")', header)
+        self.assertIn('kProfileId = "px4.multirotor.ros1.v4"', header)
+        self.assertIn('"namespace", ParameterType::kString, true', header)
+        self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
         self.assertIn("struct EndpointMetadata", header)
         self.assertIn("struct PolicyMetadata", header)
@@ -372,7 +373,19 @@ int main() {
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["profile_id"] = "1robot.ros1.v3"
+        profile["namespace_parameter"] = "namespace"
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile["parameters"]["namespace"]["type"] = "ros_namespace"
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile["profile_id"] = "1robot.ros1.v4"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -508,10 +521,9 @@ int main() {
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
-    def test_generated_native_contract_carries_the_namespace_parameter_role(self):
-        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["namespace_parameter"] = "ros_ns"
-        profile["parameters"]["ros_ns"] = profile["parameters"].pop("namespace")
+    def test_generic_profile_parameters_can_be_empty_without_a_namespace_role(self):
+        profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile["parameters"] = {}
         path = self.write_profile(profile)
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         header = GENERATOR.generate(
@@ -522,9 +534,16 @@ int main() {
             "fixture_robot_adapter",
         )
 
-        self.assertIn('kNamespaceParameter = "ros_ns"', header)
+        self.assertNotIn("kNamespaceParameter", header)
+        self.assertNotIn("kRosNamespace", header)
+        self.assertIn(
+            'if (profile_id == "scout-mini.ros1.v2") {\n'
+            "    *count = 0u;\n"
+            "    return nullptr;",
+            header,
+        )
 
-    def test_native_nodes_use_generated_profile_identity_and_namespace_role(self):
+    def test_native_nodes_own_their_explicit_ros_namespace_parameter(self):
         implementations = (
             REPOSITORY_ROOT
             / "src"
@@ -551,11 +570,10 @@ int main() {
             source = implementation.read_text(encoding="utf-8")
             with self.subTest(implementation=implementation.name):
                 self.assertIn("contract::kProfileId", source)
-                self.assertIn("contract::kNamespaceParameter", source)
-                self.assertNotIn('find("namespace")', source)
-                self.assertNotIn('at("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v3", source)
-                self.assertNotIn("scout-mini.ros1.v1", source)
+                self.assertNotIn("contract::kNamespaceParameter", source)
+                self.assertIn('find("namespace")', source)
+                self.assertNotIn("px4.multirotor.ros1.v4", source)
+                self.assertNotIn("scout-mini.ros1.v2", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
@@ -600,7 +618,7 @@ int main() {
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v3"]["channels"]
+            for channel in profiles["px4.multirotor.ros1.v4"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],

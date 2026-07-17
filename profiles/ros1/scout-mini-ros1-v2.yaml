@@ -1,15 +1,14 @@
-schema: xgc.robot.adapter-profile/v1
-profile_id: scout-mini.ros1.v1
-profile_version: 1
+schema: xgc.robot.adapter-profile/v2
+profile_id: scout-mini.ros1.v2
+profile_version: 2
 native_protocol: ros1
 robot_kind: scout_mini
 description: Scout Mini odometry, chassis status, IMU telemetry, and channel diagnostics.
-namespace_parameter: namespace
 parameters:
   namespace:
-    type: ros_namespace
+    type: string
     required: true
-    description: Unique ROS namespace assigned to this robot by the robot-domain instance specification.
+    description: Product-owned ROS namespace assigned to this Scout Mini robot.
 semantic_traits:
   default_stale_after_ms: 2000
   channel_stale_after_ms:

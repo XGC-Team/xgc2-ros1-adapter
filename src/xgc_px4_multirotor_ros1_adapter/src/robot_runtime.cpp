@@ -322,7 +322,7 @@ bool resolveEndpointTemplate(const contract::EndpointMetadata &endpoint,
     *resolved = topicName("", value);
   } else {
     const auto namespace_value =
-        config.parameters.find(contract::kNamespaceParameter);
+        config.parameters.find("namespace");
     if (namespace_value == config.parameters.end())
       return fail(error, "robot namespace parameter is missing");
     *resolved = topicName(namespace_value->second, value);
@@ -475,13 +475,12 @@ bool BuildNativeProfileConfig(
   if (parameters == nullptr || parameter_count != 2u ||
       config.parameters.size() != parameter_count)
     return fail(error, "PX4 native parameter binding is not exhaustive");
-  contract::ParameterMetadata namespace_parameter{};
+  contract::ParameterMetadata namespace_descriptor{};
   contract::ParameterMetadata mocap_parameter{};
-  if (!contract::parameterMetadata(config.profile_id,
-                                   contract::kNamespaceParameter,
-                                   &namespace_parameter) ||
-      namespace_parameter.type != contract::ParameterType::kRosNamespace ||
-      !namespace_parameter.required ||
+  if (!contract::parameterMetadata(config.profile_id, "namespace",
+                                   &namespace_descriptor) ||
+      namespace_descriptor.type != contract::ParameterType::kString ||
+      !namespace_descriptor.required ||
       !contract::parameterMetadata(config.profile_id, "mocap_rigid_body",
                                    &mocap_parameter) ||
       mocap_parameter.type != contract::ParameterType::kString ||
@@ -490,7 +489,7 @@ bool BuildNativeProfileConfig(
     return fail(error, "PX4 native parameter descriptors drifted");
   }
   const auto namespace_value =
-      config.parameters.find(contract::kNamespaceParameter);
+      config.parameters.find("namespace");
   const auto mocap_value = config.parameters.find("mocap_rigid_body");
   std::string parameter_error;
   if (namespace_value == config.parameters.end() ||
@@ -728,7 +727,7 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
                      std::uint64_t spec_revision, EnvelopeEmitter emitter,
                      std::string *error) {
   const auto namespace_it =
-      config.parameters.find(contract::kNamespaceParameter);
+      config.parameters.find("namespace");
   if (namespace_it == config.parameters.end()) {
     if (error != nullptr) {
       *error = "robot configuration is missing required namespace parameter";

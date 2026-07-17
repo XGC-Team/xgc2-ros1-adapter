@@ -33,7 +33,7 @@ xgc::adapter::v1::AdapterInstanceSpec makeValidInstanceSpec() {
   robot_spec.set_asset_digest(kAssetDigest);
   auto *robot = robot_spec.add_robots();
   robot->set_robot_id("px4-01");
-  robot->set_profile_id("px4.multirotor.ros1.v3");
+  robot->set_profile_id("px4.multirotor.ros1.v4");
   robot->set_profile_digest(kProfileDigest);
   (*robot->mutable_parameters())["namespace"] = "/uav1";
   (*robot->mutable_parameters())["mocap_rigid_body"] = "px4_01";

@@ -221,15 +221,13 @@ private:
       return false;
     }
     if (robot.parameters.size() != 1 ||
-        robot.parameters.find(contract::kNamespaceParameter) ==
-            robot.parameters.end()) {
+        robot.parameters.find("namespace") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
                " must contain exactly the namespace parameter";
       return false;
     }
     std::string native_error;
-    if (!validRobotNamespace(robot.parameters.at(contract::kNamespaceParameter),
-                             &native_error)) {
+    if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +
                ": " + native_error;
       return false;
@@ -277,10 +275,9 @@ private:
     for (const auto &robot : candidate.robots) {
       if (!validateRobotConfig(robot, error))
         return false;
-      if (!namespaces.insert(robot.parameters.at(contract::kNamespaceParameter))
-               .second) {
+      if (!namespaces.insert(robot.parameters.at("namespace")).second) {
         *error = "multiple Scout robots share ROS namespace " +
-                 robot.parameters.at(contract::kNamespaceParameter);
+                 robot.parameters.at("namespace");
         return false;
       }
     }

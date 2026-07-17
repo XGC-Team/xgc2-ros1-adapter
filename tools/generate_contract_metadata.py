@@ -19,8 +19,8 @@ import jsonschema
 import yaml
 
 
-PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v1"
-PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v1"
+PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v2"
+PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v2"
 KINDS = {"stream_out", "stream_in", "request_response", "operation"}
 INPUT_KINDS = {"stream_in", "request_response", "operation"}
 OUTPUT_KINDS = {"stream_out", "request_response", "operation"}
@@ -48,7 +48,6 @@ PARAMETER_TYPE_ENUM = {
     "integer": "ParameterType::kInteger",
     "number": "ParameterType::kNumber",
     "boolean": "ParameterType::kBoolean",
-    "ros_namespace": "ParameterType::kRosNamespace",
 }
 
 ENDPOINT_KIND_ENUM = {
@@ -284,7 +283,7 @@ def validate_endpoint_parameters(profile_path, profile, channel_id, endpoint):
                     profile_path, channel_id, parameter_name
                 )
             )
-        if definition["type"] not in {"string", "ros_namespace"}:
+        if definition["type"] != "string":
             raise ValueError(
                 "{}: channel {} endpoint parameter {} must be a string".format(
                     profile_path, channel_id, parameter_name
@@ -339,24 +338,6 @@ def validate_profile_document(profile_path, profile, schema, messages):
     if not version_match or int(version_match.group(1)) != profile["profile_version"]:
         raise ValueError(
             "{}: profile_id suffix and profile_version disagree".format(profile_path)
-        )
-
-    namespace_parameter = profile["namespace_parameter"]
-    namespace_definition = profile["parameters"].get(namespace_parameter)
-    if namespace_definition is None:
-        raise ValueError(
-            "{}: namespace_parameter {} is not declared".format(
-                profile_path, namespace_parameter
-            )
-        )
-    if (
-        namespace_definition["type"] != "ros_namespace"
-        or not namespace_definition["required"]
-    ):
-        raise ValueError(
-            "{}: namespace_parameter {} must be a required ros_namespace".format(
-                profile_path, namespace_parameter
-            )
         )
 
     for parameter_name, definition in profile["parameters"].items():
@@ -648,7 +629,6 @@ def load_profile(profile_path, schema_path, messages):
             "profile_version": profile["profile_version"],
             "robot_kind": profile["robot_kind"],
             "description": profile.get("description", ""),
-            "namespace_parameter": profile["namespace_parameter"],
             "parameters": profile["parameters"],
             "semantic_traits": profile["semantic_traits"],
             "channels": channels,
@@ -755,7 +735,6 @@ def catalog_profile_body(source_profile, messages, provider_definition_id):
         "profileId": source_profile["profile_id"],
         "providerDefinitionId": provider_definition_id,
         "robotKind": source_profile["robot_kind"],
-        "namespaceParameter": source_profile["namespace_parameter"],
         "parameters": catalog_parameters(source_profile),
         "semantics": catalog_semantics(source_profile),
         "channels": catalog_channels(source_profile, messages),
@@ -828,9 +807,6 @@ def generate(
         "constexpr const char* kProfileId = {};".format(
             cpp_string(next(iter(profiles)))
         ),
-        "constexpr const char* kNamespaceParameter = {};".format(
-            cpp_string(next(iter(profiles.values()))["namespace_parameter"])
-        ),
         "",
         "constexpr std::uint64_t kRegistryFingerprint = {}ULL;".format(
             registry_fingerprint
@@ -841,7 +817,6 @@ def generate(
         "  kInteger,",
         "  kNumber,",
         "  kBoolean,",
-        "  kRosNamespace,",
         "};",
         "",
         "enum class ChannelKind {",
@@ -977,12 +952,17 @@ def generate(
         ]
     )
     for profile_index, (profile_id, profile) in enumerate(profiles.items()):
-        lines.extend(
-            [
-                "  if (profile_id == {}) {{".format(cpp_string(profile_id)),
-                "    static const ParameterMetadata values[] = {",
-            ]
-        )
+        lines.append("  if (profile_id == {}) {{".format(cpp_string(profile_id)))
+        if not profile["parameters"]:
+            lines.extend(
+                [
+                    "    *count = 0u;",
+                    "    return nullptr;",
+                    "  }",
+                ]
+            )
+            continue
+        lines.append("    static const ParameterMetadata values[] = {")
         for name, definition in sorted(profile["parameters"].items()):
             lines.append(
                 "      {{{}, {}, {}, {}, {}}},".format(

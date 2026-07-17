@@ -1,15 +1,14 @@
-schema: xgc.robot.adapter-profile/v1
-profile_id: px4.multirotor.ros1.v3
-profile_version: 3
+schema: xgc.robot.adapter-profile/v2
+profile_id: px4.multirotor.ros1.v4
+profile_version: 4
 native_protocol: ros1
 robot_kind: px4_multirotor
 description: PX4 multirotor telemetry, mocap relay, diagnostics, and native commands through MAVROS.
-namespace_parameter: namespace
 parameters:
   namespace:
-    type: ros_namespace
+    type: string
     required: true
-    description: Unique ROS namespace assigned to this robot by the robot-domain instance specification.
+    description: Product-owned ROS namespace assigned to this PX4 robot.
   mocap_rigid_body:
     type: string
     required: true

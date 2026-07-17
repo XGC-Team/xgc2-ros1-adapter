@@ -127,7 +127,7 @@ bool resolveEndpointTemplate(
     *resolved = topicName("", value);
   } else {
     const auto namespace_value =
-        config.parameters.find(contract::kNamespaceParameter);
+        config.parameters.find("namespace");
     if (namespace_value == config.parameters.end())
       return fail(error, "robot namespace parameter is missing");
     *resolved = topicName(namespace_value->second, value);
@@ -221,8 +221,8 @@ bool validateNativeProfileContract(std::string *error) {
   const auto *parameters =
       contract::profileParameters(contract::kProfileId, &parameter_count);
   if (parameters == nullptr || parameter_count != 1u ||
-      std::string(parameters[0].name) != contract::kNamespaceParameter ||
-      parameters[0].type != contract::ParameterType::kRosNamespace ||
+      std::string(parameters[0].name) != "namespace" ||
+      parameters[0].type != contract::ParameterType::kString ||
       !parameters[0].required) {
     return fail(error, "Scout native parameter binding is incomplete");
   }
@@ -302,7 +302,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     return nullptr;
   }
   const auto namespace_it =
-      config.parameters.find(contract::kNamespaceParameter);
+      config.parameters.find("namespace");
   if (namespace_it == config.parameters.end()) {
     if (error != nullptr) {
       *error = "robot configuration is missing required namespace parameter";

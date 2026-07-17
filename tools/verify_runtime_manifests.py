@@ -248,7 +248,7 @@ def verify(args: argparse.Namespace) -> None:
         "Adapter process command mismatch",
     )
 
-    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v1", "invalid profile catalog schema")
+    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v2", "invalid profile catalog schema")
     require(len(profile["profiles"]) == 1, "profile catalog must contain exactly one profile")
     installed_profile = profile["profiles"][0]
     expected_profile_body = catalog_profile_body(

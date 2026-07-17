@@ -281,7 +281,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
         },
     }
     profile_catalog = {
-        "schema": "xgc.robot.adapter-profile-catalog/v1",
+        "schema": "xgc.robot.adapter-profile-catalog/v2",
         "profiles": [installed_profile],
     }
     return adapter_manifest, process_manifest, profile_catalog

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://xgc2.dev/schemas/robot-adapter-profile-v1.schema.json",
-  "title": "XGC2 Robot Adapter Profile v1",
+  "$id": "https://xgc2.dev/schemas/robot-adapter-profile-v2.schema.json",
+  "title": "XGC2 Robot Adapter Profile v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,14 +10,13 @@
     "profile_version",
     "native_protocol",
     "robot_kind",
-    "namespace_parameter",
     "parameters",
     "semantic_traits",
     "channels"
   ],
   "properties": {
     "schema": {
-      "const": "xgc.robot.adapter-profile/v1"
+      "const": "xgc.robot.adapter-profile/v2"
     },
     "profile_id": {
       "type": "string",
@@ -38,10 +37,6 @@
     "description": {
       "type": "string",
       "minLength": 1
-    },
-    "namespace_parameter": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "parameters": {
       "type": "object",
@@ -144,7 +139,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["string", "integer", "number", "boolean", "ros_namespace"]
+          "enum": ["string", "integer", "number", "boolean"]
         },
         "required": {
           "type": "boolean"

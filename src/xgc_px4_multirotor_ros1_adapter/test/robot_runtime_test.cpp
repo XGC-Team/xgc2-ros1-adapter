@@ -15,7 +15,7 @@ xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   xgc2_ros1_robot_adapter::RobotConfig config;
   config.robot_id = "uav1";
   config.profile_id = contract::kProfileId;
-  config.parameters[contract::kNamespaceParameter] = "/uav1";
+  config.parameters["namespace"] = "/uav1";
   config.parameters["mocap_rigid_body"] = "FS150_01";
   return config;
 }
@@ -153,18 +153,18 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
-  const char *digest = contract::profileDigest("px4.multirotor.ros1.v3");
+  const char *digest = contract::profileDigest("px4.multirotor.ros1.v4");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("px4.multirotor.ros1.v3", "state.pose", &pose));
+      contract::channelMetadata("px4.multirotor.ros1.v4", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata arm;
-  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v3",
+  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v4",
                                         "operation.arm", &arm));
   EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
   EXPECT_EQ(3201u, arm.input_message_id);

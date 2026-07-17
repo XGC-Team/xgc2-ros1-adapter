@@ -449,17 +449,15 @@ private:
       return false;
     }
     if (robot.parameters.size() != 2 ||
-        robot.parameters.find(contract::kNamespaceParameter) ==
-            robot.parameters.end() ||
+        robot.parameters.find("namespace") == robot.parameters.end() ||
         robot.parameters.find("mocap_rigid_body") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly the profile namespace parameter and "
+               " must contain exactly namespace and "
                "mocap_rigid_body";
       return false;
     }
     std::string native_error;
-    if (!validRobotNamespace(robot.parameters.at(contract::kNamespaceParameter),
-                             &native_error) ||
+    if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error) ||
         !validMocapRigidBodyName(robot.parameters.at("mocap_rigid_body"),
                                  &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +
@@ -522,10 +520,9 @@ private:
     for (const auto &robot : candidate.robots) {
       if (!validateRobotConfig(robot, error))
         return false;
-      if (!namespaces.insert(robot.parameters.at(contract::kNamespaceParameter))
-               .second) {
+      if (!namespaces.insert(robot.parameters.at("namespace")).second) {
         *error = "multiple PX4 robots share ROS namespace " +
-                 robot.parameters.at(contract::kNamespaceParameter);
+                 robot.parameters.at("namespace");
         return false;
       }
       if (!mocap_rigid_bodies.insert(robot.parameters.at("mocap_rigid_body"))

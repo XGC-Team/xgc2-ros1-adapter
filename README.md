@@ -6,8 +6,8 @@ specialize that abstraction for PX4 multirotors and Scout Mini robots.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v3` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v1` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v4` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v2` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -62,9 +62,9 @@ Each Debian package owns three generated, immutable installation contracts:
 - `/usr/share/xgc2/process-definitions/<provider>.json`
 - `/usr/share/xgc2/robot-adapter-profiles/<provider>.json`
 
-The install step hashes the final ELF, computes canonical capability contract
-and manifest digests, records the exact raw profile digest, and validates every
-message ID/version/fingerprint against `xgc2-protobuf`. The process definition
+The install step hashes the final ELF, computes canonical capability and public
+Profile contract digests, and validates every message ID/version/fingerprint
+against `xgc2-protobuf`. The process definition
 accepts only the supervisor-owned `adapterBootstrapFile` parameter and invokes
 the executable directly with `--adapter-bootstrap-file` and the complete ROS
 Noetic runtime environment. It never relies on a shell or a sourced setup file.
