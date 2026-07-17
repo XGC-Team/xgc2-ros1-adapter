@@ -466,17 +466,10 @@ private:
     }
     for (const auto &channel : robot.channels) {
       contract::ChannelMetadata metadata{};
-      if (!channel.parameters.empty() ||
-          !contract::channelMetadata(robot.profile_id, channel.channel_id,
+      if (!contract::channelMetadata(robot.profile_id, channel.channel_id,
                                      &metadata)) {
         *error = "robot " + robot.robot_id +
-                 " contains an unknown or parameterized channel " +
-                 channel.channel_id;
-        return false;
-      }
-      if (metadata.kind == contract::ChannelKind::kStreamIn ||
-          metadata.kind == contract::ChannelKind::kRequestResponse) {
-        *error = "PX4 Adapter does not implement input/duplex profile channels";
+                 " contains an unknown channel " + channel.channel_id;
         return false;
       }
       if ((metadata.kind == contract::ChannelKind::kOperation) !=

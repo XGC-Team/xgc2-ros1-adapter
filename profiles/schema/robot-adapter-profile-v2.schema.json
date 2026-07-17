@@ -20,6 +20,8 @@
     },
     "profile_id": {
       "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
       "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\\.v[1-9][0-9]*$"
     },
     "profile_version": {
@@ -40,7 +42,10 @@
     },
     "parameters": {
       "type": "object",
+      "maxProperties": 64,
       "propertyNames": {
+        "minLength": 1,
+        "maxLength": 64,
         "pattern": "^[a-z][a-z0-9_]*$"
       },
       "properties": {
@@ -227,7 +232,7 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["stream_out", "stream_in", "request_response", "operation"]
+          "enum": ["stream_out", "operation"]
         },
         "processor": {
           "type": "string",
@@ -291,14 +296,6 @@
               {"required": ["observes"]}
             ]
           }
-        },
-        {
-          "if": {"properties": {"kind": {"const": "stream_in"}}},
-          "then": {"required": ["input_message_id", "output"]}
-        },
-        {
-          "if": {"properties": {"kind": {"const": "request_response"}}},
-          "then": {"required": ["input_message_id", "output_message_id", "service"]}
         },
         {
           "if": {"properties": {"kind": {"const": "operation"}}},

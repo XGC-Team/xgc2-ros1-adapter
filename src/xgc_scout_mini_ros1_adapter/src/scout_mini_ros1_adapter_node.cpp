@@ -234,8 +234,7 @@ private:
     }
     for (const auto &channel : robot.channels) {
       contract::ChannelMetadata metadata;
-      if (!channel.parameters.empty() ||
-          !contract::channelMetadata(robot.profile_id, channel.channel_id,
+      if (!contract::channelMetadata(robot.profile_id, channel.channel_id,
                                      &metadata) ||
           metadata.kind != contract::ChannelKind::kStreamOut) {
         *error = "Scout robot " + robot.robot_id +

@@ -21,9 +21,9 @@ import yaml
 
 PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v2"
 PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v2"
-KINDS = {"stream_out", "stream_in", "request_response", "operation"}
-INPUT_KINDS = {"stream_in", "request_response", "operation"}
-OUTPUT_KINDS = {"stream_out", "request_response", "operation"}
+KINDS = {"stream_out", "operation"}
+INPUT_KINDS = {"operation"}
+OUTPUT_KINDS = {"stream_out", "operation"}
 INPUT_ROLES = {"control", "request"}
 OUTPUT_ROLES = {"telemetry", "diagnostic", "response"}
 OPERATION_OUTPUT_ROLES = {"request", "response"}
@@ -38,8 +38,6 @@ NATIVE_OPERATION_TIMEOUT_MAX_MILLIS = 5000
 
 KIND_ENUM = {
     "stream_out": "ChannelKind::kStreamOut",
-    "stream_in": "ChannelKind::kStreamIn",
-    "request_response": "ChannelKind::kRequestResponse",
     "operation": "ChannelKind::kOperation",
 }
 
@@ -387,8 +385,6 @@ def validate_profile_document(profile_path, profile, schema, messages):
         }
         allowed_native_fields = {
             "stream_out": {"inputs", "observes", "output"},
-            "stream_in": {"output"},
-            "request_response": {"service"},
             "operation": {"service"},
         }[kind]
         unexpected_native_fields = native_fields - allowed_native_fields
@@ -821,8 +817,6 @@ def generate(
         "",
         "enum class ChannelKind {",
         "  kStreamOut,",
-        "  kStreamIn,",
-        "  kRequestResponse,",
         "  kOperation,",
         "};",
         "",

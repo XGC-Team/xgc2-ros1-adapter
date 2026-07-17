@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <utility>
 
 #include "xgc/semantic/aerial/v1/control.pb.h"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
@@ -16,7 +17,8 @@ constexpr const char *kSpecDigest =
 constexpr const char *kAssetDigest =
     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 constexpr std::uint32_t kRobotAdapterSpecMessageId = 4001u;
-constexpr std::uint64_t kRobotAdapterSpecFingerprint = 765294016423927346ULL;
+constexpr std::uint64_t kRobotAdapterSpecFingerprint =
+    1932893837531035663ULL;
 
 MessageSchema robotConfigSchema() {
   MessageSchema schema;
@@ -70,6 +72,32 @@ xgc::adapter::v1::AdapterInstanceSpec makeValidInstanceSpec() {
       xgc::v1::PAYLOAD_ENCODING_PROTOBUF);
   instance.mutable_configuration()->set_value(encoded);
   return instance;
+}
+
+xgc::robot::v1::RobotAdapterSpec robotSpecFrom(
+    const xgc::adapter::v1::AdapterInstanceSpec &instance) {
+  xgc::robot::v1::RobotAdapterSpec robot_spec;
+  EXPECT_TRUE(robot_spec.ParseFromString(instance.configuration().value()));
+  return robot_spec;
+}
+
+bool replaceRobotSpec(
+    const xgc::robot::v1::RobotAdapterSpec &robot_spec,
+    xgc::adapter::v1::AdapterInstanceSpec *instance) {
+  std::string encoded;
+  if (instance == nullptr || !robot_spec.SerializeToString(&encoded))
+    return false;
+  instance->mutable_configuration()->set_value(std::move(encoded));
+  return true;
+}
+
+std::string decodeFailure(
+    const xgc::adapter::v1::AdapterInstanceSpec &instance) {
+  RobotAdapterConfig decoded;
+  std::string error;
+  EXPECT_FALSE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                        &error));
+  return error;
 }
 
 MessageSchema modeSchema() {
@@ -184,6 +212,103 @@ TEST(RobotAdapterConfigDecoder, RejectsDuplicateRobotsAndChannels) {
   EXPECT_FALSE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
                                         &error));
   EXPECT_NE(std::string::npos, error.find("repeats channel"));
+}
+
+TEST(RobotAdapterConfigDecoder, EnforcesCanonicalBoundedProfileIds) {
+  auto instance = makeValidInstanceSpec();
+  auto robot_spec = robotSpecFrom(instance);
+  robot_spec.mutable_robots(0)->set_profile_id("1robot.ros1.v4");
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("invalid profile_id"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  robot_spec.mutable_robots(0)->set_profile_id("Robot.ros1.v4");
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("invalid profile_id"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  robot_spec.mutable_robots(0)->set_profile_id(std::string(126u, 'a') +
+                                               ".v4");
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("invalid profile_id"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  robot_spec.mutable_robots(0)->set_profile_id(std::string(125u, 'a') +
+                                               ".v4");
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  RobotAdapterConfig decoded;
+  std::string error;
+  EXPECT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                       &error))
+      << error;
+}
+
+TEST(RobotAdapterConfigDecoder, EnforcesRobotParameterMapBounds) {
+  auto instance = makeValidInstanceSpec();
+  auto robot_spec = robotSpecFrom(instance);
+  auto *parameters = robot_spec.mutable_robots(0)->mutable_parameters();
+  for (std::size_t index = 0u; index < 62u; ++index)
+    (*parameters)["optional_" + std::to_string(index)] = "";
+  ASSERT_EQ(64u, parameters->size());
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  RobotAdapterConfig decoded;
+  std::string error;
+  ASSERT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                       &error))
+      << error;
+  EXPECT_TRUE(decoded.robots[0].parameters.at("optional_0").empty());
+
+  (*parameters)["overflow"] = "value";
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("exceeds 64 parameter entries"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  (*robot_spec.mutable_robots(0)->mutable_parameters())[std::string(64u, 'a')] =
+      "value";
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  ASSERT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                       &error))
+      << error;
+
+  (*robot_spec.mutable_robots(0)->mutable_parameters())[std::string(65u, 'a')] =
+      "value";
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("non-canonical parameter name"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  (*robot_spec.mutable_robots(0)->mutable_parameters())["Not-Canonical"] =
+      "value";
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("non-canonical parameter name"));
+
+  std::string utf8_value;
+  utf8_value.reserve(4097u);
+  for (std::size_t index = 0u; index < 2048u; ++index)
+    utf8_value.append("\xc3\xa9", 2u);
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  (*robot_spec.mutable_robots(0)->mutable_parameters())["namespace"] =
+      utf8_value;
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  ASSERT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                       &error))
+      << error;
+
+  (*robot_spec.mutable_robots(0)->mutable_parameters())["namespace"] += "x";
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("exceeds 4096 UTF-8 bytes"));
 }
 
 TEST(RobotAdapterConfigDecoder, FailureDoesNotReplacePreviousConfig) {

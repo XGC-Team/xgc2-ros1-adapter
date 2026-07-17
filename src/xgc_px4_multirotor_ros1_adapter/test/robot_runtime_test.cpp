@@ -182,6 +182,19 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
   EXPECT_TRUE(contract::messageMetadata(3005, &metadata));
 }
 
+TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
+  EXPECT_EQ(7872902552848243131ULL, contract::kRegistryFingerprint);
+
+  contract::MessageMetadata metadata;
+  ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));
+  EXPECT_EQ(2u, metadata.version);
+  EXPECT_EQ(1932893837531035663ULL, metadata.fingerprint);
+
+  ASSERT_TRUE(contract::messageMetadata(4002u, &metadata));
+  EXPECT_EQ(1u, metadata.version);
+  EXPECT_EQ(17079265246794908236ULL, metadata.fingerprint);
+}
+
 } // namespace
 } // namespace xgc_px4_multirotor_ros1_adapter
 

@@ -1,11 +1,17 @@
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
+#include <cstddef>
 #include <regex>
 #include <set>
 #include <utility>
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
+
+constexpr std::size_t kMaximumProfileIdBytes = 128u;
+constexpr std::size_t kMaximumParameterEntries = 64u;
+constexpr std::size_t kMaximumParameterNameBytes = 64u;
+constexpr std::size_t kMaximumParameterValueBytes = 4096u;
 
 bool fail(std::string *error, const std::string &message) {
   if (error != nullptr)
@@ -20,8 +26,9 @@ bool validRobotId(const std::string &value) {
 
 bool validProfileId(const std::string &value) {
   static const std::regex pattern(
-      "^[a-z0-9]+([.-][a-z0-9]+)*\\.v[1-9][0-9]*$");
-  return std::regex_match(value, pattern);
+      "^[a-z][a-z0-9]*([.-][a-z0-9]+)*\\.v[1-9][0-9]*$");
+  return !value.empty() && value.size() <= kMaximumProfileIdBytes &&
+         std::regex_match(value, pattern);
 }
 
 bool validChannelId(const std::string &value) {
@@ -37,6 +44,85 @@ bool validRawSha256(const std::string &value) {
 bool validCanonicalSha256(const std::string &value) {
   static const std::regex pattern("^sha256:[0-9a-f]{64}$");
   return std::regex_match(value, pattern);
+}
+
+bool validParameterName(const std::string &value) {
+  static const std::regex pattern("^[a-z][a-z0-9_]*$");
+  return !value.empty() && value.size() <= kMaximumParameterNameBytes &&
+         std::regex_match(value, pattern);
+}
+
+bool validUtf8(const std::string &value) {
+  const auto *bytes =
+      reinterpret_cast<const unsigned char *>(value.data());
+  const std::size_t size = value.size();
+  std::size_t index = 0u;
+  while (index < size) {
+    const unsigned char lead = bytes[index];
+    if (lead <= 0x7fu) {
+      ++index;
+      continue;
+    }
+    if (lead >= 0xc2u && lead <= 0xdfu) {
+      if (index + 1u >= size || bytes[index + 1u] < 0x80u ||
+          bytes[index + 1u] > 0xbfu)
+        return false;
+      index += 2u;
+      continue;
+    }
+    if (lead >= 0xe0u && lead <= 0xefu) {
+      if (index + 2u >= size || bytes[index + 2u] < 0x80u ||
+          bytes[index + 2u] > 0xbfu)
+        return false;
+      const unsigned char second = bytes[index + 1u];
+      if ((lead == 0xe0u && (second < 0xa0u || second > 0xbfu)) ||
+          (lead == 0xedu && (second < 0x80u || second > 0x9fu)) ||
+          (lead != 0xe0u && lead != 0xedu &&
+           (second < 0x80u || second > 0xbfu)))
+        return false;
+      index += 3u;
+      continue;
+    }
+    if (lead >= 0xf0u && lead <= 0xf4u) {
+      if (index + 3u >= size || bytes[index + 2u] < 0x80u ||
+          bytes[index + 2u] > 0xbfu || bytes[index + 3u] < 0x80u ||
+          bytes[index + 3u] > 0xbfu)
+        return false;
+      const unsigned char second = bytes[index + 1u];
+      if ((lead == 0xf0u && (second < 0x90u || second > 0xbfu)) ||
+          (lead == 0xf4u && (second < 0x80u || second > 0x8fu)) ||
+          (lead != 0xf0u && lead != 0xf4u &&
+           (second < 0x80u || second > 0xbfu)))
+        return false;
+      index += 4u;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+template <typename ParameterMap>
+bool validateParameters(const ParameterMap &parameters,
+                        const std::string &owner, std::string *error) {
+  if (parameters.size() > kMaximumParameterEntries) {
+    return fail(error, owner + " exceeds 64 parameter entries");
+  }
+  for (const auto &entry : parameters) {
+    if (!validParameterName(entry.first)) {
+      return fail(error, owner + " contains a non-canonical parameter name: " +
+                             entry.first);
+    }
+    if (entry.second.size() > kMaximumParameterValueBytes) {
+      return fail(error, owner + " parameter " + entry.first +
+                             " exceeds 4096 UTF-8 bytes");
+    }
+    if (!validUtf8(entry.second)) {
+      return fail(error, owner + " parameter " + entry.first +
+                             " is not valid UTF-8");
+    }
+  }
+  return true;
 }
 
 bool validRosSourceClock(xgc::v1::ClockDomain clock_domain) {
@@ -150,6 +236,11 @@ bool DecodeRobotAdapterConfig(
       return fail(error, "robot " + robot.robot_id() +
                              " contains an invalid profile_digest");
     }
+    if (!validateParameters(robot.parameters(),
+                            "robot " + robot.robot_id() + " parameters",
+                            error)) {
+      return false;
+    }
 
     RobotConfig local_robot;
     local_robot.robot_id = robot.robot_id();
@@ -174,8 +265,6 @@ bool DecodeRobotAdapterConfig(
       RobotChannelConfig local_channel;
       local_channel.channel_id = channel.channel_id();
       local_channel.enabled = channel.enabled();
-      local_channel.parameters.insert(channel.parameters().begin(),
-                                      channel.parameters().end());
       local_robot.channels.push_back(std::move(local_channel));
     }
     candidate.robots.push_back(std::move(local_robot));

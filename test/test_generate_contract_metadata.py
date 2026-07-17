@@ -396,6 +396,57 @@ int main() {
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
+    def test_profile_identity_and_parameters_have_exact_source_bounds(self):
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile["profile_id"] = "a" * 125 + ".v4"
+        path = self.write_profile(profile)
+        GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile["profile_id"] = "a" * 126 + ".v4"
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        optional_parameter = {
+            "type": "string",
+            "required": False,
+            "description": "Optional product-owned runtime parameter.",
+        }
+        profile["parameters"]["a" * 64] = dict(optional_parameter)
+        path = self.write_profile(profile)
+        GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        del profile["parameters"]["a" * 64]
+        profile["parameters"]["a" * 65] = dict(optional_parameter)
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        for index in range(62):
+            profile["parameters"]["optional_{:02d}".format(index)] = dict(
+                optional_parameter
+            )
+        path = self.write_profile(profile)
+        GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile["parameters"]["overflow"] = dict(optional_parameter)
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+    def test_profile_channels_are_only_stream_outputs_or_operations(self):
+        for unsupported_kind in ("stream_in", "request_response"):
+            with self.subTest(kind=unsupported_kind):
+                profile = yaml.safe_load(
+                    PX4_PROFILE_PATH.read_text(encoding="utf-8")
+                )
+                profile["channels"][0]["kind"] = unsupported_kind
+                path = self.write_profile(profile)
+                with self.assertRaisesRegex(ValueError, "schema validation failed"):
+                    GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
     def test_robot_kind_and_semantic_traits_use_exact_asset_vocabulary(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
         self.assertEqual(profile["robot_kind"], "px4_multirotor")
