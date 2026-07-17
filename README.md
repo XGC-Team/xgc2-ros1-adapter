@@ -1,113 +1,96 @@
 # XGC2 ROS1 Robot Adapters
 
-This Catkin workspace contains two independent robot-specific AdapterLink
-products. There is no generic `xgc_ros1_adapter` package or executable.
+This Catkin workspace contains two robot-domain Adapter Runtime applications.
+An Adapter is a general capability plugin for Core or Agent; these two products
+specialize that abstraction for PX4 multirotors and Scout Mini robots.
 
-The repository is distributed under the BSD 3-Clause License in `LICENSE`.
-
-Both processes link the ROS-independent
-`libxgc2-adapter-link-client-dev` product. That library exclusively owns gRPC,
-Unix-socket transport, registration, bootstrap credentials, sessions,
-heartbeats, reconnects, telemetry batching, operation streaming, and operation
-idempotency. This repository contains only ROS/native robot mappings.
-
-## Product outputs
-
-| ROS package | Debian package | Profile | Native dependency |
+| ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `px4.multirotor.ros1.v2` | `mavros_msgs` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `scout-mini.ros1.v1` | `scout_msgs` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v3` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v1` |
 
-The PX4 package has no Scout dependency. The Scout package has no MAVROS
-dependency. The removed package is not retained as a meta package or adapter.
+The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
+session fencing, capability dispatch, flow control, reconnects, and terminal
+result delivery. This repository owns robot semantics, ROS1-native mappings,
+profile contracts, and native safety policy.
 
-One process owns every same-type robot in the immutable `AdapterPlan`. For
-example, a run containing three PX4 multirotors and two Scout Mini robots uses
-one PX4 adapter process and one Scout adapter process, not one process per robot
-and not one mixed process.
+## Runtime contract
+
+Core resolves each provider from the installed robot profile catalog. A
+provider instance uses a `robot-group` scope containing `target-id`, `run-id`,
+and `provider`; each invocation and telemetry source uses a separate
+`robot-resource` subject containing `target-id`, `run-id`, and `robot-id`.
+
+Both products expose:
+
+- `xgc.robot.telemetry@1`: `telemetry` source of serialized
+  `xgc.robot.v1.RobotMessage`
+
+The PX4 product also exposes `xgc.robot.command@1`:
+
+- `arm` with `xgc.semantic.aerial.v1.ArmRequest`
+- `set-flight-mode` with `xgc.semantic.aerial.v1.ModeRequest`
+- `reboot-autopilot` with `xgc.semantic.aerial.v1.AutopilotRebootRequest`
+
+PX4 command operations require deadlines and idempotency keys. A successful
+operation returns the registry-owned `xgc.v1.Empty` payload. Native ROS service
+calls are not advertised as cancellable after dispatch.
 
 ## Native mappings
 
-### PX4 multirotor
+PX4 telemetry and diagnostics consume MAVROS topics under each configured
+robot namespace. Mocap samples from
+`/vrpn_client_node/{mocap_rigid_body}/pose` are relayed to
+`mavros/vision_pose/pose` without coordinate transformation, interpolation, or
+stale-sample repetition. Arm, flight-mode, and autopilot-reboot operations use
+typed MAVROS services. Flight modes are restricted to `OFFBOARD`, `POSCTL`,
+`ALTCTL`, and `STABILIZED`; reboot requires a known, fresh, connected, disarmed
+vehicle state.
 
-For each plan namespace such as `/uav1`, the adapter consumes:
+Scout Mini telemetry consumes `odom`, `imu/data_raw`, and `scout_status` under
+the configured namespace. The Scout profile intentionally exposes no command
+capability.
 
-- `mavros/local_position/pose`
-- `mavros/local_position/velocity_local`
-- `mavros/imu/data`
-- `mavros/battery`
-- `mavros/state`
-- `mavros/extended_state`
-- `mavros/timesync_status`
-- `mavros/setpoint_raw/local`
-- `mavros/setpoint_raw/attitude`
-- `/vrpn_client_node/{mocap_rigid_body}/pose`
+High-bandwidth images, point clouds, and TF visualization remain on their
+native ROS visualization paths rather than the semantic telemetry source.
 
-It republishes each valid, new VRPN sample unchanged to
-`mavros/vision_pose/pose`, capped at 50 Hz. It applies no position offset or
-coordinate transform, and never interpolates or repeats stale samples.
+## Trust and installation metadata
 
-It publishes typed pose, velocity, IMU, power, health, flight, and channel
-health messages. It implements only the profile's typed operations:
+Each Debian package owns three generated, immutable installation contracts:
 
-- `operation.arm` through `mavros/cmd/arming`
-- `operation.mode` through `mavros/set_mode`
-- `operation.autopilot-reboot` through `mavros/cmd/command`
+- `/usr/share/xgc2/adapter-definitions/<provider>.json`
+- `/usr/share/xgc2/process-definitions/<provider>.json`
+- `/usr/share/xgc2/robot-adapter-profiles/<provider>.json`
 
-### Scout Mini
+The install step hashes the final ELF, computes canonical capability contract
+and manifest digests, records the exact raw profile digest, and validates every
+message ID/version/fingerprint against `xgc2-protobuf`. The process definition
+accepts only the supervisor-owned `adapterBootstrapFile` parameter and invokes
+the executable directly with `--adapter-bootstrap-file` and the complete ROS
+Noetic runtime environment. It never relies on a shell or a sourced setup file.
 
-For each plan namespace such as `/scout1`, the adapter consumes:
+Package-local C++ headers are implementation details used only while building
+each executable. The Debian packages intentionally export no Catkin header or
+library interface.
 
-- `odom`
-- `imu/data_raw`
-- `scout_status`
-
-It publishes typed pose, velocity, IMU, power, health, and channel health
-messages. The current Scout profile exposes no operation channel.
-
-Image, point-cloud, TF visualization, and other high-bandwidth data remain on
-their direct ROS/Foxglove paths and are not sent through AdapterLink.
-
-## Contract enforcement
-
-The public protobuf product remains the single source of protocol and profile
-truth. `xgc2_adapter_link_client` exports its generated protocol target and the
-installed registry/profile paths. Each Catkin package generates a private,
-single-profile metadata header and fails its build when:
-
-- the selected profile digest or native endpoints change;
-- an unknown channel appears;
-- a channel schema/message fingerprint does not exist;
-- an unsupported input channel is introduced.
-
-The ROS packages do not invoke `protoc`, compile gRPC, vendor protobuf files, or
-copy AdapterLink client/session code.
-
-## Install
-
-```bash
-sudo apt update
-sudo apt install \
-  ros-noetic-xgc2-px4-multirotor-adapter \
-  ros-noetic-xgc2-scout-mini-adapter
-```
-
-Install only the package needed by a robot target when the target is not a
-mixed centralized-simulation environment.
+The application accepts no socket, token, identity, inventory, or ROS-parameter
+fallback. The binary bootstrap is owner-only mode `0600` and contains the exact
+initial instance specification and granted capability contracts.
 
 ## Build and test
 
-The development environment requires ROS Noetic, both native message packages,
-and the public AdapterLink client development package:
-
 ```bash
 sudo apt update
 sudo apt install \
-  libxgc2-adapter-link-client-dev \
+  libxgc2-adapter-runtime-client-dev \
+  xgc2-protobuf-dev \
   ros-noetic-mavros-msgs \
   ros-noetic-nav-msgs \
   ros-noetic-scout-msgs \
+  python3-jsonschema \
   python3-yaml
+
+python3 -m unittest discover -v -s test -p 'test_*.py'
 
 source /opt/ros/noetic/setup.bash
 catkin_make
@@ -121,39 +104,21 @@ The release path builds and install-checks both independent Debian packages:
 .xgc2/scripts/build_debs_in_docker.sh --output-dir "$PWD/debs"
 ```
 
-CI bootstraps its common dependencies from the public pinned tags
-`xgc2-protobuf@v0.3.0-1` and
-`xgc2-adapter-link-client-cpp@v0.2.0-1`, builds their Debian packages inside
-the clean container, and installs those packages before building this
-workspace. It therefore does not depend on a new production APT publication
-having completed. Set `XGC2_BOOTSTRAP_COMMON_FROM_GIT=false` to exercise the
-already-published APT path instead. `XGC2_APT_OVERLAY_URL` remains available
-for release-train dependencies.
+## Supervisor launch
 
-## Runtime
-
-Go Core supplies a process-specific adapter ID and bootstrap token file.
-
-```bash
-rosrun xgc_px4_multirotor_ros1_adapter \
-  xgc_px4_multirotor_ros1_adapter_node \
-  _adapter_id:=px4-run-123 \
-  _socket_path:=/run/xgc2/adapter/adapter-link.sock \
-  _bootstrap_token_file:=/run/xgc2/adapter/px4-run-123.token
-
-rosrun xgc_scout_mini_ros1_adapter \
-  xgc_scout_mini_ros1_adapter_node \
-  _adapter_id:=scout-run-123 \
-  _socket_path:=/run/xgc2/adapter/adapter-link.sock \
-  _bootstrap_token_file:=/run/xgc2/adapter/scout-run-123.token
-```
-
-Installed executable paths are fixed:
+The Process Supervisor starts the fixed installed executable directly:
 
 ```text
 /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
 ```
 
-Robot IDs, namespaces, channels, and profile digests come exclusively from the
-Core `AdapterPlan`; neither package has a local robot inventory fallback.
+For a diagnostic manual launch, pass a real supervisor-generated bootstrap:
+
+```bash
+rosrun xgc_px4_multirotor_ros1_adapter \
+  xgc_px4_multirotor_ros1_adapter_node \
+  --adapter-bootstrap-file /run/xgc2/adapter/processes/<instance>.bootstrap
+```
+
+The repository is distributed under the BSD 3-Clause License in `LICENSE`.

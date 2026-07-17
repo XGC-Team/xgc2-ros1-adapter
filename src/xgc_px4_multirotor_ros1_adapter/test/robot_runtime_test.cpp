@@ -11,6 +11,15 @@
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace {
 
+xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
+  xgc2_ros1_robot_adapter::RobotConfig config;
+  config.robot_id = "uav1";
+  config.profile_id = contract::kProfileId;
+  config.parameters[contract::kNamespaceParameter] = "/uav1";
+  config.parameters["mocap_rigid_body"] = "FS150_01";
+  return config;
+}
+
 TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
   ShutdownSignalHandler handler;
   EXPECT_FALSE(handler.requested());
@@ -54,7 +63,8 @@ TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
 TEST(RosNames, AcceptsOnlyAssetSafeMocapRigidBodyNames) {
   std::string error;
   EXPECT_TRUE(validMocapRigidBodyName("fs150_01", &error));
-  EXPECT_TRUE(validMocapRigidBodyName("FS150-01", &error));
+  EXPECT_TRUE(validMocapRigidBodyName("FS150_01", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("FS150-01", &error));
   EXPECT_FALSE(validMocapRigidBodyName("/vrpn/arbitrary/topic", &error));
   EXPECT_FALSE(validMocapRigidBodyName("body name", &error));
 }
@@ -69,14 +79,45 @@ TEST(VisionRelay, RejectsNonFiniteOrDegeneratePoses) {
   pose.pose.position.x = 0.0;
   pose.pose.orientation.w = 0.0;
   EXPECT_FALSE(validVisionPose(pose));
-  EXPECT_DOUBLE_EQ(0.02, kVisionMinimumPeriodSeconds);
-  EXPECT_DOUBLE_EQ(0.2, kMocapStaleAfterSeconds);
+
+  pose.pose.orientation.x = std::numeric_limits<double>::max();
+  pose.pose.orientation.y = std::numeric_limits<double>::max();
+  EXPECT_FALSE(validVisionPose(pose));
+
+  pose.pose.orientation.x = 3.0;
+  pose.pose.orientation.y = 0.0;
+  ASSERT_TRUE(normalizeVisionPose(&pose));
+  EXPECT_DOUBLE_EQ(1.0, pose.pose.orientation.x);
+  EXPECT_DOUBLE_EQ(0.0, pose.pose.orientation.w);
+}
+
+TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(makeProfileConfig(), &native, &error))
+      << error;
+
+  EXPECT_EQ("/uav1/mavros/local_position/pose", native.pose_endpoint);
+  EXPECT_EQ("/vrpn_client_node/FS150_01/pose", native.mocap_endpoint);
+  EXPECT_EQ("/uav1/mavros/vision_pose/pose", native.vision_pose_endpoint);
+  EXPECT_EQ("/uav1/mavros/cmd/arming", native.arm_service_endpoint);
+  EXPECT_EQ("/uav1/mavros/set_mode", native.mode_service_endpoint);
+  EXPECT_EQ("/uav1/mavros/cmd/command", native.reboot_service_endpoint);
+  EXPECT_DOUBLE_EQ(0.02, native.vision_minimum_period_seconds);
+  EXPECT_DOUBLE_EQ(0.2, native.mocap_timeout_seconds);
+  EXPECT_DOUBLE_EQ(0.5, native.offboard_source_timeout_seconds);
+  EXPECT_DOUBLE_EQ(2.5, native.offboard_minimum_rate_hz);
+  EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
+  EXPECT_DOUBLE_EQ(5.0, native.maximum_operation_timeout_seconds);
+  EXPECT_EQ(
+      (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
+      native.allowed_modes);
 }
 
 TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
   EXPECT_EQ(0x7ffu, localSetpointValidFields(0));
-  EXPECT_EQ(0x7feu, localSetpointValidFields(
-                        mavros_msgs::PositionTarget::IGNORE_PX));
+  EXPECT_EQ(0x7feu,
+            localSetpointValidFields(mavros_msgs::PositionTarget::IGNORE_PX));
 
   EXPECT_EQ(0x1fu, attitudeSetpointValidFields(0));
   EXPECT_EQ(0x0fu, attitudeSetpointValidFields(
@@ -91,14 +132,17 @@ TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
 }
 
 TEST(Freshness, AppliesThePx4PoseBoundary) {
+  contract::ChannelMetadata pose{};
+  ASSERT_TRUE(
+      contract::channelMetadata(contract::kProfileId, "state.pose", &pose));
+  const double stale_after_seconds =
+      static_cast<double>(pose.stale_after_millis) / 1000.0;
   const ros::WallTime now(10, 0);
-  EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, kPx4PoseStaleAfterSeconds));
+  EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, stale_after_seconds));
+  EXPECT_FALSE(sourceIsFresh(ros::WallTime(11, 0), now, stale_after_seconds));
+  EXPECT_TRUE(sourceIsFresh(ros::WallTime(9, 0), now, stale_after_seconds));
   EXPECT_FALSE(
-      sourceIsFresh(ros::WallTime(11, 0), now, kPx4PoseStaleAfterSeconds));
-  EXPECT_TRUE(
-      sourceIsFresh(ros::WallTime(9, 0), now, kPx4PoseStaleAfterSeconds));
-  EXPECT_FALSE(sourceIsFresh(ros::WallTime(8, 999999999), now,
-                             kPx4PoseStaleAfterSeconds));
+      sourceIsFresh(ros::WallTime(8, 999999999), now, stale_after_seconds));
 }
 
 TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
@@ -108,57 +152,29 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
   EXPECT_FALSE(px4IsOnline(true, true, false));
 }
 
-TEST(Px4ModeSafety, AllowsOnlyThePublishedModes) {
-  EXPECT_TRUE(isAllowedPx4Mode("OFFBOARD"));
-  EXPECT_TRUE(isAllowedPx4Mode("POSCTL"));
-  EXPECT_TRUE(isAllowedPx4Mode("ALTCTL"));
-  EXPECT_TRUE(isAllowedPx4Mode("STABILIZED"));
-  EXPECT_FALSE(isAllowedPx4Mode("AUTO.LAND"));
-  EXPECT_FALSE(isAllowedPx4Mode("offboard"));
+TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
+  const char *digest = contract::profileDigest("px4.multirotor.ros1.v3");
+  ASSERT_NE(nullptr, digest);
+  EXPECT_EQ(64u, std::string(digest).size());
+
+  contract::ChannelMetadata pose;
+  ASSERT_TRUE(
+      contract::channelMetadata("px4.multirotor.ros1.v3", "state.pose", &pose));
+  EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
+  EXPECT_EQ(2001u, pose.output_message_id);
+
+  contract::ChannelMetadata arm;
+  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v3",
+                                        "operation.arm", &arm));
+  EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
+  EXPECT_EQ(3201u, arm.input_message_id);
 }
 
-TEST(Px4RebootSafety, RequiresFreshConnectedKnownDisarmedState) {
-  EXPECT_EQ(Px4RebootReadiness::kStateUnknown,
-            evaluatePx4RebootReadiness(false, false, false, false));
-  EXPECT_EQ(Px4RebootReadiness::kStateStale,
-            evaluatePx4RebootReadiness(true, false, true, false));
-  EXPECT_EQ(Px4RebootReadiness::kDisconnected,
-            evaluatePx4RebootReadiness(true, true, false, false));
-  EXPECT_EQ(Px4RebootReadiness::kArmed,
-            evaluatePx4RebootReadiness(true, true, true, true));
-  EXPECT_EQ(Px4RebootReadiness::kReady,
-            evaluatePx4RebootReadiness(true, true, true, false));
-}
-
-TEST(AdapterPlanSafety, AcceptsMultiplePx4RobotsButRejectsEmptyPlans) {
-  xgc::adapter::v1::AdapterPlan plan;
-  std::string error;
-  EXPECT_FALSE(validateNonEmptyAdapterPlan(plan, &error));
-
-  plan.add_robots()->set_robot_id("px4-01");
-  plan.add_robots()->set_robot_id("px4-02");
-  error.clear();
-  EXPECT_TRUE(validateNonEmptyAdapterPlan(plan, &error));
-  EXPECT_EQ(2, plan.robots_size());
-}
-
-TEST(InstalledContract, AdvertisesOnlyThePx4Profile) {
-  std::vector<xgc::adapter::v1::ProfileAdvertisement> profiles;
-  contract::addSupportedProfiles(&profiles);
-  ASSERT_EQ(1u, profiles.size());
-  EXPECT_EQ("px4.multirotor.ros1.v2", profiles.front().profile_id());
-  EXPECT_EQ(64u, profiles.front().profile_digest().size());
-  for (const auto &channel : profiles.front().channels()) {
-    EXPECT_NE(xgc::adapter::v1::CHANNEL_KIND_STREAM_IN, channel.kind());
-    EXPECT_NE(xgc::adapter::v1::CHANNEL_KIND_REQUEST_RESPONSE, channel.kind());
-  }
-}
-
-TEST(InstalledContract, ContainsPx4OperationMetadataOnly) {
+TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
   contract::MessageMetadata metadata;
   EXPECT_TRUE(contract::messageMetadata(3201, &metadata));
-  EXPECT_EQ(1u, metadata.version);
-  EXPECT_NE(0u, metadata.fingerprint);
+  EXPECT_TRUE(contract::messageMetadata(3202, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3203, &metadata));
   EXPECT_FALSE(contract::messageMetadata(5001, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3002, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3003, &metadata));

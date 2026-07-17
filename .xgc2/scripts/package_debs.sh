@@ -18,7 +18,8 @@ product_version() {
 }
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
-ADAPTER_LINK_CLIENT_DEB_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION:-0.2.0-1~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-1~focal}"
+XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -76,18 +77,48 @@ package_adapter() {
   local depends="$3"
   local summary="$4"
   local detail="$5"
+  local profile_file="$6"
+  local definition_id="$7"
+  local helper_name="${8:-}"
   local pkg_root="${BUILD_DIR}/${package}"
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
+  local helper_executable=""
+  if [[ -n "${helper_name}" ]]; then
+    helper_executable="${PREFIX}/lib/${ros_package}/${helper_name}"
+  fi
 
   mkdir -p "${pkg_root}"
   copy_path "${PREFIX_ROOT}/share/${ros_package}" "${pkg_root}"
-  copy_path "${PREFIX_ROOT}/include/${ros_package}" "${pkg_root}"
   copy_path "${PREFIX_ROOT}/lib/${ros_package}" "${pkg_root}"
+  copy_path "${INSTALL_ROOT}/usr/share/xgc2/adapter-definitions/${definition_id}.json" "${pkg_root}"
+  copy_path "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/${definition_id}.json" "${pkg_root}"
+  copy_path "${INSTALL_ROOT}/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json" "${pkg_root}"
 
   if [[ ! -x "${pkg_root}${executable}" ]]; then
     echo "missing installed ${ros_package}_node executable" >&2
     exit 1
   fi
+  if [[ -n "${helper_executable}" && ! -x "${pkg_root}${helper_executable}" ]]; then
+    echo "missing installed ${ros_package} native service helper" >&2
+    exit 1
+  fi
+  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" ]]; then
+    echo "missing installed ${ros_package} native profile" >&2
+    exit 1
+  fi
+  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v1.schema.json" ]]; then
+    echo "missing installed ${ros_package} profile schema" >&2
+    exit 1
+  fi
+  for manifest in \
+    "/usr/share/xgc2/adapter-definitions/${definition_id}.json" \
+    "/usr/share/xgc2/process-definitions/${definition_id}.json" \
+    "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"; do
+    if [[ ! -f "${pkg_root}${manifest}" ]]; then
+      echo "missing installed ${definition_id} manifest: ${manifest}" >&2
+      exit 1
+    fi
+  done
 
   mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
   cat > "${pkg_root}/DEBIAN/control" <<EOF
@@ -108,26 +139,34 @@ EOF
   find "${pkg_root}" -type f -exec chmod 0644 {} +
   chmod 0755 "${pkg_root}/DEBIAN"
   chmod 0755 "${pkg_root}${executable}"
+  if [[ -n "${helper_executable}" ]]; then
+    chmod 0755 "${pkg_root}${helper_executable}"
+  fi
 
   fakeroot dpkg-deb --build "${pkg_root}" \
     "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 
-CLIENT_DEPENDENCY="libxgc2-adapter-link-client-dev (>= ${ADAPTER_LINK_CLIENT_DEB_VERSION})"
+COMMON_DEPENDENCIES="libxgc2-adapter-runtime-client-dev (= ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}), xgc2-protobuf-dev (= ${XGC2_PROTOBUF_DEB_VERSION})"
 
 package_adapter \
   "${PX4_PACKAGE}" \
   "${PX4_ROS_PACKAGE}" \
-  "${CLIENT_DEPENDENCY}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
+  "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
-  "Maps all PX4 multirotors in one immutable AdapterPlan through MAVROS without Scout dependencies."
+  "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
+  "px4-multirotor-ros1-v3.yaml" \
+  "xgc2-px4-multirotor-ros1-adapter" \
+  "xgc_px4_multirotor_ros1_adapter_service_helper"
 
 package_adapter \
   "${SCOUT_PACKAGE}" \
   "${SCOUT_ROS_PACKAGE}" \
-  "${CLIENT_DEPENDENCY}, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
+  "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
-  "Maps all Scout Mini robots in one immutable AdapterPlan without MAVROS dependencies."
+  "Provides Scout Mini telemetry and channel-diagnostic capabilities." \
+  "scout-mini-ros1-v1.yaml" \
+  "xgc2-scout-mini-ros1-adapter"
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \) \

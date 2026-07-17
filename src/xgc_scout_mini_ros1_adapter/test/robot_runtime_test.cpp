@@ -48,41 +48,38 @@ TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
 
 TEST(Freshness, AppliesTheScoutStatusBoundary) {
   const ros::WallTime now(10, 0);
-  EXPECT_FALSE(
-      sourceIsFresh(ros::WallTime(), now, kScoutStatusStaleAfterSeconds));
-  EXPECT_TRUE(
-      sourceIsFresh(ros::WallTime(9, 0), now, kScoutStatusStaleAfterSeconds));
+  contract::ChannelMetadata health{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.health",
+                                        &health));
+  const double stale_after_seconds =
+      static_cast<double>(health.stale_after_millis) / 1000.0;
+  EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, stale_after_seconds));
+  EXPECT_TRUE(sourceIsFresh(ros::WallTime(9, 0), now, stale_after_seconds));
   EXPECT_FALSE(sourceIsFresh(ros::WallTime(8, 999999999), now,
-                             kScoutStatusStaleAfterSeconds));
+                             stale_after_seconds));
 }
 
-TEST(OnlineProjection, RequiresFreshOdometryAndChassisStatus) {
-  EXPECT_TRUE(scoutIsOnline(true, true));
-  EXPECT_FALSE(scoutIsOnline(false, true));
-  EXPECT_FALSE(scoutIsOnline(true, false));
+TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
+  EXPECT_TRUE(scoutIsOnline(true));
+  EXPECT_FALSE(scoutIsOnline(false));
 }
 
-TEST(AdapterPlanSafety, AcceptsMultipleScoutRobotsButRejectsEmptyPlans) {
-  xgc::adapter::v1::AdapterPlan plan;
+TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
-  EXPECT_FALSE(validateNonEmptyAdapterPlan(plan, &error));
+  EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
+  const char *digest = contract::profileDigest("scout-mini.ros1.v1");
+  ASSERT_NE(nullptr, digest);
+  EXPECT_EQ(64u, std::string(digest).size());
 
-  plan.add_robots()->set_robot_id("scout-01");
-  plan.add_robots()->set_robot_id("scout-02");
-  error.clear();
-  EXPECT_TRUE(validateNonEmptyAdapterPlan(plan, &error));
-  EXPECT_EQ(2, plan.robots_size());
-}
+  contract::ChannelMetadata pose;
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v1", "state.pose",
+                                        &pose));
+  EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
+  EXPECT_EQ(2001u, pose.output_message_id);
 
-TEST(InstalledContract, AdvertisesOnlyTheScoutMiniProfile) {
-  std::vector<xgc::adapter::v1::ProfileAdvertisement> profiles;
-  contract::addSupportedProfiles(&profiles);
-  ASSERT_EQ(1u, profiles.size());
-  EXPECT_EQ("scout-mini.ros1.v1", profiles.front().profile_id());
-  EXPECT_EQ(64u, profiles.front().profile_digest().size());
-  for (const auto &channel : profiles.front().channels()) {
-    EXPECT_EQ(xgc::adapter::v1::CHANNEL_KIND_STREAM_OUT, channel.kind());
-  }
+  contract::ChannelMetadata unknown;
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v1",
+                                         "operation.arm", &unknown));
 }
 
 TEST(InstalledContract, DoesNotContainPx4OperationMetadata) {

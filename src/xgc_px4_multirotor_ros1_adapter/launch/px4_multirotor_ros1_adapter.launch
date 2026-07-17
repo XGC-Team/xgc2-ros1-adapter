@@ -1,15 +1,10 @@
 <launch>
-  <arg name="adapter_id" default="px4-multirotor-ros1-adapter" />
-  <arg name="socket_path" default="/run/xgc2/adapter/adapter-link.sock" />
-  <arg name="bootstrap_token_file" />
+  <arg name="adapter_bootstrap_file" />
 
   <node pkg="xgc_px4_multirotor_ros1_adapter"
         type="xgc_px4_multirotor_ros1_adapter_node"
-        name="xgc_px4_multirotor_ros1_adapter"
+        name="$(anon xgc_px4_multirotor_ros1_adapter)"
         output="screen"
-        required="true">
-    <param name="adapter_id" value="$(arg adapter_id)" />
-    <param name="socket_path" value="$(arg socket_path)" />
-    <param name="bootstrap_token_file" value="$(arg bootstrap_token_file)" />
-  </node>
+        required="true"
+        args="--adapter-bootstrap-file $(arg adapter_bootstrap_file)" />
 </launch>

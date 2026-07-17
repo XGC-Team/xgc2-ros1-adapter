@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -12,77 +14,98 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/AttitudeTarget.h>
-#include <mavros_msgs/CommandBool.h>
-#include <mavros_msgs/CommandLong.h>
 #include <mavros_msgs/ExtendedState.h>
 #include <mavros_msgs/PositionTarget.h>
-#include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/TimesyncStatus.h>
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
 #include <sensor_msgs/Imu.h>
 
-#include "xgc/adapter/v1/adapter.pb.h"
-#include "xgc/v1/message.pb.h"
-#include "xgc2/adapter_link/client.hpp"
+#include "xgc/robot/v1/message.pb.h"
+#include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
+
+struct NativeProfileConfig {
+  std::string pose_endpoint;
+  std::string velocity_endpoint;
+  std::string imu_endpoint;
+  std::string power_endpoint;
+  std::string state_endpoint;
+  std::string extended_state_endpoint;
+  std::string mocap_endpoint;
+  std::string vision_pose_endpoint;
+  std::string local_setpoint_endpoint;
+  std::string attitude_setpoint_endpoint;
+  std::string timesync_endpoint;
+  std::string arm_service_endpoint;
+  std::string mode_service_endpoint;
+  std::string reboot_service_endpoint;
+  double vision_minimum_period_seconds = 0.0;
+  double mocap_timeout_seconds = 0.0;
+  double offboard_source_timeout_seconds = 0.0;
+  double offboard_minimum_rate_hz = 0.0;
+  double reboot_state_timeout_seconds = 0.0;
+  double maximum_operation_timeout_seconds = 0.0;
+  std::vector<std::string> allowed_modes;
+};
+
+bool BuildNativeProfileConfig(
+    const xgc2_ros1_robot_adapter::RobotConfig &config,
+    NativeProfileConfig *output, std::string *error);
 
 std::string topicName(const std::string &robot_namespace,
                       const std::string &relative_name);
 bool validRobotNamespace(const std::string &value, std::string *error);
 bool validMocapRigidBodyName(const std::string &value, std::string *error);
 bool validVisionPose(const geometry_msgs::PoseStamped &message);
+bool normalizeVisionPose(geometry_msgs::PoseStamped *message);
 std::uint32_t localSetpointValidFields(std::uint16_t type_mask);
 std::uint32_t attitudeSetpointValidFields(std::uint8_t type_mask);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
-constexpr double kPx4PoseStaleAfterSeconds = 1.0;
-constexpr double kMocapStaleAfterSeconds = 0.2;
-constexpr double kSetpointStaleAfterSeconds = 0.5;
-constexpr double kVisionMinimumPeriodSeconds = 0.02;
 bool px4IsOnline(bool state_known, bool state_fresh, bool connected);
-bool isAllowedPx4Mode(const std::string &mode);
-bool validateNonEmptyAdapterPlan(const xgc::adapter::v1::AdapterPlan &plan,
-                                 std::string *error);
-
-enum class Px4RebootReadiness {
-  kReady,
-  kStateUnknown,
-  kStateStale,
-  kDisconnected,
-  kArmed,
-};
-
-Px4RebootReadiness evaluatePx4RebootReadiness(bool state_known,
-                                              bool state_fresh, bool connected,
-                                              bool armed);
-const char *px4RebootReadinessDetail(Px4RebootReadiness readiness);
-
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
-  using EnvelopeEmitter = std::function<void(std::uint64_t plan_revision,
-                                             xgc::v1::Message message)>;
+  using EnvelopeEmitter = std::function<void(std::string item)>;
 
   static std::shared_ptr<RobotRuntime>
-  Create(ros::NodeHandle node_handle, const xgc::adapter::v1::RobotPlan &plan,
-         std::uint64_t plan_revision, EnvelopeEmitter emitter,
+  Create(ros::NodeHandle node_handle,
+         const xgc2_ros1_robot_adapter::RobotConfig &config,
+         std::uint64_t spec_revision, EnvelopeEmitter emitter,
          std::string *error);
 
   ~RobotRuntime();
 
+  // Native side effects remain gated while source-open is preparing. The
+  // owner activates only after every native resource is committed.
+  void Activate() noexcept;
+  void Deactivate() noexcept;
+
+  // Synchronously fences every ROS callback and native publisher. After Stop
+  // returns no telemetry item or vision pose can be emitted by this runtime.
+  void Stop();
+
   const std::string &robotId() const { return robot_id_; }
   const std::string &profileId() const { return profile_id_; }
-  std::uint64_t planRevision() const { return plan_revision_; }
+  std::uint64_t specRevision() const { return spec_revision_; }
   bool channelEnabled(const std::string &channel_id) const;
 
   void emitPeriodic(const ros::WallTime &now);
-  xgc2::adapter_link::OperationExecutionResult
-  executeOperation(const xgc::adapter::v1::OperationRequest &request,
-                   double timeout_seconds);
 
 private:
+  class CallbackGuard {
+  public:
+    explicit CallbackGuard(RobotRuntime *runtime);
+    ~CallbackGuard();
+    explicit operator bool() const { return active_; }
+
+  private:
+    RobotRuntime *runtime_;
+    bool active_;
+  };
+
   struct SourceTracker {
     ros::WallTime last_seen;
     ros::WallTime window_started;
@@ -92,34 +115,36 @@ private:
     double source_rate_hz = 0.0;
     double output_rate_hz = 0.0;
     double stale_after_seconds = 1.0;
-    std::string stream_id;
   };
 
   RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                std::string profile_id, std::string robot_namespace,
-               std::string mocap_rigid_body,
-               std::uint64_t plan_revision,
-               std::set<std::string> enabled_channels, EnvelopeEmitter emitter);
+               std::uint64_t spec_revision,
+               std::set<std::string> enabled_channels,
+               std::set<std::string> required_channels,
+               NativeProfileConfig native_profile, EnvelopeEmitter emitter);
 
   bool install(std::string *error);
-  void installPx4();
+  bool installPx4(std::string *error);
+  bool channelRequired(const std::string &channel_id) const;
+  bool beginCallback();
+  void endCallback();
 
   bool shouldEmitLocked(const std::string &channel_id,
                         const ros::WallTime &now);
-  xgc::v1::Message makeEnvelopeLocked(const std::string &channel_id,
-                                      std::uint32_t message_id,
-                                      const ros::Time &source_stamp,
-                                      const google::protobuf::Message &payload);
-  void emit(std::vector<xgc::v1::Message> messages);
-  void ensureSourceLocked(const std::string &endpoint,
-                          double stale_after_seconds,
-                          const std::string &stream_id);
-  void recordSourceLocked(const std::string &endpoint,
+  xgc::robot::v1::RobotMessage
+  makeEnvelopeLocked(const std::string &channel_id,
+                     const ros::Time &source_stamp,
+                     const google::protobuf::Message &payload);
+  void emit(std::vector<xgc::robot::v1::RobotMessage> messages);
+  void ensureSourceLocked(const std::string &channel_id,
+                          double stale_after_seconds);
+  void recordSourceLocked(const std::string &channel_id,
                           const ros::WallTime &now);
-  void recordOutputLocked(const std::string &endpoint);
-  bool sourceFreshLocked(const std::string &endpoint,
-                         const ros::WallTime &now) const;
-  std::uint64_t sourceAgeMillisLocked(const std::string &endpoint,
+  void recordStateSourceLocked(const std::string &channel_id,
+                               bool count_sample);
+  void recordOutputLocked(const std::string &channel_id);
+  std::uint64_t sourceAgeMillisLocked(const std::string &channel_id,
                                       const ros::WallTime &now) const;
 
   void px4PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
@@ -131,26 +156,33 @@ private:
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr &message);
   void mavrosExtendedStateCallback(
       const mavros_msgs::ExtendedState::ConstPtr &message);
-  void localSetpointCallback(
-      const mavros_msgs::PositionTarget::ConstPtr &message);
+  void
+  localSetpointCallback(const mavros_msgs::PositionTarget::ConstPtr &message);
   void attitudeSetpointCallback(
       const mavros_msgs::AttitudeTarget::ConstPtr &message);
-  void timesyncStatusCallback(
-      const mavros_msgs::TimesyncStatus::ConstPtr &message);
+  void
+  timesyncStatusCallback(const mavros_msgs::TimesyncStatus::ConstPtr &message);
 
-  void emitPx4PeriodicLocked(const ros::WallTime &now,
-                             std::vector<xgc::v1::Message> *messages);
-  void emitStreamHealthLocked(const ros::WallTime &now,
-                              std::vector<xgc::v1::Message> *messages);
+  void
+  emitPx4PeriodicLocked(const ros::WallTime &now,
+                        std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void
+  emitStreamHealthLocked(const ros::WallTime &now,
+                         std::vector<xgc::robot::v1::RobotMessage> *messages);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
   const std::string profile_id_;
   const std::string robot_namespace_;
-  const std::string mocap_rigid_body_;
-  const std::uint64_t plan_revision_;
+  const std::uint64_t spec_revision_;
   const std::set<std::string> enabled_channels_;
+  const std::set<std::string> required_channels_;
   const EnvelopeEmitter emitter_;
+
+  const double vision_minimum_period_seconds_;
+  const double mocap_timeout_seconds_;
+  const double offboard_source_timeout_seconds_;
+  const double offboard_minimum_rate_hz_;
 
   const std::string pose_endpoint_;
   const std::string velocity_endpoint_;
@@ -163,11 +195,12 @@ private:
   const std::string local_setpoint_endpoint_;
   const std::string attitude_setpoint_endpoint_;
   const std::string timesync_endpoint_;
-  const std::string arm_endpoint_;
-  const std::string mode_endpoint_;
-  const std::string command_endpoint_;
 
   mutable std::mutex mutex_;
+  std::condition_variable callbacks_idle_;
+  bool stopping_ = false;
+  bool stop_complete_ = false;
+  std::size_t active_callbacks_ = 0;
   std::map<std::string, SourceTracker> sources_;
   std::map<std::string, ros::WallTime> last_output_;
   std::map<std::string, std::uint64_t> sequences_;
@@ -182,7 +215,10 @@ private:
   bool has_attitude_setpoint_ = false;
   bool valid_local_setpoint_ = false;
   bool valid_attitude_setpoint_ = false;
+  ros::WallTime mavros_state_last_seen_;
+  ros::WallTime mavros_extended_state_last_seen_;
   ros::WallTime last_vision_publish_;
+  std::atomic<bool> native_outputs_active_{false};
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;
@@ -195,9 +231,6 @@ private:
   ros::Subscriber attitude_setpoint_subscriber_;
   ros::Subscriber timesync_subscriber_;
   ros::Publisher vision_pose_publisher_;
-  ros::ServiceClient arm_client_;
-  ros::ServiceClient mode_client_;
-  ros::ServiceClient command_client_;
 };
 
 } // namespace xgc_px4_multirotor_ros1_adapter

@@ -4,5 +4,6 @@
 /devel/
 /install/
 /logs/
+/Testing/
 __pycache__/
 *.pyc

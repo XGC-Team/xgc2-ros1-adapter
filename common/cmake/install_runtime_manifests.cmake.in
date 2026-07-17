@@ -1,0 +1,52 @@
+set(_artifact "$ENV{DESTDIR}@XGC2_INSTALLED_EXECUTABLE@")
+set(_adapter_output
+    "$ENV{DESTDIR}/usr/share/xgc2/adapter-definitions/@XGC2_ADAPTER_DEFINITION_ID@.json")
+set(_process_output
+    "$ENV{DESTDIR}/usr/share/xgc2/process-definitions/@XGC2_ADAPTER_DEFINITION_ID@.json")
+set(_profile_output
+    "$ENV{DESTDIR}/usr/share/xgc2/robot-adapter-profiles/@XGC2_ADAPTER_DEFINITION_ID@.json")
+
+get_filename_component(_adapter_directory "${_adapter_output}" DIRECTORY)
+get_filename_component(_process_directory "${_process_output}" DIRECTORY)
+get_filename_component(_profile_directory "${_profile_output}" DIRECTORY)
+file(MAKE_DIRECTORY "${_adapter_directory}" "${_process_directory}"
+     "${_profile_directory}")
+
+execute_process(
+  COMMAND "@PYTHON_EXECUTABLE@" "@XGC2_RUNTIME_MANIFEST_GENERATOR@"
+          --executable "${_artifact}"
+          --artifact-path "@XGC2_INSTALLED_EXECUTABLE@"
+          --registry "@XGC2_PROTOBUF_REGISTRY_JSON@"
+          --profile-file "@XGC2_PROFILE_FILE@"
+          --profile-schema "@XGC2_PROFILE_SCHEMA@"
+          --definition-id "@XGC2_ADAPTER_DEFINITION_ID@"
+          --version "@XGC2_ADAPTER_VERSION@"
+          --label "@XGC2_ADAPTER_LABEL@"
+          --description "@XGC2_ADAPTER_DESCRIPTION@"
+          --adapter-output "${_adapter_output}"
+          --process-output "${_process_output}"
+          --profile-output "${_profile_output}"
+  RESULT_VARIABLE _manifest_result
+  ERROR_VARIABLE _manifest_error)
+if(NOT _manifest_result EQUAL 0)
+  message(FATAL_ERROR
+          "failed to generate installed robot Adapter manifests: ${_manifest_error}")
+endif()
+
+execute_process(
+  COMMAND "@PYTHON_EXECUTABLE@" "@XGC2_RUNTIME_MANIFEST_VERIFIER@"
+          --executable "${_artifact}"
+          --artifact-path "@XGC2_INSTALLED_EXECUTABLE@"
+          --definition-id "@XGC2_ADAPTER_DEFINITION_ID@"
+          --registry "@XGC2_PROTOBUF_REGISTRY_JSON@"
+          --profile-file "@XGC2_PROFILE_FILE@"
+          --profile-schema "@XGC2_PROFILE_SCHEMA@"
+          --adapter-manifest "${_adapter_output}"
+          --process-manifest "${_process_output}"
+          --profile-catalog "${_profile_output}"
+  RESULT_VARIABLE _verify_result
+  ERROR_VARIABLE _verify_error)
+if(NOT _verify_result EQUAL 0)
+  message(FATAL_ERROR
+          "installed robot Adapter manifests failed verification: ${_verify_error}")
+endif()

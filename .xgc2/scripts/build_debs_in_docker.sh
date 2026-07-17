@@ -88,18 +88,18 @@ if [[ -n "${DOCKER_PLATFORM}" ]]; then
 fi
 
 docker_env_args=(
-  -e XGC2_APT_OVERLAY_URL="${XGC2_APT_OVERLAY_URL:-}"
-  -e BUILD_JOBS="${BUILD_JOBS}"
-  -e DEBIAN_FRONTEND=noninteractive
-  -e EXPECTED_DEB_ARCH="${expected_deb_arch}"
-  -e INSTALL_CHECK="${INSTALL_CHECK}"
-  -e ADAPTER_LINK_CLIENT_DEB_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION:-0.2.0-1~focal}"
-  -e XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.3.0-1~focal}"
-  -e XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-true}"
-  -e XGC2_PROTOBUF_GIT_URL="${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
-  -e XGC2_PROTOBUF_GIT_TAG="${XGC2_PROTOBUF_GIT_TAG:-v0.3.0-1}"
-  -e XGC2_ADAPTER_CLIENT_GIT_URL="${XGC2_ADAPTER_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-link-client-cpp.git}"
-  -e XGC2_ADAPTER_CLIENT_GIT_TAG="${XGC2_ADAPTER_CLIENT_GIT_TAG:-v0.2.0-1}"
+  -e "XGC2_APT_OVERLAY_URL=${XGC2_APT_OVERLAY_URL:-}"
+  -e "BUILD_JOBS=${BUILD_JOBS}"
+  -e "DEBIAN_FRONTEND=noninteractive"
+  -e "EXPECTED_DEB_ARCH=${expected_deb_arch}"
+  -e "INSTALL_CHECK=${INSTALL_CHECK}"
+  -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-1~focal}"
+  -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
+  -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-true}"
+  -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
+  -e "XGC2_PROTOBUF_GIT_TAG=${XGC2_PROTOBUF_GIT_TAG:-v0.5.0-1}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-runtime-client-cpp.git}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.5.0-1}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -133,6 +133,9 @@ flock -u "${docker_pull_lock_fd}"
 docker start "${container_name}" >/dev/null
 docker exec "${container_name}" mkdir -p /tmp/ros1-adapter /tmp/work /tmp/out
 docker cp "${REPO_ROOT}/." "${container_name}:/tmp/ros1-adapter/"
+# The quoted payload is parsed by the inner Bash process; its continuations are
+# intentionally literal to this outer shell.
+# shellcheck disable=SC1004
 docker exec "${container_name}" bash -lc '
     set -euo pipefail
 
@@ -199,26 +202,26 @@ docker exec "${container_name}" bash -lc '
       apt-get install -y \
         /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
 
-      git clone --depth 1 --branch "${XGC2_ADAPTER_CLIENT_GIT_TAG}" \
-        "${XGC2_ADAPTER_CLIENT_GIT_URL}" \
-        /tmp/xgc2-common-bootstrap/adapter-link-client-cpp
-      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-link-client-cpp describe --tags --exact-match)" = \
-        "${XGC2_ADAPTER_CLIENT_GIT_TAG}"
+      git clone --depth 1 --branch "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG}" \
+        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL}" \
+        /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp
+      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp describe --tags --exact-match)" = \
+        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG}"
       PACKAGE_DISTRIBUTION=focal \
-      PACKAGE_VERSION="${ADAPTER_LINK_CLIENT_DEB_VERSION}" \
-      XGC2_ADAPTER_CLIENT_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
-        /tmp/xgc2-common-bootstrap/adapter-link-client-cpp/.xgc2/scripts/build_deb.sh
+      PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
+      XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
+        /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
       apt-get install -y \
-        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-link-client-dev_*.deb
+        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
     else
       apt-get install -y \
         "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
-        "libxgc2-adapter-link-client-dev=${ADAPTER_LINK_CLIENT_DEB_VERSION}"
+        "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
     fi
 
-    installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-link-client-dev)"
-    if [[ "${installed_client_version}" != "${ADAPTER_LINK_CLIENT_DEB_VERSION}" ]]; then
-      echo "AdapterLink client version mismatch: expected ${ADAPTER_LINK_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
+    installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client-dev)"
+    if [[ "${installed_client_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
+      echo "Adapter Runtime client version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
       exit 1
     fi
     installed_protobuf_version="$(dpkg-query -W -f="\${Version}" xgc2-protobuf-dev)"
@@ -233,6 +236,7 @@ docker exec "${container_name}" bash -lc '
     rm -rf /tmp/work/build /tmp/work/devel /tmp/work/install /tmp/work/logs /tmp/work/debs
 
     cd /tmp/work
+    python3 -m unittest discover -v -s test -p "test_*.py"
     set +u
     source /opt/ros/noetic/setup.bash
     set -u

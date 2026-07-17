@@ -1,0 +1,241 @@
+schema: xgc.robot.adapter-profile/v1
+profile_id: px4.multirotor.ros1.v3
+profile_version: 3
+native_protocol: ros1
+robot_kind: px4_multirotor
+description: PX4 multirotor telemetry, mocap relay, diagnostics, and native commands through MAVROS.
+namespace_parameter: namespace
+parameters:
+  namespace:
+    type: ros_namespace
+    required: true
+    description: Unique ROS namespace assigned to this robot by the robot-domain instance specification.
+  mocap_rigid_body:
+    type: string
+    required: true
+    pattern: "^[A-Za-z][A-Za-z0-9_]*$"
+    description: VRPN rigid-body name assigned by the robot-domain instance specification.
+semantic_traits:
+  default_stale_after_ms: 2000
+  channel_stale_after_ms:
+    state.pose: 1000
+    state.mocap.pose: 200
+  online_conditions:
+    - channel_id: state.flight
+      maximum_age_ms: 2000
+      predicate: xgc.semantic.aerial.flight.connected
+  operational_ready_conditions:
+    - channel_id: state.pose
+      maximum_age_ms: 1000
+    - channel_id: state.mocap.pose
+      maximum_age_ms: 200
+channels:
+  - id: state.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: px4.pose-estimate
+    output_rate_hz: 10
+    inputs:
+      pose:
+        name: mavros/local_position/pose
+        type: geometry_msgs/PoseStamped
+
+  - id: state.mocap.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: px4.mocap-vision-relay
+    output_rate_hz: 10
+    inputs:
+      pose:
+        name: vrpn_client_node/{mocap_rigid_body}/pose
+        type: geometry_msgs/PoseStamped
+        scope: global
+    output:
+      name: mavros/vision_pose/pose
+      type: geometry_msgs/PoseStamped
+    policy:
+      vision_publish_rate_hz: 50
+      source_timeout_ms: 200
+      coordinate_transform: none
+      interpolate: false
+      repeat_last_sample: false
+
+  - id: state.velocity
+    kind: stream_out
+    output_message_id: 2002
+    processor: px4.velocity-estimate
+    output_rate_hz: 10
+    inputs:
+      velocity:
+        name: mavros/local_position/velocity_local
+        type: geometry_msgs/TwistStamped
+
+  - id: state.imu
+    kind: stream_out
+    output_message_id: 2003
+    processor: px4.imu-estimate
+    output_rate_hz: 10
+    inputs:
+      imu:
+        name: mavros/imu/data
+        type: sensor_msgs/Imu
+
+  - id: state.power
+    kind: stream_out
+    output_message_id: 2004
+    processor: px4.power-status
+    output_rate_hz: 1
+    inputs:
+      battery:
+        name: mavros/battery
+        type: sensor_msgs/BatteryState
+
+  - id: state.health
+    kind: stream_out
+    output_message_id: 2005
+    processor: px4.vehicle-health
+    output_rate_hz: 2
+    inputs:
+      state:
+        name: mavros/state
+        type: mavros_msgs/State
+      extended_state:
+        name: mavros/extended_state
+        type: mavros_msgs/ExtendedState
+
+  - id: state.flight
+    kind: stream_out
+    output_message_id: 3001
+    processor: px4.flight-status
+    output_rate_hz: 2
+    inputs:
+      state:
+        name: mavros/state
+        type: mavros_msgs/State
+      extended_state:
+        name: mavros/extended_state
+        type: mavros_msgs/ExtendedState
+
+  - id: setpoint.local
+    kind: stream_out
+    output_message_id: 3002
+    processor: px4.local-trajectory-setpoint
+    output_rate_hz: 10
+    inputs:
+      setpoint:
+        name: mavros/setpoint_raw/local
+        type: mavros_msgs/PositionTarget
+
+  - id: setpoint.attitude
+    kind: stream_out
+    output_message_id: 3003
+    processor: px4.attitude-setpoint
+    output_rate_hz: 10
+    inputs:
+      setpoint:
+        name: mavros/setpoint_raw/attitude
+        type: mavros_msgs/AttitudeTarget
+
+  - id: diagnostic.fcu-link
+    kind: stream_out
+    output_message_id: 3004
+    processor: px4.fcu-link-status
+    output_rate_hz: 2
+    inputs:
+      timesync:
+        name: mavros/timesync_status
+        type: mavros_msgs/TimesyncStatus
+
+  - id: diagnostic.offboard-input
+    kind: stream_out
+    output_message_id: 3005
+    processor: px4.offboard-input-status
+    output_rate_hz: 2
+    observes:
+      - setpoint.local
+      - setpoint.attitude
+      - state.flight
+    policy:
+      minimum_rate_hz: 2.5
+      source_timeout_ms: 500
+
+  - id: diagnostic.stream-health
+    kind: stream_out
+    output_message_id: 2011
+    processor: common.stream-health-report
+    output_rate_hz: 1
+    observes:
+      - state.pose
+      - state.mocap.pose
+      - state.velocity
+      - state.imu
+      - state.power
+      - state.health
+      - state.flight
+      - setpoint.local
+      - setpoint.attitude
+      - diagnostic.fcu-link
+      - diagnostic.offboard-input
+
+  - id: operation.arm
+    kind: operation
+    operation_id: arm
+    input_message_id: 3201
+    output_message_id: 1
+    processor: px4.arm
+    operation_contract:
+      side_effect: idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    service:
+      name: mavros/cmd/arming
+      type: mavros_msgs/CommandBool
+    policy:
+      timeout_ms: 5000
+
+  - id: operation.mode
+    kind: operation
+    operation_id: set-flight-mode
+    input_message_id: 3202
+    output_message_id: 1
+    processor: px4.mode
+    operation_contract:
+      side_effect: idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    service:
+      name: mavros/set_mode
+      type: mavros_msgs/SetMode
+    policy:
+      allowed_modes:
+        - OFFBOARD
+        - POSCTL
+        - ALTCTL
+        - STABILIZED
+      timeout_ms: 5000
+
+  - id: operation.autopilot-reboot
+    kind: operation
+    operation_id: reboot-autopilot
+    input_message_id: 3203
+    output_message_id: 1
+    processor: px4.autopilot-reboot
+    operation_contract:
+      side_effect: non-idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    service:
+      name: mavros/cmd/command
+      type: mavros_msgs/CommandLong
+    policy:
+      mav_command: 246
+      normal_reboot_param1: 1
+      require_state_known: true
+      require_state_fresh: true
+      require_connected: true
+      require_disarmed: true
+      state_timeout_ms: 1000
+      timeout_ms: 5000
