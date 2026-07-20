@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-1
+version: 0.5.0-2
 kind: ros1-apt
 summary: Robot-owned PX4 multirotor and Scout Mini ROS1 semantic adapters.
 groups:
@@ -24,8 +24,7 @@ apt:
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-scout-mini-adapter
   depends:
-  - libxgc2-adapter-runtime-client-dev
-  - xgc2-protobuf-dev
+  - libxgc2-adapter-runtime-client1
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
   - ros-noetic-nav-msgs
@@ -73,3 +72,15 @@ ownership:
   - /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-scout-mini-ros1-adapter.json
+release:
+  repository: lxk36/xgc2-ros1-adapter
+  ref: master
+  workflow: release.yml
+  ci_workflow: ci.yml
+  requires:
+  - libxgc2-adapter-runtime-client-dev
+  - xgc2-protobuf
+  dependency_policy:
+    libxgc2-adapter-runtime-client-dev: verify
+    xgc2-protobuf: rebuild
+    xgc2-scout-msgs: rebuild

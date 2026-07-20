@@ -18,8 +18,7 @@ product_version() {
 }
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-1~focal}"
-XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
+ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,6 +61,48 @@ rm -f \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb
 
+mkdir -p "${BUILD_DIR}/debian"
+cat > "${BUILD_DIR}/debian/control" <<EOF
+Source: xgc2-ros1-adapter
+Section: misc
+Priority: optional
+Maintainer: XGC2 <apt@example.com>
+
+Package: ${PX4_PACKAGE}
+Architecture: any
+
+Package: ${SCOUT_PACKAGE}
+Architecture: any
+EOF
+
+shlibs_dependencies() {
+  local -a binaries=("$@")
+  local -a options=()
+  local binary
+  local output
+  local dependencies
+  for binary in "${binaries[@]}"; do
+    options+=("-e${binary}")
+  done
+  output="$(cd "${BUILD_DIR}" && dpkg-shlibdeps -O "${options[@]}")"
+  dependencies="${output#shlibs:Depends=}"
+  if [[ "${dependencies}" == "${output}" || -z "${dependencies}" ]]; then
+    echo "dpkg-shlibdeps did not produce executable dependencies" >&2
+    exit 1
+  fi
+  if ! grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" \
+      <<<"${dependencies}"; then
+    echo "shlibs dependencies do not include ${ADAPTER_RUNTIME_ABI_PACKAGE}" >&2
+    exit 1
+  fi
+  if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
+      <<<"${dependencies}"; then
+    echo "shlibs dependencies leaked a build-only XGC2 package" >&2
+    exit 1
+  fi
+  printf '%s\n' "${dependencies}"
+}
+
 copy_path() {
   local src="$1"
   local dst_root="$2"
@@ -74,7 +115,7 @@ copy_path() {
 package_adapter() {
   local package="$1"
   local ros_package="$2"
-  local depends="$3"
+  local extra_depends="$3"
   local summary="$4"
   local detail="$5"
   local profile_file="$6"
@@ -120,6 +161,13 @@ package_adapter() {
     fi
   done
 
+  local -a runtime_binaries=("${pkg_root}${executable}")
+  if [[ -n "${helper_executable}" ]]; then
+    runtime_binaries+=("${pkg_root}${helper_executable}")
+  fi
+  local shlibs_depends
+  shlibs_depends="$(shlibs_dependencies "${runtime_binaries[@]}")"
+
   mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
   cat > "${pkg_root}/DEBIAN/control" <<EOF
 Package: ${package}
@@ -128,7 +176,7 @@ Section: misc
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: XGC2 <apt@example.com>
-Depends: ${depends}
+Depends: ${shlibs_depends}, ${extra_depends}
 Description: ${summary}
  ${detail}
 EOF
@@ -147,12 +195,10 @@ EOF
     "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 
-COMMON_DEPENDENCIES="libxgc2-adapter-runtime-client-dev (= ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}), xgc2-protobuf-dev (= ${XGC2_PROTOBUF_DEB_VERSION})"
-
 package_adapter \
   "${PX4_PACKAGE}" \
   "${PX4_ROS_PACKAGE}" \
-  "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
   "px4-multirotor-ros1-v5.yaml" \
@@ -162,7 +208,7 @@ package_adapter \
 package_adapter \
   "${SCOUT_PACKAGE}" \
   "${SCOUT_ROS_PACKAGE}" \
-  "${COMMON_DEPENDENCIES}, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
+  "ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini telemetry and channel-diagnostic capabilities." \
   "scout-mini-ros1-v3.yaml" \

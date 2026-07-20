@@ -27,6 +27,7 @@
 #include "xgc_px4_multirotor_ros1_adapter/px4_operations.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/shutdown_signal.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/telemetry_batch.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace {
@@ -37,7 +38,6 @@ constexpr std::size_t kMaximumQueuedTelemetryBytesPerRobot =
     16u * 1024u * 1024u;
 constexpr std::size_t kMaximumQueuedTelemetry = 8192u;
 constexpr std::size_t kMaximumQueuedTelemetryBytes = 64u * 1024u * 1024u;
-constexpr std::size_t kMaximumTelemetryItemBytes = 8u * 1024u * 1024u;
 constexpr std::size_t kMaximumPublishAttemptsPerTick = 256u;
 
 template <typename Function> class ScopeExit {
@@ -379,11 +379,6 @@ public:
   }
 
 private:
-  struct TelemetryItem {
-    std::uint64_t token = 0;
-    std::string value;
-  };
-
   struct ConnectedRobot {
     std::shared_ptr<RobotRuntime> runtime;
     std::shared_ptr<Px4OperationExecutor> operations;
@@ -393,7 +388,7 @@ private:
     std::uint64_t source_generation = 0;
     bool active = false;
     std::size_t in_flight_commands = 0;
-    std::deque<TelemetryItem> telemetry;
+    std::deque<TelemetryQueueItem> telemetry;
     std::size_t telemetry_bytes = 0;
     std::uint64_t dropped = 0;
   };
@@ -407,8 +402,7 @@ private:
     std::string robot_id;
     std::string stream_id;
     std::uint64_t source_generation = 0;
-    std::uint64_t item_token = 0;
-    std::string item;
+    TelemetryBatch batch;
   };
 
   class CommandLease {
@@ -1102,7 +1096,7 @@ private:
 
     auto &connected = found->second;
     const std::size_t item_bytes = item.size();
-    if (item_bytes > kMaximumTelemetryItemBytes) {
+    if (item_bytes > kMaximumTelemetryBatchBytes) {
       ++connected.dropped;
       return;
     }
@@ -1120,7 +1114,7 @@ private:
       return;
     }
 
-    TelemetryItem queued;
+    TelemetryQueueItem queued;
     const std::uint64_t token = next_telemetry_token_ + 1u;
     queued.token = token;
     queued.value = std::move(item);
@@ -1159,9 +1153,8 @@ private:
       snapshot->robot_id = current->first;
       snapshot->stream_id = current->second.source_request.context().work_id();
       snapshot->source_generation = current->second.source_generation;
-      snapshot->item_token = current->second.telemetry.front().token;
-      snapshot->item = current->second.telemetry.front().value;
-      return true;
+      snapshot->batch = buildTelemetryBatch(current->second.telemetry);
+      return !snapshot->batch.items.empty();
     }
     return false;
   }
@@ -1180,13 +1173,15 @@ private:
         found->second.source_generation != snapshot.source_generation ||
         found->second.source_request.context().work_id() !=
             snapshot.stream_id ||
-        found->second.telemetry.empty() ||
-        found->second.telemetry.front().token != snapshot.item_token) {
+        !telemetryBatchMatchesPrefix(found->second.telemetry,
+                                     snapshot.batch.tokens)) {
       return;
     }
-    discardFrontTelemetryLocked(&found->second);
+    const std::size_t batch_size = snapshot.batch.tokens.size();
+    for (std::size_t index = 0; index < batch_size; ++index)
+      discardFrontTelemetryLocked(&found->second);
     if (result != xgc2::adapter_runtime::SourceWriteResult::kAccepted)
-      ++found->second.dropped;
+      found->second.dropped += batch_size;
   }
 
   void flushTelemetry() {
@@ -1198,10 +1193,8 @@ private:
       TelemetrySnapshot snapshot;
       if (!nextTelemetrySnapshot(blocked, &snapshot))
         break;
-      std::vector<std::string> items;
-      items.push_back(std::move(snapshot.item));
-      const auto result =
-          client_->PublishSource(snapshot.stream_id, std::move(items));
+      const auto result = client_->PublishSource(
+          snapshot.stream_id, std::move(snapshot.batch.items));
       if (result == xgc2::adapter_runtime::SourceWriteResult::kNoCredit ||
           result == xgc2::adapter_runtime::SourceWriteResult::kNotReady ||
           result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull) {

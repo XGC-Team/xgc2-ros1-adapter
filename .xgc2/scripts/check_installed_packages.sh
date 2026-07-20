@@ -7,18 +7,14 @@ PX4_PACKAGE="ros-${ROS_DISTRO}-xgc2-px4-multirotor-adapter"
 PX4_ROS_PACKAGE="xgc_px4_multirotor_ros1_adapter"
 SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-1~focal}"
-XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-2~focal}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
-dpkg -s libxgc2-adapter-runtime-client-dev >/dev/null
-dpkg -s xgc2-protobuf-dev >/dev/null
-test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client-dev)" = \
+dpkg -s libxgc2-adapter-runtime-client1 >/dev/null
+test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client1)" = \
   "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
-test "$(dpkg-query -W -f='${Version}' xgc2-protobuf-dev)" = \
-  "${XGC2_PROTOBUF_DEB_VERSION}"
 test -f "${PROTOBUF_REGISTRY}"
 if dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-adapter" >/dev/null 2>&1; then
   echo "removed generic ROS1 adapter package is still installed" >&2
@@ -27,6 +23,14 @@ fi
 
 px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 scout_depends="$(dpkg-query -W -f='${Depends}' "${SCOUT_PACKAGE}")"
+for depends in "${px4_depends}" "${scout_depends}"; do
+  grep -Eq '(^|, )libxgc2-adapter-runtime-client1( |[(])' <<<"${depends}"
+  if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
+      <<<"${depends}"; then
+    echo "Adapter runtime dependencies leaked SDK/schema packages" >&2
+    exit 1
+  fi
+done
 grep -q "ros-${ROS_DISTRO}-mavros-msgs" <<<"${px4_depends}"
 if grep -q 'scout-msgs' <<<"${px4_depends}"; then
   echo "PX4 adapter package must not depend on Scout messages" >&2

@@ -11,6 +11,9 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-}"
+XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-}"
+XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +57,25 @@ if [[ -n "${BUILD_JOBS}" && ! "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+if [[ -z "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" ]]; then
+  if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
+    XGC2_BOOTSTRAP_COMMON_FROM_GIT=false
+  else
+    XGC2_BOOTSTRAP_COMMON_FROM_GIT=true
+  fi
+fi
+case "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" in
+  true|false) ;;
+  *)
+    echo "XGC2_BOOTSTRAP_COMMON_FROM_GIT must be true or false" >&2
+    exit 1
+    ;;
+esac
+if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
+  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-2~focal}"
+  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
+fi
+
 expected_deb_arch=""
 case "${DOCKER_PLATFORM}" in
   "")
@@ -93,13 +115,13 @@ docker_env_args=(
   -e "DEBIAN_FRONTEND=noninteractive"
   -e "EXPECTED_DEB_ARCH=${expected_deb_arch}"
   -e "INSTALL_CHECK=${INSTALL_CHECK}"
-  -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-1~focal}"
-  -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-1~focal}"
-  -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-true}"
+  -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
+  -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
+  -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
   -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
   -e "XGC2_PROTOBUF_GIT_TAG=${XGC2_PROTOBUF_GIT_TAG:-v0.5.0-1}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-runtime-client-cpp.git}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.5.0-1}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.5.0-2}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -186,6 +208,25 @@ docker exec "${container_name}" bash -lc '
       ros-noetic-scout-msgs \
       ros-noetic-sensor-msgs
 
+    apt_candidate_version() {
+      local package="$1"
+      local candidate
+      candidate="$(apt-cache policy "${package}" | awk "/Candidate:/ {print \$2; exit}")"
+      if [[ -z "${candidate}" || "${candidate}" == "(none)" ]]; then
+        echo "APT has no candidate for ${package}" >&2
+        exit 1
+      fi
+      printf "%s\n" "${candidate}"
+    }
+    if [[ -z "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
+      ADAPTER_RUNTIME_CLIENT_DEB_VERSION="$(
+        apt_candidate_version libxgc2-adapter-runtime-client-dev
+      )"
+    fi
+    if [[ -z "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+      XGC2_PROTOBUF_DEB_VERSION="$(apt_candidate_version xgc2-protobuf-dev)"
+    fi
+
     if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
       rm -rf /tmp/xgc2-common-bootstrap
       mkdir -p /tmp/xgc2-common-bootstrap/debs
@@ -212,6 +253,7 @@ docker exec "${container_name}" bash -lc '
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
         /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
       apt-get install -y \
+        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client1_*.deb \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
     else
       apt-get install -y \
@@ -222,6 +264,11 @@ docker exec "${container_name}" bash -lc '
     installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client-dev)"
     if [[ "${installed_client_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
       echo "Adapter Runtime client version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
+      exit 1
+    fi
+    installed_runtime_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client1)"
+    if [[ "${installed_runtime_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
+      echo "Adapter Runtime ABI version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_runtime_version}" >&2
       exit 1
     fi
     installed_protobuf_version="$(dpkg-query -W -f="\${Version}" xgc2-protobuf-dev)"

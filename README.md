@@ -109,6 +109,15 @@ The release path builds and install-checks both independent Debian packages:
 .xgc2/scripts/build_debs_in_docker.sh --output-dir "$PWD/debs"
 ```
 
+Both adapters are compiled against the exact
+`libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Their
+installed Debian packages deliberately omit those build-only dependencies:
+`dpkg-shlibdeps` derives a lower-bounded
+`libxgc2-adapter-runtime-client1` dependency from the ELF SONAME, while the ROS
+message packages remain explicit runtime dependencies. Compatible ABI-1 SDK
+updates can therefore be compatibility-verified without republishing these
+adapters. An ABI break must use a new SONAME/runtime package and rebuild them.
+
 ## Supervisor launch
 
 The Process Supervisor starts the fixed installed executable directly:
