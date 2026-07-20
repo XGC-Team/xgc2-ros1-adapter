@@ -25,6 +25,7 @@
 #include "xgc_scout_mini_ros1_adapter/generated_contract.hpp"
 #include "xgc_scout_mini_ros1_adapter/robot_runtime.hpp"
 #include "xgc_scout_mini_ros1_adapter/shutdown_signal.hpp"
+#include "xgc_scout_mini_ros1_adapter/telemetry_batch.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
 namespace {
@@ -36,7 +37,6 @@ constexpr std::size_t kMaximumQueuedTelemetryBytesPerRobot =
     16u * 1024u * 1024u;
 constexpr std::size_t kMaximumQueuedTelemetryItems = 8192u;
 constexpr std::size_t kMaximumQueuedTelemetryBytes = 64u * 1024u * 1024u;
-constexpr std::size_t kMaximumTelemetryItemBytes = 1024u * 1024u;
 constexpr std::size_t kMaximumFlushItemsPerTick = 256u;
 
 template <typename Function> class ScopeExit {
@@ -65,7 +65,8 @@ private:
   bool active_ = true;
 };
 
-template <typename Function> ScopeExit<Function> makeScopeExit(Function function) {
+template <typename Function>
+ScopeExit<Function> makeScopeExit(Function function) {
   return ScopeExit<Function>(std::move(function));
 }
 
@@ -183,28 +184,22 @@ public:
   }
 
 private:
-  struct QueuedTelemetry {
-    std::uint64_t token = 0;
-    std::string item;
-  };
-
   struct ConnectedRobot {
     std::shared_ptr<RobotRuntime> runtime;
     std::string work_id;
     xgc::adapter::v1::ScopeReference subject;
     xgc2_ros1_robot_adapter::InstanceSpecFence fence;
     std::uint64_t source_generation = 0;
-    std::deque<QueuedTelemetry> telemetry;
+    std::deque<TelemetryQueueItem> telemetry;
     std::size_t queued_bytes = 0;
     std::uint64_t dropped = 0;
   };
 
-  struct TelemetryFront {
+  struct TelemetrySnapshot {
     std::string robot_id;
     std::string work_id;
     std::uint64_t source_generation = 0;
-    std::uint64_t token = 0;
-    std::string item;
+    TelemetryBatch batch;
   };
 
   bool validateRobotConfig(const xgc2_ros1_robot_adapter::RobotConfig &robot,
@@ -493,7 +488,7 @@ private:
     }
     auto &source = found->second;
     const std::size_t item_bytes = item.size();
-    if (item.empty() || item_bytes > kMaximumTelemetryItemBytes ||
+    if (item.empty() || item_bytes > kMaximumTelemetryBatchBytes ||
         item_bytes > kMaximumQueuedTelemetryBytesPerRobot) {
       ++source.dropped;
       return;
@@ -503,8 +498,8 @@ private:
             source.queued_bytes >
                 kMaximumQueuedTelemetryBytesPerRobot - item_bytes)) {
       --queued_telemetry_items_;
-      queued_telemetry_bytes_ -= source.telemetry.front().item.size();
-      source.queued_bytes -= source.telemetry.front().item.size();
+      queued_telemetry_bytes_ -= source.telemetry.front().value.size();
+      source.queued_bytes -= source.telemetry.front().value.size();
       source.telemetry.pop_front();
       ++source.dropped;
     }
@@ -517,10 +512,10 @@ private:
       ++source.dropped;
       return;
     }
-    QueuedTelemetry queued;
+    TelemetryQueueItem queued;
     const std::uint64_t token = next_telemetry_token_ + 1u;
     queued.token = token;
-    queued.item = std::move(item);
+    queued.value = std::move(item);
     source.telemetry.push_back(std::move(queued));
     next_telemetry_token_ = token;
     source.queued_bytes += item_bytes;
@@ -558,23 +553,24 @@ private:
     }
   }
 
-  bool readTelemetryFront(const std::string &robot_id,
-                          TelemetryFront *front) const {
+  bool readTelemetryBatch(const std::string &robot_id,
+                          std::size_t maximum_items,
+                          TelemetrySnapshot *snapshot) const {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto found = connected_.find(robot_id);
     if (found == connected_.end() || !found->second.runtime ||
         found->second.telemetry.empty()) {
       return false;
     }
-    front->robot_id = robot_id;
-    front->work_id = found->second.work_id;
-    front->source_generation = found->second.source_generation;
-    front->token = found->second.telemetry.front().token;
-    front->item = found->second.telemetry.front().item;
-    return true;
+    snapshot->robot_id = robot_id;
+    snapshot->work_id = found->second.work_id;
+    snapshot->source_generation = found->second.source_generation;
+    snapshot->batch =
+        buildTelemetryBatch(found->second.telemetry, maximum_items);
+    return !snapshot->batch.items.empty();
   }
 
-  bool consumeTelemetryFront(const TelemetryFront &front,
+  bool consumeTelemetryBatch(const TelemetrySnapshot &snapshot,
                              xgc2::adapter_runtime::SourceWriteResult result) {
     if (result != xgc2::adapter_runtime::SourceWriteResult::kAccepted &&
         result != xgc2::adapter_runtime::SourceWriteResult::kUnknownStream &&
@@ -582,20 +578,24 @@ private:
       return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(front.robot_id);
-    if (found == connected_.end() || found->second.work_id != front.work_id ||
-        found->second.source_generation != front.source_generation ||
-        found->second.telemetry.empty() ||
-        found->second.telemetry.front().token != front.token) {
+    const auto found = connected_.find(snapshot.robot_id);
+    if (found == connected_.end() ||
+        found->second.work_id != snapshot.work_id ||
+        found->second.source_generation != snapshot.source_generation ||
+        !telemetryBatchMatchesPrefix(found->second.telemetry,
+                                     snapshot.batch.tokens)) {
       return false;
     }
     auto &source = found->second;
-    --queued_telemetry_items_;
-    queued_telemetry_bytes_ -= source.telemetry.front().item.size();
-    source.queued_bytes -= source.telemetry.front().item.size();
-    source.telemetry.pop_front();
+    const std::size_t batch_size = snapshot.batch.tokens.size();
+    for (std::size_t index = 0; index < batch_size; ++index) {
+      --queued_telemetry_items_;
+      queued_telemetry_bytes_ -= source.telemetry.front().value.size();
+      source.queued_bytes -= source.telemetry.front().value.size();
+      source.telemetry.pop_front();
+    }
     if (result != xgc2::adapter_runtime::SourceWriteResult::kAccepted)
-      ++source.dropped;
+      source.dropped += batch_size;
     return true;
   }
 
@@ -625,22 +625,24 @@ private:
            offset < robot_ids.size() && handled < kMaximumFlushItemsPerTick;
            ++offset) {
         const std::size_t index = (start + offset) % robot_ids.size();
-        TelemetryFront front;
-        if (!readTelemetryFront(robot_ids[index], &front))
+        TelemetrySnapshot snapshot;
+        if (!readTelemetryBatch(robot_ids[index],
+                                kMaximumFlushItemsPerTick - handled, &snapshot))
           continue;
         const auto source_key =
-            std::make_pair(front.robot_id, front.source_generation);
+            std::make_pair(snapshot.robot_id, snapshot.source_generation);
         if (blocked.find(source_key) != blocked.end())
           continue;
-        const auto result = client_->PublishSource(front.work_id, {front.item});
+        const auto result = client_->PublishSource(
+            snapshot.work_id, std::move(snapshot.batch.items));
         if (result == xgc2::adapter_runtime::SourceWriteResult::kNoCredit ||
             result == xgc2::adapter_runtime::SourceWriteResult::kNotReady ||
             result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull) {
           blocked.insert(source_key);
           continue;
         }
-        if (consumeTelemetryFront(front, result)) {
-          ++handled;
+        if (consumeTelemetryBatch(snapshot, result)) {
+          handled += snapshot.batch.tokens.size();
           made_progress = true;
         }
       }
@@ -652,6 +654,10 @@ private:
 
   void periodicTimer(const ros::WallTimerEvent &) {
     if (exitRequested())
+      return;
+    std::unique_lock<std::mutex> periodic_lock(periodic_mutex_,
+                                               std::try_to_lock);
+    if (!periodic_lock.owns_lock())
       return;
     std::vector<std::shared_ptr<RobotRuntime>> runtimes;
     {
@@ -674,6 +680,7 @@ private:
   std::atomic<bool> exit_requested_{false};
 
   mutable std::mutex mutex_;
+  std::mutex periodic_mutex_;
   bool has_configuration_ = false;
   xgc2_ros1_robot_adapter::RobotAdapterConfig configuration_;
   std::map<std::string, ConnectedRobot> connected_;

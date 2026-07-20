@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <deque>
 #include <string>
 #include <vector>
 
 #include "xgc_scout_mini_ros1_adapter/generated_contract.hpp"
 #include "xgc_scout_mini_ros1_adapter/robot_runtime.hpp"
 #include "xgc_scout_mini_ros1_adapter/shutdown_signal.hpp"
+#include "xgc_scout_mini_ros1_adapter/telemetry_batch.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
 namespace {
@@ -49,14 +51,14 @@ TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
 TEST(Freshness, AppliesTheScoutStatusBoundary) {
   const ros::WallTime now(10, 0);
   contract::ChannelMetadata health{};
-  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.health",
-                                        &health));
+  ASSERT_TRUE(
+      contract::channelMetadata(contract::kProfileId, "state.health", &health));
   const double stale_after_seconds =
       static_cast<double>(health.stale_after_millis) / 1000.0;
   EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, stale_after_seconds));
   EXPECT_TRUE(sourceIsFresh(ros::WallTime(9, 0), now, stale_after_seconds));
-  EXPECT_FALSE(sourceIsFresh(ros::WallTime(8, 999999999), now,
-                             stale_after_seconds));
+  EXPECT_FALSE(
+      sourceIsFresh(ros::WallTime(8, 999999999), now, stale_after_seconds));
 }
 
 TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
@@ -72,14 +74,14 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v3", "state.pose",
-                                        &pose));
+  ASSERT_TRUE(
+      contract::channelMetadata("scout-mini.ros1.v3", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v3",
-                                         "operation.arm", &unknown));
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v3", "operation.arm",
+                                         &unknown));
 
   std::size_t operation_count = 1u;
   EXPECT_EQ(nullptr, contract::profileOperations("scout-mini.ros1.v3",
@@ -91,6 +93,36 @@ TEST(InstalledContract, DoesNotContainPx4OperationMetadata) {
   contract::MessageMetadata metadata;
   EXPECT_TRUE(contract::messageMetadata(2001, &metadata));
   EXPECT_FALSE(contract::messageMetadata(3201, &metadata));
+}
+
+TEST(TelemetryBatch, BindsItemsToAnExactQueuePrefix) {
+  const std::deque<TelemetryQueueItem> queue{
+      {1u, "pose"}, {2u, "velocity"}, {3u, "power"}};
+  const auto batch = buildTelemetryBatch(queue, 2u, 1024u);
+  ASSERT_EQ(2u, batch.items.size());
+  EXPECT_EQ((std::vector<std::uint64_t>{1u, 2u}), batch.tokens);
+  EXPECT_EQ((std::vector<std::string>{"pose", "velocity"}), batch.items);
+  EXPECT_EQ(12u, batch.bytes);
+  EXPECT_TRUE(telemetryBatchMatchesPrefix(queue, batch.tokens));
+
+  auto advanced = queue;
+  advanced.pop_front();
+  EXPECT_FALSE(telemetryBatchMatchesPrefix(advanced, batch.tokens));
+}
+
+TEST(TelemetryBatch, EnforcesBothItemAndByteLimitsWithoutSplittingItems) {
+  const std::deque<TelemetryQueueItem> queue{
+      {1u, "1234"}, {2u, "5678"}, {3u, "9"}};
+  const auto byte_limited = buildTelemetryBatch(queue, 3u, 8u);
+  EXPECT_EQ(2u, byte_limited.items.size());
+  EXPECT_EQ(8u, byte_limited.bytes);
+
+  const auto item_limited = buildTelemetryBatch(queue, 1u, 1024u);
+  ASSERT_EQ(1u, item_limited.items.size());
+  EXPECT_EQ("1234", item_limited.items.front());
+
+  EXPECT_TRUE(buildTelemetryBatch(queue, 0u, 1024u).items.empty());
+  EXPECT_TRUE(buildTelemetryBatch(queue, 3u, 3u).items.empty());
 }
 
 } // namespace
