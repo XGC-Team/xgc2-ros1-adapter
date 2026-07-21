@@ -136,6 +136,9 @@ class ContractGeneratorTest(unittest.TestCase):
             px4_channels["operation.autopilot-reboot"]["input_message_id"], 3203
         )
         self.assertEqual(px4_channels["state.pose"]["stale_after_millis"], 1000)
+        self.assertEqual(
+            px4_channels["state.mocap.pose"]["stale_after_millis"], 500
+        )
         self.assertEqual(px4_channels["state.velocity"]["stale_after_millis"], 2000)
         self.assertEqual(
             px4_channels["state.mocap.pose"]["endpoints"][0],
@@ -159,6 +162,10 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertNotIn("digest", px4)
         px4_body = GENERATOR.catalog_profile_body(
             px4, self.messages, PX4_DEFINITION_ID
+        )
+        self.assertIn(
+            {"channelId": "state.mocap.pose", "maximumAgeMillis": 500},
+            px4_body["semantics"]["operationalReadyConditions"],
         )
         operations = {
             operation["id"]: operation
