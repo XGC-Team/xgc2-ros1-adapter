@@ -1,4 +1,4 @@
-schema: xgc.robot.adapter-profile/v3
+schema: xgc.robot.adapter-profile/v4
 profile_id: px4.multirotor.ros1.v5
 profile_version: 5
 native_protocol: ros1
@@ -8,10 +8,12 @@ parameters:
   namespace:
     type: string
     required: true
+    delivery: target_binding
     description: Product-owned ROS namespace assigned to this PX4 robot.
   mocap_rigid_body:
     type: string
     required: true
+    delivery: target_binding
     pattern: "^[A-Za-z][A-Za-z0-9_]*$"
     description: VRPN rigid-body name assigned by the robot-domain instance specification.
 semantic_traits:

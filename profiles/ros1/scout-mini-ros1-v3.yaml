@@ -1,4 +1,4 @@
-schema: xgc.robot.adapter-profile/v3
+schema: xgc.robot.adapter-profile/v4
 profile_id: scout-mini.ros1.v3
 profile_version: 3
 native_protocol: ros1
@@ -8,6 +8,7 @@ parameters:
   namespace:
     type: string
     required: true
+    delivery: target_binding
     description: Product-owned ROS namespace assigned to this Scout Mini robot.
 semantic_traits:
   default_stale_after_ms: 2000

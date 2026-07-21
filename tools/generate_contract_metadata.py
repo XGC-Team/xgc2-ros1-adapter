@@ -19,8 +19,8 @@ import jsonschema
 import yaml
 
 
-PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v3"
-PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v3"
+PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v4"
+PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v4"
 KINDS = {"stream_out", "operation"}
 INPUT_KINDS = {"operation"}
 OUTPUT_KINDS = {"stream_out", "operation"}
@@ -761,6 +761,7 @@ def catalog_parameters(source_profile):
         name: {
             "type": definition["type"],
             "required": definition["required"],
+            "delivery": definition["delivery"],
             **(
                 {"pattern": definition["pattern"]}
                 if "pattern" in definition

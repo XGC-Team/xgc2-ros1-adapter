@@ -29,7 +29,7 @@ VERIFY_SPEC = importlib.util.spec_from_file_location(
 VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
-SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v3.schema.json"
+SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v5.yaml"
 SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v3.yaml"
 ROS_NOETIC_ENVIRONMENT = {
@@ -121,7 +121,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
 
     def test_catalog_carries_exact_kind_and_semantic_traits(self):
         _, _, catalog = GENERATOR.build_documents(self.arguments(PX4_PROFILE))
-        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v3")
+        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v4")
         profile = catalog["profiles"][0]
         self.assertEqual(
             set(profile),
@@ -138,7 +138,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(profile["robotKind"], "px4_multirotor")
         self.assertEqual(
             profile["parameters"]["namespace"],
-            {"type": "string", "required": True},
+            {
+                "type": "string",
+                "required": True,
+                "delivery": "target_binding",
+            },
         )
         self.assertEqual(
             profile["semantics"]["operations"],
@@ -217,14 +221,38 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             "xgc.semantic.common.vehicle-health.online",
         )
 
-    def test_profile_v3_contract_has_no_v2_aliases(self):
+    def test_profile_v4_contract_and_legacy_schema_are_explicit(self):
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
-            "xgc.robot.adapter-profile/v3",
+            "xgc.robot.adapter-profile/v4",
         )
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_CONTRACT_DIGEST_SCHEMA,
-            "xgc.robot.profile-contract-digest/v3",
+            "xgc.robot.profile-contract-digest/v4",
+        )
+
+        legacy_schema = json.loads(
+            (REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v3.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        current_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        legacy_parameter = legacy_schema["definitions"]["parameter"]
+        current_parameter = current_schema["definitions"]["parameter"]
+        self.assertEqual(
+            legacy_schema["properties"]["schema"]["const"],
+            "xgc.robot.adapter-profile/v3",
+        )
+        self.assertNotIn("delivery", legacy_parameter["properties"])
+        self.assertNotIn("delivery", legacy_parameter["required"])
+        self.assertEqual(
+            current_schema["properties"]["schema"]["const"],
+            "xgc.robot.adapter-profile/v4",
+        )
+        self.assertIn("delivery", current_parameter["required"])
+        self.assertEqual(
+            current_parameter["properties"]["delivery"]["enum"],
+            ["target_binding", "core_local"],
         )
         for legacy in (
             "profiles/schema/robot-adapter-profile-v{}.schema.json".format(2),
@@ -244,7 +272,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         expected_digest = hashlib.sha256(
             json.dumps(
                 {
-                    "schema": "xgc.robot.profile-contract-digest/v3",
+                    "schema": "xgc.robot.profile-contract-digest/v4",
                     "profile": profile_body,
                 },
                 sort_keys=True,
@@ -560,6 +588,9 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         def mutate_parameter_contract(profile):
             profile["parameters"]["namespace"]["required"] = False
 
+        def mutate_parameter_delivery(profile):
+            profile["parameters"]["namespace"]["delivery"] = "core_local"
+
         def mutate_removed_namespace_role(profile):
             profile["namespaceParameter"] = "ros_ns"
 
@@ -584,6 +615,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ("channel schema", mutate_channel_schema),
             ("robot kind", mutate_robot_kind),
             ("parameter contract", mutate_parameter_contract),
+            ("parameter delivery", mutate_parameter_delivery),
             ("removed namespace parameter role", mutate_removed_namespace_role),
             ("channel kind", mutate_channel_kind),
             ("operation parameter schema", mutate_operation_parameter_schema),

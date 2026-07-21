@@ -18,7 +18,7 @@ SCHEMA_PATH = (
     REPOSITORY_ROOT
     / "profiles"
     / "schema"
-    / "robot-adapter-profile-v3.schema.json"
+    / "robot-adapter-profile-v4.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v5.yaml"
 SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v3.yaml"
@@ -309,6 +309,13 @@ class ContractGeneratorTest(unittest.TestCase):
         public_path = self.write_profile(public_change)
         self.assertNotEqual(contract_digest(public_path), baseline)
 
+        delivery_change = yaml.safe_load(
+            PX4_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        delivery_change["parameters"]["namespace"]["delivery"] = "core_local"
+        delivery_path = self.write_profile(delivery_change)
+        self.assertNotEqual(contract_digest(delivery_path), baseline)
+
         operation_schema_change = yaml.safe_load(
             PX4_PROFILE_PATH.read_text(encoding="utf-8")
         )
@@ -358,6 +365,12 @@ class ContractGeneratorTest(unittest.TestCase):
                 )
                 self.assertIn(
                     '--definition-id "${ADAPTER_DEFINITION_ID}"', cmake
+                )
+                self.assertIn(
+                    "robot-adapter-profile-v4.schema.json", cmake
+                )
+                self.assertNotIn(
+                    "robot-adapter-profile-v3.schema.json", cmake
                 )
                 self.assertIn(
                     "xgc2_add_robot_runtime_manifests(\n"
@@ -458,6 +471,18 @@ int main() {
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        del profile["parameters"]["namespace"]["delivery"]
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        profile["parameters"]["namespace"]["delivery"] = "remote_guess"
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
         profile["profile_id"] = "1robot.ros1.v4"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
@@ -484,6 +509,7 @@ int main() {
         optional_parameter = {
             "type": "string",
             "required": False,
+            "delivery": "target_binding",
             "description": "Optional product-owned runtime parameter.",
         }
         profile["parameters"]["a" * 64] = dict(optional_parameter)

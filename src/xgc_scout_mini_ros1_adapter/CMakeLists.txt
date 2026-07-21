@@ -19,7 +19,7 @@ set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
   "${PROFILE_ROOT}/ros1/scout-mini-ros1-v3.yaml")
 set(PROFILE_SCHEMA
-  "${PROFILE_ROOT}/schema/robot-adapter-profile-v3.schema.json")
+  "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-scout-mini-ros1-adapter")
 
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
