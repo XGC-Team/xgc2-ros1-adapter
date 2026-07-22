@@ -119,16 +119,24 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_TRUE(published.empty());
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(2, 1, -1, &error)) << error;
+  const ros::WallTime now = ros::WallTime::now();
+  std::uint64_t generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 2, 1, -1,
+                                  now + ros::WallDuration(2.0), &generation,
+                                  &error))
+      << error;
   ASSERT_EQ(1u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(-0.349, published.back().angular.z);
 
-  publisher.PublishPeriodic();
+  publisher.PublishPeriodic(now + ros::WallDuration(0.5));
   ASSERT_EQ(2u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
 
-  ASSERT_TRUE(publisher.SetIntent(2, 0, 0, &error)) << error;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 2, 0, 0,
+                                  now + ros::WallDuration(2.0), &generation,
+                                  &error))
+      << error;
   ASSERT_EQ(3u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
@@ -139,7 +147,9 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
   EXPECT_EQ(4u, published.size());
-  EXPECT_FALSE(publisher.SetIntent(1, 1, 0, &error));
+  EXPECT_FALSE(publisher.SetIntent("session-a", 1, 1, 0,
+                                   now + ros::WallDuration(2.0), &generation,
+                                   &error));
 }
 
 TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
@@ -152,13 +162,116 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
       });
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(1, 1, 0, &error)) << error;
-  ASSERT_FALSE(publisher.SetIntent(3, 1, 0, &error));
+  const ros::WallTime now = ros::WallTime::now();
+  std::uint64_t generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 1, 1, 0,
+                                  now + ros::WallDuration(2.0), &generation,
+                                  &error))
+      << error;
+  ASSERT_FALSE(publisher.SetIntent("session-b", 3, 1, 0,
+                                   now + ros::WallDuration(2.0), &generation,
+                                   &error));
   EXPECT_NE(std::string::npos, error.find("injected publication failure"));
 
-  publisher.PublishPeriodic();
+  publisher.PublishPeriodic(now + ros::WallDuration(0.5));
   ASSERT_EQ(2u, published.size());
   EXPECT_DOUBLE_EQ(0.5, published.back().linear.x);
+}
+
+TEST(MotionPublisher, LeasePulseExtendsWithoutAZeroGapThenExpiresToZero) {
+  std::vector<geometry_msgs::Twist> published;
+  MotionCommandPublisher publisher(
+      [&published](const geometry_msgs::Twist &command) {
+        published.push_back(command);
+      });
+  const ros::WallTime now = ros::WallTime::now();
+  std::string error;
+  std::uint64_t initial_generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 2, 1, 0,
+                                  now + ros::WallDuration(0.5),
+                                  &initial_generation, &error))
+      << error;
+  std::uint64_t pulse_generation = 0u;
+  ASSERT_TRUE(publisher.RenewIntent("session-a", 2, 1, 0,
+                                    now + ros::WallDuration(1.0),
+                                    &pulse_generation, &error))
+      << error;
+  EXPECT_GT(pulse_generation, initial_generation);
+  ASSERT_EQ(1u, published.size());
+
+  publisher.PublishPeriodic(now + ros::WallDuration(0.75));
+  ASSERT_EQ(2u, published.size());
+  EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
+  publisher.PublishPeriodic(now + ros::WallDuration(1.0));
+  ASSERT_EQ(3u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
+  EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
+  publisher.PublishPeriodic(now + ros::WallDuration(1.1));
+  EXPECT_EQ(3u, published.size());
+}
+
+TEST(MotionPublisher, StalePulseAndReleaseCannotChangeANewerIntent) {
+  std::vector<geometry_msgs::Twist> published;
+  MotionCommandPublisher publisher(
+      [&published](const geometry_msgs::Twist &command) {
+        published.push_back(command);
+      });
+  const ros::WallTime now = ros::WallTime::now();
+  std::string error;
+  std::uint64_t first_generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 1, 1, 0,
+                                  now + ros::WallDuration(0.5),
+                                  &first_generation, &error))
+      << error;
+  std::uint64_t pulse_generation = 0u;
+  ASSERT_TRUE(publisher.RenewIntent("session-a", 1, 1, 0,
+                                    now + ros::WallDuration(0.8),
+                                    &pulse_generation, &error))
+      << error;
+  publisher.Release("session-a", first_generation);
+  EXPECT_EQ(1u, published.size());
+
+  std::uint64_t second_generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 2, -1, 1,
+                                  now + ros::WallDuration(1.0),
+                                  &second_generation, &error))
+      << error;
+  publisher.Release("session-a", pulse_generation);
+  ASSERT_EQ(2u, published.size());
+  EXPECT_DOUBLE_EQ(-1.0, published.back().linear.x);
+  EXPECT_DOUBLE_EQ(0.349, published.back().angular.z);
+
+  EXPECT_FALSE(publisher.RenewIntent("session-a", 1, 1, 0,
+                                     now + ros::WallDuration(1.2),
+                                     &pulse_generation, &error));
+  EXPECT_FALSE(publisher.RenewIntent("session-b", 2, -1, 1,
+                                     now + ros::WallDuration(1.2),
+                                     &pulse_generation, &error));
+  publisher.PublishPeriodic(now + ros::WallDuration(0.9));
+  ASSERT_EQ(3u, published.size());
+  EXPECT_DOUBLE_EQ(-1.0, published.back().linear.x);
+}
+
+TEST(MotionPublisher, InactivePulseRevokesOnlyTheCurrentOwner) {
+  std::vector<geometry_msgs::Twist> published;
+  MotionCommandPublisher publisher(
+      [&published](const geometry_msgs::Twist &command) {
+        published.push_back(command);
+      });
+  const ros::WallTime now = ros::WallTime::now();
+  std::string error;
+  std::uint64_t generation = 0u;
+  ASSERT_TRUE(publisher.SetIntent("session-a", 1, 1, 0,
+                                  now + ros::WallDuration(1.0), &generation,
+                                  &error))
+      << error;
+  EXPECT_FALSE(publisher.RevokeIntent("session-b", &error));
+  EXPECT_EQ(1u, published.size());
+  ASSERT_TRUE(publisher.RevokeIntent("session-a", &error)) << error;
+  ASSERT_EQ(2u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
+  ASSERT_TRUE(publisher.RevokeIntent("session-a", &error)) << error;
+  EXPECT_EQ(2u, published.size());
 }
 
 TEST(Freshness, AppliesTheScoutStatusBoundary) {
@@ -218,41 +331,41 @@ TEST(ChassisProjection, MapsNativeScoutControlModes) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v4");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v5");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
   ASSERT_TRUE(
-      contract::channelMetadata("scout-mini.ros1.v4", "vrpn.position", &position));
+      contract::channelMetadata("scout-mini.ros1.v5", "vrpn.position", &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v4", "state.pose",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v5", "state.pose",
                                          &position));
 
   contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v4", "vrpn.velocity",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5", "vrpn.velocity",
                                         &vrpn_velocity));
   EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
 
   contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v4", "vrpn.speed",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5", "vrpn.speed",
                                         &vrpn_speed));
   EXPECT_EQ(2006u, vrpn_speed.output_message_id);
 
   contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v4",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5",
                                         "command.velocity",
                                         &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v4", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v5", "operation.arm",
                                          &unknown));
 
   contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v4",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5",
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3204u, motion.input_message_id);
@@ -265,7 +378,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   std::size_t operation_count = 0u;
   const auto *operations = contract::profileOperations(
-      "scout-mini.ros1.v4", &operation_count);
+      "scout-mini.ros1.v5", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));
