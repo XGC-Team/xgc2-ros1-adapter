@@ -8,7 +8,7 @@ UGVs.
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
 | `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v6` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v4` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v5` |
 | `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v1` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
@@ -75,10 +75,11 @@ while `longitudinal` and `yaw` are each -1, 0, or 1. The Adapter maps the three
 gears to 0.5/1.0/1.5 m/s and approximately 0.1745/0.3490/0.5235 rad/s, clamps
 the generated `geometry_msgs/Twist` to the Scout SDK limits, and republishes
 the latest intent to the profile-owned namespaced `cmd_vel` topic at 10 Hz.
-The caller only sends state changes; a zero intent is published immediately.
-The intent remains active until the next change or until the robot source,
-instance spec, or Adapter Runtime session is closed, at which point the
-Adapter publishes a final zero command. Before the first motion operation the
+The caller only sends state changes and renews a profile-declared volatile
+lease every 250 ms; a zero intent is published immediately. A non-zero intent
+expires after 750 ms without an identical lease pulse. Lease expiry, robot
+source loss, instance replacement, Adapter Runtime session loss, or shutdown
+always publishes a final zero command. Before the first motion operation the
 Adapter does not publish `cmd_vel`, so an enabled but unused command channel
 does not take control away from another ROS controller. `command.velocity`
 observes the same topic for telemetry. Real-robot bringup must place

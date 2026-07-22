@@ -17,9 +17,9 @@ xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support)
 
 set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
-  "${PROFILE_ROOT}/ros1/scout-mini-ros1-v4.yaml")
+  "${PROFILE_ROOT}/ros1/scout-mini-ros1-v5.yaml")
 set(PROFILE_SCHEMA
-  "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
+  "${PROFILE_ROOT}/schema/robot-adapter-profile-v5.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-scout-mini-ros1-adapter")
 
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
@@ -111,7 +111,7 @@ xgc2_add_robot_runtime_manifests(
   ${ADAPTER_DEFINITION_ID}
   ${PROJECT_VERSION}
   "XGC2 Scout Mini ROS1 Adapter"
-  "Scout Mini telemetry, discrete motion control, and channel diagnostics."
+  "Scout Mini telemetry, leased motion control, and channel diagnostics."
   "${PROFILE_FILE}"
   "${PROFILE_SCHEMA}"
 )

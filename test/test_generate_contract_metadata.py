@@ -27,7 +27,7 @@ LEASE_SCHEMA_PATH = (
     / "robot-adapter-profile-v5.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v5.yaml"
 MECANUM_PROFILE_PATH = (
     REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v1.yaml"
 )
@@ -119,7 +119,7 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
         scout_profiles = GENERATOR.load_profile(
-            SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
+            SCOUT_PROFILE_PATH, LEASE_SCHEMA_PATH, self.messages
         )
         mecanum_profiles = GENERATOR.load_profile(
             MECANUM_PROFILE_PATH, LEASE_SCHEMA_PATH, self.messages
@@ -248,7 +248,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v4"]
+        scout = scout_profiles["scout-mini.ros1.v5"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -338,6 +338,15 @@ class ContractGeneratorTest(unittest.TestCase):
                         },
                         "additionalProperties": False,
                     },
+                    "lease": {
+                        "pulseEndpointId": "pulse-motion-intent-lease",
+                        "heartbeatIntervalMillis": 250,
+                        "timeoutMillis": 750,
+                        "inactiveParameterValues": {
+                            "longitudinal": 0,
+                            "yaw": 0,
+                        },
+                    },
                 }
             ],
         )
@@ -383,11 +392,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         mecanum_operation = mecanum_body["semantics"]["operations"][0]
         self.assertEqual(
-            {
-                key: value
-                for key, value in mecanum_operation.items()
-                if key != "lease"
-            },
+            mecanum_operation,
             scout_body["semantics"]["operations"][0],
         )
         self.assertEqual(
@@ -438,7 +443,10 @@ class ContractGeneratorTest(unittest.TestCase):
             "xgc_scout_mini_ros1_adapter",
         )
         self.assertIn('"set-motion-intent", 3204u, 1u, 0.0, 1000u, 0u', scout_header)
-        self.assertNotIn("pulse-motion-intent-lease", scout_header)
+        self.assertIn(
+            '{"pulse-motion-intent-lease", 250u, 750u, true,',
+            scout_header,
+        )
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
         self.assertIn('"xgc.semantic.ground.v1.MotionIntentRequest"', scout_header)
 
@@ -583,7 +591,7 @@ class ContractGeneratorTest(unittest.TestCase):
             (
                 "xgc_scout_mini_ros1_adapter",
                 "xgc2-scout-mini-ros1-adapter",
-                "robot-adapter-profile-v4.schema.json",
+                "robot-adapter-profile-v5.schema.json",
             ),
             (
                 "xgc_mecanum_ugv_ros1_adapter",
@@ -946,7 +954,7 @@ int main() {
         }
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed|exactly one"):
-            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+            GENERATOR.load_profile(path, LEASE_SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
         motion = next(
@@ -957,7 +965,7 @@ int main() {
         motion["output_message_id"] = 2001
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
-            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+            GENERATOR.load_profile(path, LEASE_SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
         motion = next(
@@ -968,7 +976,7 @@ int main() {
         del motion["output"]
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed|exactly one"):
-            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+            GENERATOR.load_profile(path, LEASE_SCHEMA_PATH, self.messages)
 
     def test_endpoint_parameters_must_be_declared_required_strings(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -1031,7 +1039,7 @@ int main() {
             "vrpn_client_node/fixture/pose"
         )
         path = self.write_profile(profile)
-        profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+        profiles = GENERATOR.load_profile(path, LEASE_SCHEMA_PATH, self.messages)
         header = GENERATOR.generate(
             self.registry_fingerprint,
             self.messages,
@@ -1043,7 +1051,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v4") {\n'
+            'if (profile_id == "scout-mini.ros1.v5") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1089,7 +1097,7 @@ int main() {
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
                 self.assertNotIn("px4.multirotor.ros1.v6", source)
-                self.assertNotIn("scout-mini.ros1.v4", source)
+                self.assertNotIn("scout-mini.ros1.v5", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
