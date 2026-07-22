@@ -74,10 +74,12 @@ def operation_endpoint(
     deadline_required: bool,
     default_timeout_ms: int,
     maximum_timeout_ms: int,
+    volatile_supported: bool = False,
+    interaction: str = "operation",
 ) -> dict[str, Any]:
-    return {
+    endpoint = {
         "endpointId": endpoint_id,
-        "interaction": "operation",
+        "interaction": interaction,
         "inputSchema": input_schema,
         "outputSchema": output_schema,
         "sideEffect": side_effect,
@@ -95,6 +97,9 @@ def operation_endpoint(
             "maximumStreamChunkMessages": 0,
         },
     }
+    if volatile_supported:
+        endpoint["volatileSupported"] = True
+    return endpoint
 
 
 def telemetry_endpoint(output_schema: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +158,12 @@ def validate_profile_operation_endpoints(
             command_capability["endpoints"] if command_capability else []
         )
     }
-    if set(profile_operations) != set(endpoints):
+    lease_pulses = {
+        operation["lease"]["pulseEndpointId"]: operation
+        for operation in profile_operations.values()
+        if "lease" in operation
+    }
+    if set(profile_operations) | set(lease_pulses) != set(endpoints):
         raise ValueError(
             "Profile operations and provider command endpoints disagree"
         )
@@ -169,6 +179,27 @@ def validate_profile_operation_endpoints(
         ):
             raise ValueError(
                 "Profile operation {} timeout disagrees with its provider endpoint".format(
+                    operation_id
+                )
+            )
+        lease = operation.get("lease")
+        if lease is None:
+            continue
+        pulse = endpoints[lease["pulseEndpointId"]]
+        if (
+            pulse["interaction"] != "unary"
+            or pulse["inputSchema"] != endpoint["inputSchema"]
+            or pulse["outputSchema"] != endpoint["outputSchema"]
+            or pulse["sideEffect"] != "idempotent"
+            or pulse["idempotency"] != "not-supported"
+            or not pulse["cancellationSupported"]
+            or not pulse["deadlineRequired"]
+            or not pulse.get("volatileSupported", False)
+            or pulse["defaultTimeoutMillis"] != lease["timeoutMillis"]
+            or pulse["maximumTimeoutMillis"] != lease["timeoutMillis"]
+        ):
+            raise ValueError(
+                "Profile operation {} lease pulse disagrees with its provider endpoint".format(
                     operation_id
                 )
             )
@@ -221,23 +252,44 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
     )
     contracts = [telemetry]
     if operation_channels:
+        command_endpoints = []
+        for channel in operation_channels:
+            input_schema = schema_reference(messages, channel["input_message_id"])
+            output_schema = schema_reference(messages, channel["output_message_id"])
+            command_endpoints.append(
+                operation_endpoint(
+                    channel["operation_id"],
+                    input_schema,
+                    output_schema,
+                    channel["operation_contract"]["side_effect"],
+                    channel["operation_contract"]["idempotency"],
+                    channel["operation_contract"]["cancellation_supported"],
+                    channel["operation_contract"]["deadline_required"],
+                    channel["operation_timeout_millis"],
+                    channel["operation_timeout_millis"],
+                )
+            )
+            lease = channel["lease"]
+            if lease:
+                command_endpoints.append(
+                    operation_endpoint(
+                        lease["pulse_endpoint_id"],
+                        input_schema,
+                        output_schema,
+                        "idempotent",
+                        "not-supported",
+                        True,
+                        True,
+                        lease["timeout_ms"],
+                        lease["timeout_ms"],
+                        volatile_supported=lease["volatile_supported"],
+                        interaction="unary",
+                    )
+                )
         contracts.append(
             contract(
                 "xgc.robot.command",
-                [
-                    operation_endpoint(
-                        channel["operation_id"],
-                        schema_reference(messages, channel["input_message_id"]),
-                        schema_reference(messages, channel["output_message_id"]),
-                        channel["operation_contract"]["side_effect"],
-                        channel["operation_contract"]["idempotency"],
-                        channel["operation_contract"]["cancellation_supported"],
-                        channel["operation_contract"]["deadline_required"],
-                        channel["operation_timeout_millis"],
-                        channel["operation_timeout_millis"],
-                    )
-                    for channel in operation_channels
-                ],
+                command_endpoints,
             )
         )
     contracts.sort(key=lambda item: "{}@{}".format(item["ref"]["id"], item["ref"]["version"]))
@@ -324,7 +376,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
         },
     }
     profile_catalog = {
-        "schema": "xgc.robot.adapter-profile-catalog/v4",
+        "schema": "xgc.robot.adapter-profile-catalog/v5",
         "profiles": [installed_profile],
     }
     return adapter_manifest, process_manifest, profile_catalog

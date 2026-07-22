@@ -99,17 +99,16 @@ def expected_capability_endpoints(
         key=lambda channel: channel["operation_id"],
     )
     if operations:
-        expected["xgc.robot.command"] = sorted(
-            [
+        command_endpoints = []
+        for channel in operations:
+            input_schema = schema_reference(messages, channel["input_message_id"])
+            output_schema = schema_reference(messages, channel["output_message_id"])
+            command_endpoints.append(
                 {
                     "endpointId": channel["operation_id"],
                     "interaction": "operation",
-                    "inputSchema": schema_reference(
-                        messages, channel["input_message_id"]
-                    ),
-                    "outputSchema": schema_reference(
-                        messages, channel["output_message_id"]
-                    ),
+                    "inputSchema": input_schema,
+                    "outputSchema": output_schema,
                     "sideEffect": channel["operation_contract"]["side_effect"],
                     "idempotency": channel["operation_contract"]["idempotency"],
                     "cancellationSupported": channel["operation_contract"][
@@ -133,8 +132,34 @@ def expected_capability_endpoints(
                         "maximumStreamChunkMessages": 0,
                     },
                 }
-                for channel in operations
-            ],
+            )
+            lease = channel["lease"]
+            if lease:
+                command_endpoints.append(
+                    {
+                        "endpointId": lease["pulse_endpoint_id"],
+                        "interaction": "unary",
+                        "inputSchema": input_schema,
+                        "outputSchema": output_schema,
+                        "sideEffect": "idempotent",
+                        "idempotency": "not-supported",
+                        "cancellationSupported": True,
+                        "deadlineRequired": True,
+                        "defaultTimeoutMillis": lease["timeout_ms"],
+                        "maximumTimeoutMillis": lease["timeout_ms"],
+                        "volatileSupported": True,
+                        "limits": {
+                            "maximumRequestBytes": 65536,
+                            "maximumResponseBytes": 65536,
+                            "maximumConcurrency": 32,
+                            "maximumStreams": 0,
+                            "maximumStreamChunkBytes": 0,
+                            "maximumStreamChunkMessages": 0,
+                        },
+                    }
+                )
+        expected["xgc.robot.command"] = sorted(
+            command_endpoints,
             key=lambda endpoint: endpoint["endpointId"],
         )
     return expected
@@ -205,7 +230,11 @@ def verify(args: argparse.Namespace) -> None:
         for endpoint in endpoints:
             require("inputSchema" not in endpoint or endpoint["inputSchema"]["messageId"] > 0, "endpoint input schema is invalid")
             require(endpoint["outputSchema"]["messageId"] > 0, "endpoint output schema is invalid")
-            require(endpoint["deadlineRequired"] == (endpoint["interaction"] == "operation"), "endpoint deadline policy mismatch")
+            require(
+                endpoint["deadlineRequired"]
+                == (endpoint["interaction"] in {"operation", "unary"}),
+                "endpoint deadline policy mismatch",
+            )
     expected_endpoints = expected_capability_endpoints(messages, source_profile)
     require(
         set(capabilities_by_id) == set(expected_endpoints),
@@ -248,7 +277,7 @@ def verify(args: argparse.Namespace) -> None:
         "Adapter process command mismatch",
     )
 
-    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v4", "invalid profile catalog schema")
+    require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v5", "invalid profile catalog schema")
     require(len(profile["profiles"]) == 1, "profile catalog must contain exactly one profile")
     installed_profile = profile["profiles"][0]
     expected_profile_body = catalog_profile_body(
@@ -278,8 +307,13 @@ def verify(args: argparse.Namespace) -> None:
             command_capability["endpoints"] if command_capability else []
         )
     }
+    pulse_endpoints = {
+        operation["lease"]["pulseEndpointId"]
+        for operation in profile_operations.values()
+        if "lease" in operation
+    }
     require(
-        set(profile_operations) == set(command_endpoints),
+        set(profile_operations) | pulse_endpoints == set(command_endpoints),
         "Profile operations and provider command endpoints disagree",
     )
     for operation_id, operation in profile_operations.items():
@@ -289,6 +323,22 @@ def verify(args: argparse.Namespace) -> None:
             and operation["timeoutMillis"] <= endpoint["maximumTimeoutMillis"],
             "Profile operation timeout disagrees with provider endpoint",
         )
+        lease = operation.get("lease")
+        if lease is not None:
+            pulse = command_endpoints[lease["pulseEndpointId"]]
+            require(
+                pulse["interaction"] == "unary"
+                and pulse["inputSchema"] == endpoint["inputSchema"]
+                and pulse["outputSchema"] == endpoint["outputSchema"]
+                and pulse["sideEffect"] == "idempotent"
+                and pulse["idempotency"] == "not-supported"
+                and pulse["cancellationSupported"] is True
+                and pulse["deadlineRequired"] is True
+                and pulse["volatileSupported"] is True
+                and pulse["defaultTimeoutMillis"] == lease["timeoutMillis"]
+                and pulse["maximumTimeoutMillis"] == lease["timeoutMillis"],
+                "Profile operation lease pulse disagrees with provider endpoint",
+            )
 
 
 def main() -> int:

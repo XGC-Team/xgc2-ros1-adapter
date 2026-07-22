@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace xgc_mecanum_ugv_ros1_adapter {
@@ -116,30 +117,141 @@ bool MotionCommandPublisher::publishLocked(const geometry_msgs::Twist &command,
   return true;
 }
 
-bool MotionCommandPublisher::SetIntent(std::uint32_t gear,
+bool MotionCommandPublisher::nextGenerationLocked(std::uint64_t *generation,
+                                                  std::string *error) {
+  if (generation_ == std::numeric_limits<std::uint64_t>::max())
+    return fail(error, "motion command lease generation is exhausted");
+  ++generation_;
+  if (generation != nullptr)
+    *generation = generation_;
+  return true;
+}
+
+void MotionCommandPublisher::publishZeroAndClearLocked() noexcept {
+  geometry_msgs::Twist stop;
+  command_ = stop;
+  publishLocked(stop, nullptr);
+  owner_.clear();
+  expires_at_ = ros::WallTime();
+  active_ = false;
+}
+
+bool MotionCommandPublisher::SetIntent(const std::string &owner,
+                                       std::uint32_t gear,
                                        std::int32_t longitudinal,
                                        std::int32_t yaw,
+                                       const ros::WallTime &expires_at,
+                                       std::uint64_t *generation,
                                        std::string *error) {
   geometry_msgs::Twist command;
   if (!motionIntentCommand(gear, longitudinal, yaw, &command, error))
     return false;
+  if (owner.empty())
+    return fail(error, "motion command lease owner is required");
+  if (expires_at.isZero() || expires_at <= ros::WallTime::now())
+    return fail(error, "motion command lease deadline has elapsed");
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return fail(error, "motion command publisher is stopped");
-  // Publish every state change immediately. In particular, stop does not wait
-  // for the next 10 Hz local timer tick.
+  if (generation_ == std::numeric_limits<std::uint64_t>::max())
+    return fail(error, "motion command lease generation is exhausted");
+  const std::uint64_t candidate_generation = generation_ + 1u;
+  // Do not advance the lease fence until native publication succeeds. A
+  // failed replacement must leave the previous command releasable.
   if (!publishLocked(command, error))
     return false;
+  generation_ = candidate_generation;
+  if (generation != nullptr)
+    *generation = generation_;
   command_ = command;
-  active_ = true;
+  const bool inactive = command.linear.x == 0.0 && command.angular.z == 0.0;
+  if (inactive) {
+    owner_.clear();
+    expires_at_ = ros::WallTime();
+    active_ = false;
+  } else {
+    owner_ = owner;
+    expires_at_ = expires_at;
+    active_ = true;
+  }
   return true;
 }
 
-void MotionCommandPublisher::PublishPeriodic() {
+bool MotionCommandPublisher::RenewIntent(const std::string &owner,
+                                         std::uint32_t gear,
+                                         std::int32_t longitudinal,
+                                         std::int32_t yaw,
+                                         const ros::WallTime &expires_at,
+                                         std::uint64_t *generation,
+                                         std::string *error) {
+  geometry_msgs::Twist command;
+  if (!motionIntentCommand(gear, longitudinal, yaw, &command, error))
+    return false;
+  if (owner.empty())
+    return fail(error, "motion command lease owner is required");
+  if (expires_at.isZero() || expires_at <= ros::WallTime::now())
+    return fail(error, "motion command lease deadline has elapsed");
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_)
+    return fail(error, "motion command publisher is stopped");
+  if (!active_ || owner_ != owner)
+    return fail(error, "motion command lease owner is not active");
+  if (command.linear.x != command_.linear.x ||
+      command.linear.y != command_.linear.y ||
+      command.linear.z != command_.linear.z ||
+      command.angular.x != command_.angular.x ||
+      command.angular.y != command_.angular.y ||
+      command.angular.z != command_.angular.z) {
+    return fail(error, "motion command lease pulse cannot change intent");
+  }
+  if (expires_at <= expires_at_)
+    return fail(error, "motion command lease pulse is stale");
+  if (!nextGenerationLocked(generation, error))
+    return false;
+  expires_at_ = expires_at;
+  if (error != nullptr)
+    error->clear();
+  return true;
+}
+
+bool MotionCommandPublisher::RevokeIntent(const std::string &owner,
+                                          std::string *error) {
+  if (owner.empty())
+    return fail(error, "motion command lease owner is required");
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_)
+    return fail(error, "motion command publisher is stopped");
+  if (!active_) {
+    if (error != nullptr)
+      error->clear();
+    return true;
+  }
+  if (owner_ != owner)
+    return fail(error, "motion command lease owner is not active");
+  publishZeroAndClearLocked();
+  if (error != nullptr)
+    error->clear();
+  return true;
+}
+
+void MotionCommandPublisher::Release(const std::string &owner,
+                                     std::uint64_t generation) noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_ || !active_ || owner_ != owner || generation_ != generation)
+    return;
+  publishZeroAndClearLocked();
+}
+
+void MotionCommandPublisher::PublishPeriodic(const ros::WallTime &now) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_ || !active_)
     return;
+  if (expires_at_.isZero() || expires_at_ <= now) {
+    publishZeroAndClearLocked();
+    return;
+  }
   publishLocked(command_, nullptr);
 }
 
@@ -147,11 +259,8 @@ void MotionCommandPublisher::Stop() noexcept {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return;
-  geometry_msgs::Twist stop;
-  command_ = stop;
-  if (active_)
-    publishLocked(command_, nullptr);
-  active_ = false;
+  // Stop/source disconnect/session loss/destruction always emits a final zero.
+  publishZeroAndClearLocked();
   stopped_ = true;
   publish_ = {};
 }

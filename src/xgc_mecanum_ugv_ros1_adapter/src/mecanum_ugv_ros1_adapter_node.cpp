@@ -100,6 +100,7 @@ struct ResolvedOperation {
   contract::ChannelMetadata channel{};
   contract::MessageMetadata input_schema{};
   contract::MessageMetadata output_schema{};
+  bool lease_pulse = false;
 };
 
 bool resolveOperation(const std::string &profile_id,
@@ -128,7 +129,12 @@ bool resolveOperation(const std::string &profile_id,
       *error = "installed Mecanum profile contains an unnamed operation";
       return false;
     }
-    if (operation_id != candidate.operation_id)
+    const bool public_operation = operation_id == candidate.operation_id;
+    const bool lease_pulse =
+        candidate.operation_lease.pulse_endpoint_id != nullptr &&
+        candidate.operation_lease.pulse_endpoint_id[0] != '\0' &&
+        operation_id == candidate.operation_lease.pulse_endpoint_id;
+    if (!public_operation && !lease_pulse)
       continue;
     if (*known) {
       *error = "installed Mecanum profile repeats operation " + operation_id;
@@ -136,6 +142,7 @@ bool resolveOperation(const std::string &profile_id,
     }
     *known = true;
     resolved->channel = candidate;
+    resolved->lease_pulse = lease_pulse;
   }
   if (!*known) {
     *error = "unsupported Mecanum command endpoint";
@@ -151,7 +158,7 @@ bool resolveOperation(const std::string &profile_id,
       std::string(channel.operation_contract.side_effect) != "idempotent" ||
       channel.operation_contract.idempotency == nullptr ||
       std::string(channel.operation_contract.idempotency) != "required" ||
-      channel.operation_contract.cancellation_supported ||
+      !channel.operation_contract.cancellation_supported ||
       !channel.operation_contract.deadline_required ||
       !contract::messageMetadata(channel.input_message_id,
                                  &resolved->input_schema) ||
@@ -167,7 +174,65 @@ bool resolveOperation(const std::string &profile_id,
     *error = "installed Mecanum operation descriptor is incomplete or unsafe";
     return false;
   }
+  if (channel.operation_lease.pulse_endpoint_id == nullptr ||
+      channel.operation_lease.pulse_endpoint_id[0] == '\0' ||
+      channel.operation_lease.heartbeat_interval_millis == 0u ||
+      channel.operation_lease.timeout_millis == 0u ||
+      !channel.operation_lease.volatile_supported) {
+    *error = "installed Mecanum lease pulse descriptor is incomplete or unsafe";
+    return false;
+  }
   return true;
+}
+
+bool operationDeadline(const xgc::adapter::v1::WorkContext &context,
+                       std::uint32_t maximum_ttl_millis,
+                       ros::WallTime *expires_at, std::string *error) {
+  if (expires_at == nullptr || error == nullptr || maximum_ttl_millis == 0u)
+    return false;
+  const std::int64_t deadline_nanos = context.deadline().deadline_unix_nanos();
+  if (deadline_nanos <= 0) {
+    *error = "Mecanum motion operation requires an absolute deadline";
+    return false;
+  }
+  const auto now_system = std::chrono::system_clock::now();
+  const auto now_nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             now_system.time_since_epoch())
+                             .count();
+  if (deadline_nanos <= now_nanos) {
+    *error = "Mecanum motion operation deadline elapsed before publication";
+    return false;
+  }
+  const std::int64_t maximum_ttl_nanos =
+      static_cast<std::int64_t>(maximum_ttl_millis) * 1000000LL;
+  const std::int64_t bounded_deadline =
+      std::min(deadline_nanos, now_nanos + maximum_ttl_nanos);
+  const std::int64_t seconds = bounded_deadline / 1000000000LL;
+  const std::int64_t nanoseconds = bounded_deadline % 1000000000LL;
+  if (seconds <= 0 ||
+      seconds > static_cast<std::int64_t>(
+                    std::numeric_limits<std::uint32_t>::max())) {
+    *error = "Mecanum motion operation deadline is outside ROS wall-time range";
+    return false;
+  }
+  *expires_at = ros::WallTime(static_cast<std::uint32_t>(seconds),
+                             static_cast<std::uint32_t>(nanoseconds));
+  error->clear();
+  return true;
+}
+
+std::string operationLeaseOwner(
+    const xgc::adapter::v1::ScopeReference &subject,
+    const std::string &robot_id, const std::string &operation_id) {
+  const auto run = subject.attributes().find("run-id");
+  if (run == subject.attributes().end() || run->second.empty() ||
+      robot_id.empty() || operation_id.empty()) {
+    return {};
+  }
+  // Public commands and profile-declared pulses share one stable lease owner.
+  // RenewIntent separately requires the exact current payload, preventing a
+  // stale pulse from changing the active native intent.
+  return run->second + "\n" + robot_id + "\n" + operation_id;
 }
 
 bool inputSchemaMatches(const xgc::v1::Payload &input,
@@ -239,6 +304,11 @@ public:
         };
 
     xgc2::adapter_runtime::CapabilityCallbacks command;
+    command.unary =
+        [this](const xgc::adapter::v1::UnaryRequest &request,
+               const xgc2::adapter_runtime::CancellationToken &cancellation) {
+          return handleLeasePulse(request, cancellation);
+        };
     command.operation =
         [this](const xgc::adapter::v1::OperationRequest &request,
                const xgc2::adapter_runtime::CancellationToken &cancellation) {
@@ -723,7 +793,31 @@ private:
   xgc2::adapter_runtime::OperationResult handleCommand(
       const xgc::adapter::v1::OperationRequest &request,
       const xgc2::adapter_runtime::CancellationToken &cancellation) {
-    if (request.input().encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
+    return executeMotionCommand(request.context(), request.input(),
+                                cancellation, false);
+  }
+
+  xgc2::adapter_runtime::UnaryResult handleLeasePulse(
+      const xgc::adapter::v1::UnaryRequest &request,
+      const xgc2::adapter_runtime::CancellationToken &cancellation) {
+    auto result = executeMotionCommand(request.context(), request.input(),
+                                       cancellation, true);
+    if (result.phase == xgc::adapter::v1::OPERATION_PHASE_SUCCEEDED &&
+        result.has_output) {
+      return xgc2::adapter_runtime::UnaryResult::Success(
+          std::move(result.output));
+    }
+    return xgc2::adapter_runtime::UnaryResult::Failure(
+        result.error.class_(), result.error.code(), result.error.message(),
+        result.error.retry_after_ms());
+  }
+
+  xgc2::adapter_runtime::OperationResult executeMotionCommand(
+      const xgc::adapter::v1::WorkContext &context,
+      const xgc::v1::Payload &wire_input,
+      const xgc2::adapter_runtime::CancellationToken &cancellation,
+      bool expected_lease_pulse) {
+    if (wire_input.encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
       return rejectOperation("invalid-command-encoding",
                              "Mecanum command input must use protobuf encoding");
     }
@@ -741,15 +835,14 @@ private:
                                "robot instance configuration is not applied");
       }
       if (!xgc2_ros1_robot_adapter::ResolveRobotSubject(
-              request.context(), configuration_, &robot_id, &error)) {
+              context, configuration_, &robot_id, &error)) {
         return rejectOperation("invalid-robot-subject", error);
       }
       const auto found = connected_.find(robot_id);
       if (found == connected_.end() || !found->second.runtime ||
           !found->second.fence.matches(configuration_.fence) ||
-          found->second.fence.revision !=
-              request.context().spec_revision() ||
-          !sameSubject(found->second.subject, request.context().subject())) {
+          found->second.fence.revision != context.spec_revision() ||
+          !sameSubject(found->second.subject, context.subject())) {
         return rejectOperation(
             "telemetry-source-not-open",
             "Mecanum command requires the current robot source to be open");
@@ -764,7 +857,7 @@ private:
 
     ResolvedOperation operation;
     bool known_operation = false;
-    const std::string &endpoint = request.context().endpoint_id();
+    const std::string &endpoint = context.endpoint_id();
     if (!resolveOperation(robot.profile_id, endpoint, &operation,
                           &known_operation, &error)) {
       if (!known_operation)
@@ -773,30 +866,26 @@ private:
           xgc::adapter::v1::ERROR_CLASS_PERMANENT,
           "operation-contract-invalid", error);
     }
+    if (operation.lease_pulse != expected_lease_pulse) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid",
+          "Mecanum command interaction does not match its endpoint contract");
+    }
     if (!channelEnabled(robot, operation.channel.channel_id)) {
       return rejectOperation("command-disabled",
                              endpoint + " is disabled by the robot spec");
     }
-    if (!inputSchemaMatches(request.input(), operation)) {
+    if (!inputSchemaMatches(wire_input, operation)) {
       return rejectOperation(
           "invalid-command-schema",
           "Mecanum command schema does not match the installed operation");
     }
-    if (request.context().deadline().deadline_unix_nanos() <= 0) {
+    if (context.volatile_() != operation.lease_pulse) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_PERMANENT,
           "operation-contract-invalid",
-          "Mecanum motion operation requires an absolute deadline");
-    }
-    const auto now_unix_nanos =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    if (request.context().deadline().deadline_unix_nanos() <= now_unix_nanos) {
-      return xgc2::adapter_runtime::OperationResult::Failure(
-          xgc::adapter::v1::ERROR_CLASS_DEADLINE,
-          "command-deadline-exceeded",
-          "Mecanum motion operation deadline elapsed before publication");
+          "Mecanum lease pulse volatility does not match its endpoint contract");
     }
 
     const std::string processor(operation.channel.processor);
@@ -814,7 +903,7 @@ private:
           "operation-contract-invalid",
           "Mecanum motion-intent input schema drifted");
     }
-    if (!input.ParseFromString(request.input().value())) {
+    if (!input.ParseFromString(wire_input.value())) {
       return rejectOperation("invalid-command-input",
                              "MotionIntentRequest is malformed");
     }
@@ -827,11 +916,43 @@ private:
     }
     if (cancellation.IsCancellationRequested())
       return xgc2::adapter_runtime::OperationResult::Cancelled();
-    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.yaw(),
-                           &error)) {
+    ros::WallTime expires_at;
+    const std::uint32_t lease_timeout_millis =
+        operation.channel.operation_lease.timeout_millis;
+    if (!operationDeadline(context, lease_timeout_millis, &expires_at, &error)) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_DEADLINE,
+          "command-deadline-exceeded", error);
+    }
+    const std::string command_owner = operationLeaseOwner(
+        context.subject(), robot_id, operation.channel.operation_id);
+    if (command_owner.empty())
+      return rejectOperation("invalid-command-owner",
+                             "Mecanum motion lease has no run owner");
+    std::uint64_t command_generation = 0u;
+    const bool inactive_pulse = operation.lease_pulse &&
+                                input.longitudinal() == 0 && input.yaw() == 0;
+    const bool applied =
+        inactive_pulse
+            ? motion->RevokeIntent(command_owner, &error)
+            : operation.lease_pulse
+                  ? motion->RenewIntent(command_owner, input.gear(),
+                                        input.longitudinal(), input.yaw(),
+                                        expires_at, &command_generation, &error)
+                  : motion->SetIntent(command_owner, input.gear(),
+                                      input.longitudinal(), input.yaw(),
+                                      expires_at, &command_generation, &error);
+    if (!applied) {
+      if (operation.lease_pulse)
+        return rejectOperation("motion-lease-pulse-rejected", error);
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
           "motion-command-publication-failed", error);
+    }
+    if (cancellation.IsCancellationRequested()) {
+      if (!inactive_pulse)
+        motion->Release(command_owner, command_generation);
+      return xgc2::adapter_runtime::OperationResult::Cancelled();
     }
     return xgc2_ros1_robot_adapter::EmptyOperationSuccess(
         operation.output_schema.version, operation.output_schema.fingerprint);
