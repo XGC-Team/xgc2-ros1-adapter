@@ -259,10 +259,8 @@ void MotionCommandPublisher::Stop() noexcept {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return;
-  // Before the first accepted intent cmd_vel remains genuinely absent. An
-  // active lease, however, is always fenced with one final zero.
-  if (active_)
-    publishZeroAndClearLocked();
+  // Stop/source disconnect/session loss/destruction always emits a final zero.
+  publishZeroAndClearLocked();
   stopped_ = true;
   publish_ = {};
 }

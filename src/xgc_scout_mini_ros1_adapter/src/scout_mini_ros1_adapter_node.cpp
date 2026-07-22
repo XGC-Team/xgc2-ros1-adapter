@@ -809,7 +809,7 @@ private:
           std::move(result.output));
     }
     return xgc2::adapter_runtime::UnaryResult::Failure(
-        result.error.error_class(), result.error.code(), result.error.message(),
+        result.error.class_(), result.error.code(), result.error.message(),
         result.error.retry_after_ms());
   }
 

@@ -219,9 +219,9 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "scout-mini-ros1-v4.yaml" \
+  "scout-mini-ros1-v5.yaml" \
   "xgc2-scout-mini-ros1-adapter" \
-  "robot-adapter-profile-v4.schema.json"
+  "robot-adapter-profile-v5.schema.json"
 
 package_adapter \
   "${MECANUM_PACKAGE}" \
