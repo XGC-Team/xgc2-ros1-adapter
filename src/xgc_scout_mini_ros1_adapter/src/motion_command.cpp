@@ -154,12 +154,16 @@ bool MotionCommandPublisher::SetIntent(const std::string &owner,
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return fail(error, "motion command publisher is stopped");
-  if (!nextGenerationLocked(generation, error))
-    return false;
-  // Publish every state change immediately. In particular, stop does not wait
-  // for the next 10 Hz local timer tick.
+  if (generation_ == std::numeric_limits<std::uint64_t>::max())
+    return fail(error, "motion command lease generation is exhausted");
+  const std::uint64_t candidate_generation = generation_ + 1u;
+  // Do not advance the lease fence until native publication succeeds. A
+  // failed replacement must leave the previous command releasable.
   if (!publishLocked(command, error))
     return false;
+  generation_ = candidate_generation;
+  if (generation != nullptr)
+    *generation = generation_;
   command_ = command;
   const bool inactive = command.linear.x == 0.0 && command.angular.z == 0.0;
   if (inactive) {
@@ -235,9 +239,10 @@ void MotionCommandPublisher::Stop() noexcept {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return;
-  // Stop/source disconnect/session loss/destruction always emits a final zero,
-  // even if the local lease has already become passive.
-  publishZeroAndClearLocked();
+  // Before the first accepted intent cmd_vel remains genuinely absent. An
+  // active lease, however, is always fenced with one final zero.
+  if (active_)
+    publishZeroAndClearLocked();
   stopped_ = true;
   publish_ = {};
 }

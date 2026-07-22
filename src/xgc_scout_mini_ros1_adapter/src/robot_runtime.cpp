@@ -409,8 +409,15 @@ bool validateNativeProfileContract(std::string *error) {
       motion.observes_count != 0u || motion.policy_count != 1u ||
       std::string(motion.operation_contract.side_effect) != "idempotent" ||
       std::string(motion.operation_contract.idempotency) != "required" ||
-      motion.operation_contract.cancellation_supported ||
+      !motion.operation_contract.cancellation_supported ||
       !motion.operation_contract.deadline_required ||
+      std::string(motion.operation_lease.pulse_endpoint_id) !=
+          "pulse-motion-intent-lease" ||
+      motion.operation_lease.heartbeat_interval_millis != 250u ||
+      motion.operation_lease.timeout_millis != 750u ||
+      !motion.operation_lease.volatile_supported ||
+      std::string(motion.operation_lease.inactive_parameter_values_json) !=
+          "{\"longitudinal\":0,\"yaw\":0}" ||
       !contract::channelPolicyInteger(motion, "timeout_ms",
                                       &operation_timeout_millis) ||
       operation_timeout_millis != 1000 ||

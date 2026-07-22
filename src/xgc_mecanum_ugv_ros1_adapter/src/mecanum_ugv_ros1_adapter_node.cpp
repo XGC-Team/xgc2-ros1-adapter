@@ -41,6 +41,34 @@ constexpr std::size_t kMaximumQueuedTelemetryBytesPerRobot =
 constexpr std::size_t kMaximumQueuedTelemetryItems = 8192u;
 constexpr std::size_t kMaximumQueuedTelemetryBytes = 64u * 1024u * 1024u;
 constexpr std::size_t kMaximumFlushItemsPerTick = 256u;
+constexpr std::int64_t kMaximumMotionLeaseNanoseconds = 1000000000LL;
+
+bool resolveMotionLease(
+    const xgc::adapter::v1::WorkContext &context,
+    const std::string &robot_id, std::int64_t now_unix_nanos,
+    ros::WallTime *expires_at, std::string *owner, std::string *error) {
+  if (expires_at == nullptr || owner == nullptr || error == nullptr)
+    return false;
+  if (context.idempotency_key().empty() || context.request_digest().empty()) {
+    *error = "motion command identity is incomplete";
+    return false;
+  }
+  const std::int64_t remaining =
+      context.deadline().deadline_unix_nanos() - now_unix_nanos;
+  const std::int64_t lease_nanoseconds =
+      std::min(remaining, kMaximumMotionLeaseNanoseconds);
+  if (lease_nanoseconds <= 0) {
+    *error = "motion command lease deadline has elapsed";
+    return false;
+  }
+  *owner = robot_id + "\n" + context.endpoint_id() + "\n" +
+           context.idempotency_key() + "\n" + context.request_digest();
+  *expires_at =
+      ros::WallTime::now() +
+      ros::WallDuration(static_cast<double>(lease_nanoseconds) / 1.0e9);
+  error->clear();
+  return true;
+}
 
 template <typename Function> class ScopeExit {
 public:
@@ -827,11 +855,25 @@ private:
     }
     if (cancellation.IsCancellationRequested())
       return xgc2::adapter_runtime::OperationResult::Cancelled();
-    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.yaw(),
+    ros::WallTime expires_at;
+    std::string command_owner;
+    if (!resolveMotionLease(request.context(), robot_id, now_unix_nanos,
+                            &expires_at, &command_owner, &error)) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid", error);
+    }
+    std::uint64_t command_generation = 0u;
+    if (!motion->SetIntent(command_owner, input.gear(), input.longitudinal(),
+                           input.yaw(), expires_at, &command_generation,
                            &error)) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
           "motion-command-publication-failed", error);
+    }
+    if (cancellation.IsCancellationRequested()) {
+      motion->Release(command_owner, command_generation);
+      return xgc2::adapter_runtime::OperationResult::Cancelled();
     }
     return xgc2_ros1_robot_adapter::EmptyOperationSuccess(
         operation.output_schema.version, operation.output_schema.fingerprint);

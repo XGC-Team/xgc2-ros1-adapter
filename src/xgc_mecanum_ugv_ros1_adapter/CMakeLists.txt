@@ -17,7 +17,7 @@ set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
   "${PROFILE_ROOT}/ros1/mecanum-ugv-ros1-v1.yaml")
 set(PROFILE_SCHEMA
-  "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
+  "${PROFILE_ROOT}/schema/robot-adapter-profile-v5.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-mecanum-ugv-ros1-adapter")
 
 if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
