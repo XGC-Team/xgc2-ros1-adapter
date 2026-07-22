@@ -901,15 +901,18 @@ private:
       return rejectOperation("invalid-command-owner",
                              "Scout motion lease has no run owner");
     std::uint64_t command_generation = 0u;
-    const bool applied = operation.lease_pulse
-                             ? motion->RenewIntent(
-                                   command_owner, input.gear(),
-                                   input.longitudinal(), input.yaw(), expires_at,
-                                   &command_generation, &error)
-                             : motion->SetIntent(
-                                   command_owner, input.gear(),
-                                   input.longitudinal(), input.yaw(), expires_at,
-                                   &command_generation, &error);
+    const bool inactive_pulse = operation.lease_pulse &&
+                                input.longitudinal() == 0 && input.yaw() == 0;
+    const bool applied =
+        inactive_pulse
+            ? motion->RevokeIntent(command_owner, &error)
+            : operation.lease_pulse
+                  ? motion->RenewIntent(command_owner, input.gear(),
+                                        input.longitudinal(), input.yaw(),
+                                        expires_at, &command_generation, &error)
+                  : motion->SetIntent(command_owner, input.gear(),
+                                      input.longitudinal(), input.yaw(),
+                                      expires_at, &command_generation, &error);
     if (!applied) {
       if (operation.lease_pulse)
         return rejectOperation("motion-lease-pulse-rejected", error);
@@ -918,7 +921,8 @@ private:
           "motion-command-publication-failed", error);
     }
     if (cancellation.IsCancellationRequested()) {
-      motion->Release(command_owner, command_generation);
+      if (!inactive_pulse)
+        motion->Release(command_owner, command_generation);
       return xgc2::adapter_runtime::OperationResult::Cancelled();
     }
     return xgc2_ros1_robot_adapter::EmptyOperationSuccess(

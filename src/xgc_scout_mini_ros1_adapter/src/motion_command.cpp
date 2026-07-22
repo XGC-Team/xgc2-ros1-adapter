@@ -216,6 +216,26 @@ bool MotionCommandPublisher::RenewIntent(const std::string &owner,
   return true;
 }
 
+bool MotionCommandPublisher::RevokeIntent(const std::string &owner,
+                                          std::string *error) {
+  if (owner.empty())
+    return fail(error, "motion command lease owner is required");
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_)
+    return fail(error, "motion command publisher is stopped");
+  if (!active_) {
+    if (error != nullptr)
+      error->clear();
+    return true;
+  }
+  if (owner_ != owner)
+    return fail(error, "motion command lease owner is not active");
+  publishZeroAndClearLocked();
+  if (error != nullptr)
+    error->clear();
+  return true;
+}
+
 void MotionCommandPublisher::Release(const std::string &owner,
                                      std::uint64_t generation) noexcept {
   std::lock_guard<std::mutex> lock(mutex_);

@@ -48,6 +48,7 @@ public:
                    std::int32_t longitudinal, std::int32_t yaw,
                    const ros::WallTime &expires_at,
                    std::uint64_t *generation, std::string *error);
+  bool RevokeIntent(const std::string &owner, std::string *error);
   void Release(const std::string &owner, std::uint64_t generation) noexcept;
   void PublishPeriodic(const ros::WallTime &now = ros::WallTime::now());
   void Stop() noexcept;
