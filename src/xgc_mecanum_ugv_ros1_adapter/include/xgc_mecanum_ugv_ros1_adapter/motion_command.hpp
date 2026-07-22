@@ -11,6 +11,8 @@
 
 namespace xgc_mecanum_ugv_ros1_adapter {
 
+// Preserve the deployed swarm-sync-sim Mecanum contract. These are not Scout
+// chassis limits.
 constexpr double kMecanumMaximumLinearVelocityMetersPerSecond = 1.5;
 constexpr double kMecanumMaximumAngularVelocityRadiansPerSecond =
     1.5707963267948966;
@@ -45,6 +47,7 @@ public:
 private:
   bool publishLocked(const geometry_msgs::Twist &command,
                      std::string *error) noexcept;
+
   std::mutex mutex_;
   PublishFunction publish_;
   geometry_msgs::Twist command_;

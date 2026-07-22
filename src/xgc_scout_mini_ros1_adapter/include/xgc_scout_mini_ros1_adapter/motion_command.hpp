@@ -18,13 +18,9 @@ bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
                          std::int32_t yaw, geometry_msgs::Twist *command,
                          std::string *error);
 
-// Holds one workflow-authorized discrete operator intent and republishes its
-// Twist locally until its lease expires. The public operation is the only way
-// to create or change an intent. Internal lease pulses may only extend the
-// exact owner/command already installed here.
-//
-// Every mutation and publication is serialized. A generation fence makes a
-// late cancellation/release harmless after a newer pulse or intent wins.
+// Holds the last discrete operator intent and republishes its Twist locally.
+// All publication is serialized with Stop(), so no stale non-zero command can
+// be published after the final zero command.
 class MotionCommandPublisher {
 public:
   using PublishFunction =
@@ -40,32 +36,18 @@ public:
   MotionCommandPublisher(const MotionCommandPublisher &) = delete;
   MotionCommandPublisher &operator=(const MotionCommandPublisher &) = delete;
 
-  bool SetIntent(const std::string &owner, std::uint32_t gear,
-                 std::int32_t longitudinal, std::int32_t yaw,
-                 const ros::WallTime &expires_at, std::uint64_t *generation,
-                 std::string *error);
-  bool RenewIntent(const std::string &owner, std::uint32_t gear,
-                   std::int32_t longitudinal, std::int32_t yaw,
-                   const ros::WallTime &expires_at,
-                   std::uint64_t *generation, std::string *error);
-  bool RevokeIntent(const std::string &owner, std::string *error);
-  void Release(const std::string &owner, std::uint64_t generation) noexcept;
-  void PublishPeriodic(const ros::WallTime &now = ros::WallTime::now());
+  bool SetIntent(std::uint32_t gear, std::int32_t longitudinal,
+                 std::int32_t yaw, std::string *error);
+  void PublishPeriodic();
   void Stop() noexcept;
 
 private:
   bool publishLocked(const geometry_msgs::Twist &command,
                      std::string *error) noexcept;
-  void publishZeroAndClearLocked() noexcept;
-  bool nextGenerationLocked(std::uint64_t *generation,
-                            std::string *error);
 
   std::mutex mutex_;
   PublishFunction publish_;
   geometry_msgs::Twist command_;
-  std::string owner_;
-  ros::WallTime expires_at_;
-  std::uint64_t generation_ = 0;
   bool active_ = false;
   bool stopped_ = false;
 };
