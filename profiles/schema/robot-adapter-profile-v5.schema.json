@@ -218,10 +218,47 @@
           "const": "required"
         },
         "cancellation_supported": {
-          "const": false
+          "type": "boolean"
         },
         "deadline_required": {
           "const": true
+        }
+      }
+    },
+    "operationLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pulse_endpoint_id",
+        "heartbeat_interval_ms",
+        "timeout_ms",
+        "inactive_parameter_values"
+      ],
+      "properties": {
+        "pulse_endpoint_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 5000
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 10000
+        },
+        "inactive_parameter_values": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean"]
+          }
         }
       }
     },
@@ -253,6 +290,9 @@
         },
         "operation_contract": {
           "$ref": "#/definitions/operationContract"
+        },
+        "lease": {
+          "$ref": "#/definitions/operationLease"
         },
         "input_message_id": {
           "type": "integer",

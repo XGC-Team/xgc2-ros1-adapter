@@ -163,6 +163,34 @@ docker exec "${container_name}" bash -lc '
     set -euo pipefail
 
     export DEBIAN_FRONTEND=noninteractive
+    sed -i \
+      -e "s#http://archive.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g" \
+      -e "s#http://security.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g" \
+      -e "s#http://ports.ubuntu.com/ubuntu-ports#https://ports.ubuntu.com/ubuntu-ports#g" \
+      /etc/apt/sources.list
+    printf "%s\n" "Acquire::Retries \"5\";" \
+      >/etc/apt/apt.conf.d/99-xgc2-retries
+    apt_update() {
+      local attempt
+      for attempt in 1 2 3; do
+        if apt-get update; then
+          return 0
+        fi
+        [[ "${attempt}" -lt 3 ]] || return 1
+        sleep "$((attempt * 5))"
+      done
+    }
+    apt_install() {
+      local attempt
+      for attempt in 1 2 3; do
+        if apt-get install "$@"; then
+          return 0
+        fi
+        [[ "${attempt}" -lt 3 ]] || return 1
+        sleep "$((attempt * 5))"
+        apt_update
+      done
+    }
     actual_deb_arch="$(dpkg --print-architecture)"
     if [[ -n "${EXPECTED_DEB_ARCH}" && "${actual_deb_arch}" != "${EXPECTED_DEB_ARCH}" ]]; then
       echo "container Debian architecture ${actual_deb_arch} does not match expected ${EXPECTED_DEB_ARCH}" >&2
@@ -170,8 +198,8 @@ docker exec "${container_name}" bash -lc '
     fi
     echo "Building Debian package for ${actual_deb_arch}"
 
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg
+    apt_update
+    apt_install -y --no-install-recommends ca-certificates curl gnupg
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
       -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
@@ -181,8 +209,8 @@ docker exec "${container_name}" bash -lc '
       echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] ${XGC2_APT_OVERLAY_URL%/} focal main" \
         > /etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
-    apt-get update
-    apt-get install -y --no-install-recommends \
+    apt_update
+    apt_install -y --no-install-recommends \
       build-essential \
       ca-certificates \
       cmake \
@@ -240,7 +268,7 @@ docker exec "${container_name}" bash -lc '
       PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
       XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
         /tmp/xgc2-common-bootstrap/protobuf/.xgc2/scripts/build_deb.sh
-      apt-get install -y \
+      apt_install -y \
         /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
 
       git clone --depth 1 --branch "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG}" \
@@ -252,11 +280,11 @@ docker exec "${container_name}" bash -lc '
       PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
         /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
-      apt-get install -y \
+      apt_install -y \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client1_*.deb \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
     else
-      apt-get install -y \
+      apt_install -y \
         "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
         "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
     fi
@@ -302,7 +330,7 @@ docker exec "${container_name}" bash -lc '
       --output-dir /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
-      apt-get install -y \
+      apt_install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb
