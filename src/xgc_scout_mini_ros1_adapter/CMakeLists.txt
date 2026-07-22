@@ -4,7 +4,7 @@ project(xgc_scout_mini_ros1_adapter VERSION 0.5.0)
 add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
 
 find_package(catkin REQUIRED COMPONENTS
-  nav_msgs
+  geometry_msgs
   roscpp
   scout_msgs
   sensor_msgs
@@ -66,6 +66,7 @@ include_directories(
 
 add_executable(${PROJECT_NAME}_node
   src/scout_mini_ros1_adapter_node.cpp
+  src/motion_command.cpp
   src/robot_runtime.cpp
   src/shutdown_signal.cpp
   "${CONTRACT_METADATA_HDR}"
@@ -86,6 +87,7 @@ if(CATKIN_ENABLE_TESTING)
   )
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp
+    src/motion_command.cpp
     src/robot_runtime.cpp
     src/shutdown_signal.cpp
   )
@@ -109,7 +111,7 @@ xgc2_add_robot_runtime_manifests(
   ${ADAPTER_DEFINITION_ID}
   ${PROJECT_VERSION}
   "XGC2 Scout Mini ROS1 Adapter"
-  "Scout Mini telemetry and channel-diagnostic capabilities."
+  "Scout Mini telemetry, discrete motion control, and channel diagnostics."
   "${PROFILE_FILE}"
   "${PROFILE_SCHEMA}"
 )

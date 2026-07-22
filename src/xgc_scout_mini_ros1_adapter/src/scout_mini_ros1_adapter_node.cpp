@@ -19,10 +19,13 @@
 #include <ros/master.h>
 #include <ros/ros.h>
 
+#include "xgc/semantic/ground/v1/control.pb.h"
+#include "xgc/v1/message.pb.h"
 #include "xgc2/adapter_runtime/client.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 #include "xgc2_ros1_robot_adapter/runtime_support.hpp"
 #include "xgc_scout_mini_ros1_adapter/generated_contract.hpp"
+#include "xgc_scout_mini_ros1_adapter/motion_command.hpp"
 #include "xgc_scout_mini_ros1_adapter/robot_runtime.hpp"
 #include "xgc_scout_mini_ros1_adapter/shutdown_signal.hpp"
 #include "xgc_scout_mini_ros1_adapter/telemetry_batch.hpp"
@@ -88,6 +91,105 @@ void logFromClient(xgc2::adapter_runtime::LogLevel level,
   }
 }
 
+xgc2::adapter_runtime::OperationResult rejectOperation(
+    const std::string &code, const std::string &message) {
+  return xgc2::adapter_runtime::OperationResult::Rejected(code, message);
+}
+
+struct ResolvedOperation {
+  contract::ChannelMetadata channel{};
+  contract::MessageMetadata input_schema{};
+  contract::MessageMetadata output_schema{};
+};
+
+bool resolveOperation(const std::string &profile_id,
+                      const std::string &operation_id,
+                      ResolvedOperation *resolved, bool *known,
+                      std::string *error) {
+  if (resolved == nullptr || known == nullptr || error == nullptr)
+    return false;
+  *resolved = {};
+  *known = false;
+
+  std::size_t channel_count = 0u;
+  const auto *channels = contract::profileChannels(profile_id, &channel_count);
+  if (channels == nullptr || channel_count == 0u) {
+    *known = true;
+    *error = "installed Scout operation profile is unavailable";
+    return false;
+  }
+  for (std::size_t index = 0u; index < channel_count; ++index) {
+    const auto &candidate = channels[index];
+    if (candidate.kind != contract::ChannelKind::kOperation)
+      continue;
+    if (candidate.operation_id == nullptr ||
+        candidate.operation_id[0] == '\0') {
+      *known = true;
+      *error = "installed Scout profile contains an unnamed operation";
+      return false;
+    }
+    if (operation_id != candidate.operation_id)
+      continue;
+    if (*known) {
+      *error = "installed Scout profile repeats operation " + operation_id;
+      return false;
+    }
+    *known = true;
+    resolved->channel = candidate;
+  }
+  if (!*known) {
+    *error = "unsupported Scout command endpoint";
+    return false;
+  }
+
+  const auto &channel = resolved->channel;
+  if (channel.channel_id == nullptr || channel.channel_id[0] == '\0' ||
+      channel.processor == nullptr || channel.processor[0] == '\0' ||
+      channel.input_message_id == 0u || channel.output_message_id != 1u ||
+      channel.operation_timeout_millis == 0u ||
+      channel.operation_contract.side_effect == nullptr ||
+      std::string(channel.operation_contract.side_effect) != "idempotent" ||
+      channel.operation_contract.idempotency == nullptr ||
+      std::string(channel.operation_contract.idempotency) != "required" ||
+      channel.operation_contract.cancellation_supported ||
+      !channel.operation_contract.deadline_required ||
+      !contract::messageMetadata(channel.input_message_id,
+                                 &resolved->input_schema) ||
+      !contract::messageMetadata(channel.output_message_id,
+                                 &resolved->output_schema) ||
+      resolved->input_schema.type_name == nullptr ||
+      resolved->input_schema.version == 0u ||
+      resolved->input_schema.fingerprint == 0u ||
+      resolved->output_schema.type_name == nullptr ||
+      resolved->output_schema.version == 0u ||
+      resolved->output_schema.fingerprint == 0u ||
+      std::string(resolved->output_schema.type_name) != "xgc.v1.Empty") {
+    *error = "installed Scout operation descriptor is incomplete or unsafe";
+    return false;
+  }
+  return true;
+}
+
+bool inputSchemaMatches(const xgc::v1::Payload &input,
+                        const ResolvedOperation &operation) {
+  if (!input.has_schema())
+    return false;
+  const auto &schema = input.schema();
+  return schema.message_id() == operation.channel.input_message_id &&
+         schema.type_name() == operation.input_schema.type_name &&
+         schema.schema_version() == operation.input_schema.version &&
+         schema.schema_fingerprint() == operation.input_schema.fingerprint;
+}
+
+bool channelEnabled(const xgc2_ros1_robot_adapter::RobotConfig &robot,
+                    const std::string &channel_id) {
+  for (const auto &channel : robot.channels) {
+    if (channel.channel_id == channel_id)
+      return channel.enabled;
+  }
+  return false;
+}
+
 xgc2::adapter_runtime::SourceOpenDecision
 rejectSource(xgc::adapter::v1::ErrorClass error_class, const std::string &code,
              const std::string &message) {
@@ -136,10 +238,20 @@ public:
           handleSourceClosed(request, error);
         };
 
+    xgc2::adapter_runtime::CapabilityCallbacks command;
+    command.operation =
+        [this](const xgc::adapter::v1::OperationRequest &request,
+               const xgc2::adapter_runtime::CancellationToken &cancellation) {
+          return handleCommand(request, cancellation);
+        };
+
     std::string error;
     if (!xgc2_ros1_robot_adapter::BindBootstrapCapability(
             &config, xgc2_ros1_robot_adapter::kTelemetryCapability,
-            std::move(telemetry), &error)) {
+            std::move(telemetry), &error) ||
+        !xgc2_ros1_robot_adapter::BindBootstrapCapability(
+            &config, xgc2_ros1_robot_adapter::kCommandCapability,
+            std::move(command), &error)) {
       throw std::runtime_error("cannot bind trusted robot capability: " +
                                error);
     }
@@ -152,9 +264,11 @@ public:
         };
     callbacks.clear_instance_spec = [this] { clearInstanceSpec(); };
     callbacks.stop_requested = [this](const xgc::adapter::v1::StopRequest &) {
+      stopMotionControllers();
       exit_requested_.store(true, std::memory_order_release);
     };
     callbacks.session_lost = [this](const std::string &) {
+      stopMotionControllers();
       exit_requested_.store(true, std::memory_order_release);
     };
     callbacks.log = logFromClient;
@@ -186,6 +300,8 @@ public:
 private:
   struct ConnectedRobot {
     std::shared_ptr<RobotRuntime> runtime;
+    std::shared_ptr<MotionCommandPublisher> motion;
+    xgc2_ros1_robot_adapter::RobotConfig robot;
     std::string work_id;
     xgc::adapter::v1::ScopeReference subject;
     xgc2_ros1_robot_adapter::InstanceSpecFence fence;
@@ -215,26 +331,32 @@ private:
       *error = "profile digest mismatch for robot " + robot.robot_id;
       return false;
     }
-    if (robot.parameters.size() != 1 ||
-        robot.parameters.find("namespace") == robot.parameters.end()) {
+    if (robot.parameters.size() != 2 ||
+        robot.parameters.find("namespace") == robot.parameters.end() ||
+        robot.parameters.find("mocap_rigid_body") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly the namespace parameter";
+               " must contain exactly namespace and mocap_rigid_body";
       return false;
     }
     std::string native_error;
-    if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error)) {
+    if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error) ||
+        !validMocapRigidBodyName(robot.parameters.at("mocap_rigid_body"),
+                                 &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +
                ": " + native_error;
       return false;
     }
     for (const auto &channel : robot.channels) {
-      contract::ChannelMetadata metadata;
+      contract::ChannelMetadata metadata{};
       if (!contract::channelMetadata(robot.profile_id, channel.channel_id,
-                                     &metadata) ||
-          metadata.kind != contract::ChannelKind::kStreamOut) {
+                                     &metadata)) {
         *error = "Scout robot " + robot.robot_id +
-                 " contains a non-telemetry or unknown channel " +
-                 channel.channel_id;
+                 " contains an unknown channel " + channel.channel_id;
+        return false;
+      }
+      if ((metadata.kind == contract::ChannelKind::kOperation) !=
+          (metadata.operation_timeout_millis > 0u)) {
+        *error = "Scout operation timing metadata is inconsistent";
         return false;
       }
     }
@@ -295,6 +417,8 @@ private:
       flush_cursor_ = 0;
     }
     for (auto &entry : removed) {
+      if (entry.second.motion)
+        entry.second.motion->Stop();
       if (entry.second.runtime)
         entry.second.runtime->Stop();
     }
@@ -312,9 +436,25 @@ private:
       flush_cursor_ = 0;
     }
     for (auto &entry : removed) {
+      if (entry.second.motion)
+        entry.second.motion->Stop();
       if (entry.second.runtime)
         entry.second.runtime->Stop();
     }
+  }
+
+  void stopMotionControllers() {
+    std::vector<std::shared_ptr<MotionCommandPublisher>> controllers;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      controllers.reserve(connected_.size());
+      for (const auto &entry : connected_) {
+        if (entry.second.motion)
+          controllers.push_back(entry.second.motion);
+      }
+    }
+    for (const auto &controller : controllers)
+      controller->Stop();
   }
 
   xgc2::adapter_runtime::SourceOpenDecision handleSourceOpen(
@@ -382,6 +522,7 @@ private:
       source_generation = ++next_source_generation_;
 
       ConnectedRobot connected;
+      connected.robot = robot;
       connected.work_id = context.work_id();
       connected.subject = context.subject();
       connected.fence = fence;
@@ -411,9 +552,13 @@ private:
 
     std::string native_error;
     std::shared_ptr<RobotRuntime> runtime;
-    auto native_resource = makeScopeExit([&runtime] {
+    std::shared_ptr<MotionCommandPublisher> motion;
+    auto native_resource = makeScopeExit([&runtime, &motion] {
+      if (motion)
+        motion->Stop();
       if (runtime)
         runtime->Stop();
+      motion.reset();
       runtime.reset();
     });
     runtime = RobotRuntime::Create(
@@ -427,6 +572,21 @@ private:
       return rejectSource(xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
                           "robot-native-source-open-failed", native_error);
     }
+    if (channelEnabled(robot, "operation.motion-intent")) {
+      std::string command_topic;
+      if (!resolveMotionCommandTopic(robot, &command_topic, &native_error)) {
+        detachSource(robot_id, context.work_id(), source_generation);
+        return rejectSource(xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+                            "motion-command-topic-invalid", native_error);
+      }
+      motion = MotionCommandPublisher::Create(node_handle_, command_topic,
+                                               &native_error);
+      if (!motion) {
+        detachSource(robot_id, context.work_id(), source_generation);
+        return rejectSource(xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
+                            "motion-command-publisher-failed", native_error);
+      }
+    }
 
     bool installed = false;
     {
@@ -438,6 +598,7 @@ private:
           found->second.fence.matches(fence) &&
           sameSubject(found->second.subject, context.subject())) {
         found->second.runtime = runtime;
+        found->second.motion = motion;
         installed = true;
       }
     }
@@ -472,6 +633,8 @@ private:
       return {};
     }
     auto runtime = std::move(found->second.runtime);
+    if (found->second.motion)
+      found->second.motion->Stop();
     queued_telemetry_items_ -= found->second.telemetry.size();
     queued_telemetry_bytes_ -= found->second.queued_bytes;
     connected_.erase(found);
@@ -526,6 +689,7 @@ private:
   void handleSourceClosed(const xgc::adapter::v1::SourceOpenRequest &request,
                           const xgc::adapter::v1::AdapterError &error) {
     std::shared_ptr<RobotRuntime> runtime;
+    std::shared_ptr<MotionCommandPublisher> motion;
     bool matched = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -537,6 +701,7 @@ private:
           continue;
         }
         runtime = std::move(found->second.runtime);
+        motion = std::move(found->second.motion);
         queued_telemetry_items_ -= found->second.telemetry.size();
         queued_telemetry_bytes_ -= found->second.queued_bytes;
         connected_.erase(found);
@@ -544,6 +709,8 @@ private:
         break;
       }
     }
+    if (motion)
+      motion->Stop();
     if (runtime)
       runtime->Stop();
     if (matched) {
@@ -551,6 +718,123 @@ private:
                       << request.context().work_id()
                       << " closed: " << error.message());
     }
+  }
+
+  xgc2::adapter_runtime::OperationResult handleCommand(
+      const xgc::adapter::v1::OperationRequest &request,
+      const xgc2::adapter_runtime::CancellationToken &cancellation) {
+    if (request.input().encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
+      return rejectOperation("invalid-command-encoding",
+                             "Scout command input must use protobuf encoding");
+    }
+    if (cancellation.IsCancellationRequested())
+      return xgc2::adapter_runtime::OperationResult::Cancelled();
+
+    std::string error;
+    std::string robot_id;
+    xgc2_ros1_robot_adapter::RobotConfig robot;
+    std::shared_ptr<MotionCommandPublisher> motion;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!has_configuration_) {
+        return rejectOperation("instance-spec-unavailable",
+                               "robot instance configuration is not applied");
+      }
+      if (!xgc2_ros1_robot_adapter::ResolveRobotSubject(
+              request.context(), configuration_, &robot_id, &error)) {
+        return rejectOperation("invalid-robot-subject", error);
+      }
+      const auto found = connected_.find(robot_id);
+      if (found == connected_.end() || !found->second.runtime ||
+          !found->second.fence.matches(configuration_.fence) ||
+          found->second.fence.revision !=
+              request.context().spec_revision() ||
+          !sameSubject(found->second.subject, request.context().subject())) {
+        return rejectOperation(
+            "telemetry-source-not-open",
+            "Scout command requires the current robot source to be open");
+      }
+      robot = found->second.robot;
+      motion = found->second.motion;
+    }
+    if (!motion) {
+      return rejectOperation("command-disabled",
+                             "Scout motion control is disabled by robot spec");
+    }
+
+    ResolvedOperation operation;
+    bool known_operation = false;
+    const std::string &endpoint = request.context().endpoint_id();
+    if (!resolveOperation(robot.profile_id, endpoint, &operation,
+                          &known_operation, &error)) {
+      if (!known_operation)
+        return rejectOperation("unknown-command-endpoint", error);
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid", error);
+    }
+    if (!channelEnabled(robot, operation.channel.channel_id)) {
+      return rejectOperation("command-disabled",
+                             endpoint + " is disabled by the robot spec");
+    }
+    if (!inputSchemaMatches(request.input(), operation)) {
+      return rejectOperation(
+          "invalid-command-schema",
+          "Scout command schema does not match the installed operation");
+    }
+    if (request.context().deadline().deadline_unix_nanos() <= 0) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid",
+          "Scout motion operation requires an absolute deadline");
+    }
+    const auto now_unix_nanos =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    if (request.context().deadline().deadline_unix_nanos() <= now_unix_nanos) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_DEADLINE,
+          "command-deadline-exceeded",
+          "Scout motion operation deadline elapsed before publication");
+    }
+
+    const std::string processor(operation.channel.processor);
+    if (processor != "scout-mini.set-motion-intent") {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid",
+          "installed Scout operation processor has no native binding");
+    }
+    xgc::semantic::ground::v1::MotionIntentRequest input;
+    if (operation.input_schema.type_name !=
+        input.GetDescriptor()->full_name()) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid",
+          "Scout motion-intent input schema drifted");
+    }
+    if (!input.ParseFromString(request.input().value())) {
+      return rejectOperation("invalid-command-input",
+                             "MotionIntentRequest is malformed");
+    }
+    if (input.gear() < 1u || input.gear() > 3u ||
+        input.longitudinal() < -1 || input.longitudinal() > 1 ||
+        input.yaw() < -1 || input.yaw() > 1) {
+      return rejectOperation(
+          "invalid-command-input",
+          "gear must be 1..3 and longitudinal/yaw must be -1..1");
+    }
+    if (cancellation.IsCancellationRequested())
+      return xgc2::adapter_runtime::OperationResult::Cancelled();
+    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.yaw(),
+                           &error)) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
+          "motion-command-publication-failed", error);
+    }
+    return xgc2_ros1_robot_adapter::EmptyOperationSuccess(
+        operation.output_schema.version, operation.output_schema.fingerprint);
   }
 
   bool readTelemetryBatch(const std::string &robot_id,
@@ -660,14 +944,20 @@ private:
     if (!periodic_lock.owns_lock())
       return;
     std::vector<std::shared_ptr<RobotRuntime>> runtimes;
+    std::vector<std::shared_ptr<MotionCommandPublisher>> controllers;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       runtimes.reserve(connected_.size());
+      controllers.reserve(connected_.size());
       for (const auto &entry : connected_) {
         if (entry.second.runtime)
           runtimes.push_back(entry.second.runtime);
+        if (entry.second.motion)
+          controllers.push_back(entry.second.motion);
       }
     }
+    for (const auto &controller : controllers)
+      controller->PublishPeriodic();
     const ros::WallTime now = ros::WallTime::now();
     for (const auto &runtime : runtimes)
       runtime->emitPeriodic(now);

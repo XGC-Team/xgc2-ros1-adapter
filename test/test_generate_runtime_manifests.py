@@ -30,7 +30,7 @@ VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
-PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v5.yaml"
+PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v6.yaml"
 SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v4.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
@@ -53,6 +53,8 @@ MESSAGE_ROLES = {
     2003: "telemetry",
     2004: "telemetry",
     2005: "telemetry",
+    2006: "telemetry",
+    2007: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
     3001: "telemetry",
@@ -64,17 +66,21 @@ MESSAGE_ROLES = {
     3201: "request",
     3202: "request",
     3203: "request",
+    3204: "request",
     4001: "configuration",
     4002: "telemetry",
 }
 TYPE_NAMES = {
     1: "xgc.v1.Empty",
     2005: "xgc.semantic.common.v1.VehicleHealth",
+    2006: "xgc.semantic.common.v1.SpeedEstimate",
+    2007: "xgc.semantic.common.v1.DistanceEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
+    3204: "xgc.semantic.ground.v1.MotionIntentRequest",
     4001: "xgc.robot.v1.RobotAdapterSpec",
     4002: "xgc.robot.v1.RobotMessage",
 }
@@ -210,13 +216,44 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         )
         scout = scout_catalog["profiles"][0]
         self.assertEqual(scout["robotKind"], "scout_mini")
-        self.assertEqual(scout["semantics"]["operations"], [])
+        self.assertEqual(
+            scout["semantics"]["operations"],
+            [
+                {
+                    "id": "set-motion-intent",
+                    "channelId": "operation.motion-intent",
+                    "timeoutMillis": 1000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": ["gear", "longitudinal", "yaw"],
+                        "properties": {
+                            "gear": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3,
+                            },
+                            "longitudinal": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                            "yaw": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+        )
         self.assertEqual(
             [
                 condition["channelId"]
                 for condition in scout["semantics"]["onlineConditions"]
             ],
-            ["state.health", "state.pose"],
+            ["state.health", "vrpn.position"],
         )
         self.assertEqual(
             scout["semantics"]["onlineConditions"][0]["predicate"],
@@ -371,13 +408,31 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(SCOUT_PROFILE)
         )
         self.assertEqual(
-            [
+            {
                 capability["ref"]["id"]
                 for capability in scout_adapter["adapters"][0][
                     "capabilityManifest"
                 ]["capabilities"]
-            ],
-            ["xgc.robot.telemetry"],
+            },
+            {"xgc.robot.command", "xgc.robot.telemetry"},
+        )
+        scout_command = next(
+            capability
+            for capability in scout_adapter["adapters"][0][
+                "capabilityManifest"
+            ]["capabilities"]
+            if capability["ref"]["id"] == "xgc.robot.command"
+        )
+        self.assertEqual(len(scout_command["endpoints"]), 1)
+        self.assertEqual(
+            scout_command["endpoints"][0]["endpointId"],
+            "set-motion-intent",
+        )
+        self.assertEqual(
+            scout_command["endpoints"][0]["inputSchema"]["messageId"], 3204
+        )
+        self.assertEqual(
+            scout_command["endpoints"][0]["defaultTimeoutMillis"], 1000
         )
         self.assertEqual(
             scout_process["definitions"][0]["command"]["env"],

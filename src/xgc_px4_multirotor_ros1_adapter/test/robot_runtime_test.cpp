@@ -141,6 +141,18 @@ TEST(VisionRelay, RejectsNonFiniteOrDegeneratePoses) {
   EXPECT_DOUBLE_EQ(0.0, pose.pose.orientation.w);
 }
 
+TEST(LocalizationError, ComputesEuclideanPositionDistance) {
+  geometry_msgs::Point local;
+  geometry_msgs::Point mocap;
+  local.x = 4.0;
+  local.y = 6.0;
+  local.z = 15.0;
+  mocap.x = 1.0;
+  mocap.y = 2.0;
+  mocap.z = 3.0;
+  EXPECT_DOUBLE_EQ(13.0, positionDistanceMeters(local, mocap));
+}
+
 TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   NativeProfileConfig native;
   std::string error;
@@ -149,6 +161,8 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
 
   EXPECT_EQ("/uav1/mavros/local_position/pose", native.pose_endpoint);
   EXPECT_EQ("/vrpn_client_node/FS150_01/pose", native.mocap_endpoint);
+  EXPECT_EQ("/vrpn_client_node/FS150_01/twist",
+            native.mocap_velocity_endpoint);
   EXPECT_EQ("/uav1/mavros/vision_pose/pose", native.vision_pose_endpoint);
   EXPECT_EQ("/uav1/mavros/cmd/arming", native.arm_service_endpoint);
   EXPECT_EQ("/uav1/mavros/set_mode", native.mode_service_endpoint);
@@ -203,25 +217,25 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
-  const char *digest = contract::profileDigest("px4.multirotor.ros1.v5");
+  const char *digest = contract::profileDigest("px4.multirotor.ros1.v6");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("px4.multirotor.ros1.v5", "state.pose", &pose));
+      contract::channelMetadata("px4.multirotor.ros1.v6", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata arm;
-  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v5",
+  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v6",
                                         "operation.arm", &arm));
   EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
   EXPECT_EQ(3201u, arm.input_message_id);
 
   contract::OperationMetadata mode;
   ASSERT_TRUE(contract::operationMetadata(
-      "px4.multirotor.ros1.v5", "set-flight-mode", &mode));
+      "px4.multirotor.ros1.v6", "set-flight-mode", &mode));
   EXPECT_EQ(5000u, mode.timeout_millis);
   const std::string parameter_schema(mode.parameter_schema_json);
   EXPECT_NE(std::string::npos, parameter_schema.find("additionalProperties"));
@@ -238,10 +252,12 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
   EXPECT_TRUE(contract::messageMetadata(3003, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3004, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3005, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(2006, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(2007, &metadata));
 }
 
 TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
-  EXPECT_EQ(11117760798558164355ULL, contract::kRegistryFingerprint);
+  EXPECT_EQ(15680722017424302315ULL, contract::kRegistryFingerprint);
 
   contract::MessageMetadata metadata;
   ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));

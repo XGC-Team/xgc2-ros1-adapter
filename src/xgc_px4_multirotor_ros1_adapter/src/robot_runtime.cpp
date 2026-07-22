@@ -258,7 +258,7 @@ struct NativeChannelBinding {
   bool observes;
 };
 
-const std::array<NativeChannelBinding, 15u> kNativeBindings{{
+const std::array<NativeChannelBinding, 18u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
     {"state.mocap.pose", "px4.mocap-vision-relay",
@@ -267,6 +267,15 @@ const std::array<NativeChannelBinding, 15u> kNativeBindings{{
     {"state.velocity", "px4.velocity-estimate",
      contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.VelocityEstimate", 1u, 0u, false},
+    {"state.mocap.velocity", "px4.mocap-velocity",
+     contract::ChannelKind::kStreamOut,
+     "xgc.semantic.common.v1.VelocityEstimate", 1u, 0u, false},
+    {"state.mocap.speed", "px4.mocap-speed",
+     contract::ChannelKind::kStreamOut,
+     "xgc.semantic.common.v1.SpeedEstimate", 1u, 0u, false},
+    {"state.localization.error", "px4.localization-position-error",
+     contract::ChannelKind::kStreamOut,
+     "xgc.semantic.common.v1.DistanceEstimate", 0u, 0u, true},
     {"state.imu", "px4.imu-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.ImuEstimate", 1u, 0u, false},
     {"state.power", "px4.power-status", contract::ChannelKind::kStreamOut,
@@ -564,6 +573,7 @@ bool BuildNativeProfileConfig(
   NativeProfileConfig candidate;
   std::string flight_state_endpoint;
   std::string flight_extended_state_endpoint;
+  std::string mocap_speed_endpoint;
   const auto input = contract::EndpointKind::kInput;
   const auto service = contract::EndpointKind::kService;
   const auto output_kind = contract::EndpointKind::kOutput;
@@ -576,6 +586,12 @@ bool BuildNativeProfileConfig(
       !resolveEndpoint(config, "state.mocap.pose", output_kind, "output",
                        "geometry_msgs/PoseStamped",
                        &candidate.vision_pose_endpoint, error) ||
+      !resolveEndpoint(config, "state.mocap.velocity", input, "velocity",
+                       "geometry_msgs/TwistStamped",
+                       &candidate.mocap_velocity_endpoint, error) ||
+      !resolveEndpoint(config, "state.mocap.speed", input, "velocity",
+                       "geometry_msgs/TwistStamped", &mocap_speed_endpoint,
+                       error) ||
       !resolveEndpoint(config, "state.velocity", input, "velocity",
                        "geometry_msgs/TwistStamped",
                        &candidate.velocity_endpoint, error) ||
@@ -618,6 +634,10 @@ bool BuildNativeProfileConfig(
       flight_extended_state_endpoint != candidate.extended_state_endpoint) {
     return fail(error,
                 "PX4 health and flight channels must share state inputs");
+  }
+  if (candidate.mocap_velocity_endpoint != mocap_speed_endpoint) {
+    return fail(error,
+                "PX4 mocap velocity and speed must share the VRPN twist input");
   }
 
   contract::ChannelMetadata mocap{};
@@ -719,6 +739,12 @@ bool BuildNativeProfileConfig(
   if (error != nullptr)
     error->clear();
   return true;
+}
+
+double positionDistanceMeters(const geometry_msgs::Point &left,
+                              const geometry_msgs::Point &right) {
+  return std::hypot(std::hypot(left.x - right.x, left.y - right.y),
+                    left.z - right.z);
 }
 
 std::shared_ptr<RobotRuntime>
@@ -828,6 +854,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       extended_state_endpoint_(
           std::move(native_profile.extended_state_endpoint)),
       mocap_endpoint_(std::move(native_profile.mocap_endpoint)),
+      mocap_velocity_endpoint_(
+          std::move(native_profile.mocap_velocity_endpoint)),
       vision_pose_endpoint_(std::move(native_profile.vision_pose_endpoint)),
       local_setpoint_endpoint_(
           std::move(native_profile.local_setpoint_endpoint)),
@@ -883,6 +911,7 @@ void RobotRuntime::Stop() {
 
   pose_subscriber_.shutdown();
   mocap_subscriber_.shutdown();
+  mocap_velocity_subscriber_.shutdown();
   velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
   power_subscriber_.shutdown();
@@ -950,6 +979,11 @@ bool RobotRuntime::install(std::string *error) {
 
 bool RobotRuntime::installPx4(std::string *error) {
   const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
+  if (channelRequired("state.localization.error")) {
+    ensureSourceLocked(
+        "state.localization.error",
+        channelStaleAfterSeconds(profile_id_, "state.localization.error"));
+  }
   if (channelRequired("state.pose")) {
     ensureSourceLocked("state.pose",
                        channelStaleAfterSeconds(profile_id_, "state.pose"));
@@ -991,6 +1025,29 @@ bool RobotRuntime::installPx4(std::string *error) {
             self->mocapPoseCallback(message);
         });
     if (!requireRosRegistration(mocap_subscriber_, mocap_endpoint_, error))
+      return false;
+  }
+  if (channelRequired("state.mocap.velocity") ||
+      channelRequired("state.mocap.speed")) {
+    if (channelRequired("state.mocap.velocity")) {
+      ensureSourceLocked(
+          "state.mocap.velocity",
+          channelStaleAfterSeconds(profile_id_, "state.mocap.velocity"));
+    }
+    if (channelRequired("state.mocap.speed")) {
+      ensureSourceLocked(
+          "state.mocap.speed",
+          channelStaleAfterSeconds(profile_id_, "state.mocap.speed"));
+    }
+    mocap_velocity_subscriber_ =
+        node_handle_.subscribe<geometry_msgs::TwistStamped>(
+            mocap_velocity_endpoint_, 20,
+            [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+              if (const auto self = weak_self.lock())
+                self->mocapVelocityCallback(message);
+            });
+    if (!requireRosRegistration(mocap_velocity_subscriber_,
+                                mocap_velocity_endpoint_, error))
       return false;
   }
   if (channelRequired("state.velocity")) {
@@ -1244,6 +1301,28 @@ void RobotRuntime::recordOutputLocked(const std::string &channel_id) {
   ++source_it->second.output_samples;
 }
 
+void RobotRuntime::emitPositionErrorLocked(
+    const ros::Time &source_stamp, const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *messages) {
+  if (!has_local_position_ || !has_mocap_position_ || messages == nullptr)
+    return;
+  if (channelRequired("state.localization.error"))
+    recordSourceLocked("state.localization.error", now);
+  const double distance =
+      positionDistanceMeters(local_position_, mocap_position_);
+  if (channelEnabled("state.localization.error") && std::isfinite(distance) &&
+      shouldEmitLocked("state.localization.error", now)) {
+    xgc::semantic::common::v1::DistanceEstimate payload;
+    payload.set_frame_id(local_position_frame_id_);
+    payload.set_meters(distance);
+    messages->push_back(makeEnvelopeLocked("state.localization.error",
+                                           source_stamp, payload));
+    recordOutputLocked("state.localization.error");
+  } else if (channelEnabled("state.localization.error")) {
+    ++sources_["state.localization.error"].dropped_samples;
+  }
+}
+
 std::uint64_t
 RobotRuntime::sourceAgeMillisLocked(const std::string &channel_id,
                                     const ros::WallTime &now) const {
@@ -1266,6 +1345,13 @@ void RobotRuntime::px4PoseCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("state.pose", now);
+    if (std::isfinite(message->pose.position.x) &&
+        std::isfinite(message->pose.position.y) &&
+        std::isfinite(message->pose.position.z)) {
+      local_position_ = message->pose.position;
+      local_position_frame_id_ = message->header.frame_id;
+      has_local_position_ = true;
+    }
     if (channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1277,6 +1363,7 @@ void RobotRuntime::px4PoseCallback(
     } else if (channelEnabled("state.pose")) {
       ++sources_["state.pose"].dropped_samples;
     }
+    emitPositionErrorLocked(message->header.stamp, now, &output);
   }
   emit(std::move(output));
 }
@@ -1298,6 +1385,8 @@ void RobotRuntime::mocapPoseCallback(
       ++sources_["state.mocap.pose"].dropped_samples;
       return;
     }
+    mocap_position_ = normalized_message.pose.position;
+    has_mocap_position_ = true;
 
     if (channelEnabled("state.mocap.pose") &&
         native_outputs_active_.load(std::memory_order_acquire) &&
@@ -1322,9 +1411,55 @@ void RobotRuntime::mocapPoseCallback(
     } else if (channelEnabled("state.mocap.pose")) {
       ++sources_["state.mocap.pose"].dropped_samples;
     }
+    emitPositionErrorLocked(normalized_message.header.stamp, now, &output);
   }
   if (publish_vision)
     vision_pose_publisher_.publish(vision_message);
+  emit(std::move(output));
+}
+
+void RobotRuntime::mocapVelocityCallback(
+    const geometry_msgs::TwistStamped::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (channelRequired("state.mocap.velocity"))
+      recordSourceLocked("state.mocap.velocity", now);
+    if (channelRequired("state.mocap.speed"))
+      recordSourceLocked("state.mocap.speed", now);
+
+    if (channelEnabled("state.mocap.velocity") &&
+        shouldEmitLocked("state.mocap.velocity", now)) {
+      xgc::semantic::common::v1::VelocityEstimate payload;
+      payload.set_frame_id(message->header.frame_id);
+      copyVector(message->twist.linear, payload.mutable_linear());
+      copyVector(message->twist.angular, payload.mutable_angular());
+      output.push_back(makeEnvelopeLocked(
+          "state.mocap.velocity", message->header.stamp, payload));
+      recordOutputLocked("state.mocap.velocity");
+    } else if (channelEnabled("state.mocap.velocity")) {
+      ++sources_["state.mocap.velocity"].dropped_samples;
+    }
+
+    const double speed = std::hypot(
+        std::hypot(message->twist.linear.x, message->twist.linear.y),
+        message->twist.linear.z);
+    if (channelEnabled("state.mocap.speed") && std::isfinite(speed) &&
+        shouldEmitLocked("state.mocap.speed", now)) {
+      xgc::semantic::common::v1::SpeedEstimate payload;
+      payload.set_frame_id(message->header.frame_id);
+      payload.set_meters_per_second(speed);
+      output.push_back(makeEnvelopeLocked(
+          "state.mocap.speed", message->header.stamp, payload));
+      recordOutputLocked("state.mocap.speed");
+    } else if (channelEnabled("state.mocap.speed")) {
+      ++sources_["state.mocap.speed"].dropped_samples;
+    }
+  }
   emit(std::move(output));
 }
 

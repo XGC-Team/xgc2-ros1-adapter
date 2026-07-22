@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <regex>
 #include <stdexcept>
 #include <utility>
 
@@ -88,11 +90,17 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 7u> kNativeBindings{{
-    {"state.pose", "scout-mini.pose-estimate", "odometry",
-     "nav_msgs/Odometry", "xgc.semantic.common.v1.PoseEstimate", false},
-    {"state.velocity", "scout-mini.velocity-estimate", "odometry",
-     "nav_msgs/Odometry", "xgc.semantic.common.v1.VelocityEstimate", false},
+const std::array<NativeChannelBinding, 9u> kNativeBindings{{
+    {"vrpn.position", "scout-mini.vrpn-pose", "pose",
+     "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
+    {"vrpn.velocity", "scout-mini.vrpn-velocity", "velocity",
+     "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.VelocityEstimate",
+     false},
+    {"vrpn.speed", "scout-mini.vrpn-speed", "velocity",
+     "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.SpeedEstimate",
+     false},
+    {"command.velocity", "scout-mini.velocity-command-observation", "command",
+     "geometry_msgs/Twist", "xgc.semantic.common.v1.VelocityEstimate", false},
     {"state.imu", "scout-mini.imu-estimate", "imu", "sensor_msgs/Imu",
      "xgc.semantic.common.v1.ImuEstimate", false},
     {"state.power", "scout-mini.power-status", "chassis_status",
@@ -149,6 +157,19 @@ bool resolveInputEndpoint(
       channel, contract::EndpointKind::kInput, role);
   if (endpoint == nullptr)
     return fail(error, "generated input endpoint is missing: " + channel_id);
+  return resolveEndpointTemplate(*endpoint, config, resolved, error);
+}
+
+bool resolveOutputEndpoint(
+    const xgc2_ros1_robot_adapter::RobotConfig &config,
+    const std::string &channel_id, std::string *resolved, std::string *error) {
+  contract::ChannelMetadata channel{};
+  if (!contract::channelMetadata(config.profile_id, channel_id, &channel))
+    return fail(error, "generated channel is missing: " + channel_id);
+  const auto *endpoint = contract::channelEndpoint(
+      channel, contract::EndpointKind::kOutput, "output");
+  if (endpoint == nullptr)
+    return fail(error, "generated output endpoint is missing: " + channel_id);
   return resolveEndpointTemplate(*endpoint, config, resolved, error);
 }
 
@@ -209,6 +230,23 @@ bool validRobotNamespace(const std::string &value, std::string *error) {
   return true;
 }
 
+bool validMocapRigidBodyName(const std::string &value, std::string *error) {
+  static const std::regex pattern("^[A-Za-z][A-Za-z0-9_]*$");
+  if (!std::regex_match(value, pattern)) {
+    if (error != nullptr)
+      *error = "mocap rigid-body name must match ^[A-Za-z][A-Za-z0-9_]*$";
+    return false;
+  }
+  return true;
+}
+
+bool resolveMotionCommandTopic(
+    const xgc2_ros1_robot_adapter::RobotConfig &config, std::string *topic,
+    std::string *error) {
+  return resolveOutputEndpoint(config, "operation.motion-intent", topic,
+                               error);
+}
+
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds) {
   if (last_seen.isZero() || stale_after_seconds <= 0.0 || now < last_seen) {
@@ -218,6 +256,33 @@ bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
 }
 
 bool scoutIsOnline(bool status_fresh) { return status_fresh; }
+
+double vrpnForwardSpeedMetersPerSecond(
+    double velocity_x, double velocity_y, double velocity_z,
+    double orientation_x, double orientation_y, double orientation_z,
+    double orientation_w) {
+  const double norm = std::hypot(
+      std::hypot(orientation_x, orientation_y),
+      std::hypot(orientation_z, orientation_w));
+  if (!std::isfinite(velocity_x) || !std::isfinite(velocity_y) ||
+      !std::isfinite(velocity_z) || !std::isfinite(norm) || norm <= 1e-12) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  const double x = orientation_x / norm;
+  const double y = orientation_y / norm;
+  const double z = orientation_z / norm;
+  const double w = orientation_w / norm;
+
+  // Pose orientation rotates body-frame vectors into the VRPN world frame.
+  // Its first rotation-matrix column is therefore the body X axis expressed
+  // in world coordinates. Projecting world velocity onto that axis rejects
+  // lateral slip and preserves reverse-motion sign.
+  const double body_x_world_x = 1.0 - 2.0 * (y * y + z * z);
+  const double body_x_world_y = 2.0 * (x * y + w * z);
+  const double body_x_world_z = 2.0 * (x * z - w * y);
+  return body_x_world_x * velocity_x + body_x_world_y * velocity_y +
+         body_x_world_z * velocity_z;
+}
 
 double scoutBatteryPercentage(double voltage_v) {
   constexpr double kEmptyVoltage = 20.5;
@@ -247,17 +312,20 @@ bool validateNativeProfileContract(std::string *error) {
   std::size_t parameter_count = 0u;
   const auto *parameters =
       contract::profileParameters(contract::kProfileId, &parameter_count);
-  if (parameters == nullptr || parameter_count != 1u ||
-      std::string(parameters[0].name) != "namespace" ||
+  if (parameters == nullptr || parameter_count != 2u ||
+      std::string(parameters[0].name) != "mocap_rigid_body" ||
       parameters[0].type != contract::ParameterType::kString ||
-      !parameters[0].required) {
+      !parameters[0].required ||
+      std::string(parameters[1].name) != "namespace" ||
+      parameters[1].type != contract::ParameterType::kString ||
+      !parameters[1].required) {
     return fail(error, "Scout native parameter binding is incomplete");
   }
 
   std::size_t channel_count = 0u;
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
-  if (channels == nullptr || channel_count != kNativeBindings.size())
+  if (channels == nullptr || channel_count != kNativeBindings.size() + 1u)
     return fail(error, "Scout native channel binding is not exhaustive");
 
   for (const auto &binding : kNativeBindings) {
@@ -297,19 +365,69 @@ bool validateNativeProfileContract(std::string *error) {
         }
       }
     } else {
-      if (channel.endpoint_count != 1u || channel.observes_count != 0u) {
+      const bool fused_speed = std::string(binding.channel_id) == "vrpn.speed";
+      if (channel.endpoint_count != (fused_speed ? 2u : 1u) ||
+          channel.observes_count != 0u) {
         return fail(error, std::string("Scout endpoint binding drifted: ") +
                                binding.channel_id);
       }
-      const auto &endpoint = channel.endpoints[0];
-      if (endpoint.kind != contract::EndpointKind::kInput ||
-          std::string(endpoint.role) != binding.endpoint_role ||
-          std::string(endpoint.ros_type) != binding.ros_type ||
-          std::string(endpoint.name_template).empty()) {
+      const auto *endpoint = contract::channelEndpoint(
+          channel, contract::EndpointKind::kInput, binding.endpoint_role);
+      if (endpoint == nullptr ||
+          std::string(endpoint->ros_type) != binding.ros_type ||
+          std::string(endpoint->name_template).empty()) {
         return fail(error, std::string("Scout ROS endpoint binding drifted: ") +
                                binding.channel_id);
       }
+      if (fused_speed) {
+        const auto *pose_endpoint = contract::channelEndpoint(
+            channel, contract::EndpointKind::kInput, "pose");
+        if (pose_endpoint == nullptr ||
+            std::string(pose_endpoint->ros_type) !=
+                "geometry_msgs/PoseStamped" ||
+            std::string(pose_endpoint->name_template).empty()) {
+          return fail(error,
+                      "Scout VRPN speed pose binding drifted");
+        }
+      }
     }
+  }
+
+  contract::ChannelMetadata motion{};
+  contract::MessageMetadata motion_input{};
+  contract::MessageMetadata motion_output{};
+  std::int64_t operation_timeout_millis = 0;
+  if (!contract::channelMetadata(contract::kProfileId,
+                                 "operation.motion-intent", &motion) ||
+      motion.kind != contract::ChannelKind::kOperation ||
+      std::string(motion.processor) != "scout-mini.set-motion-intent" ||
+      std::string(motion.operation_id) != "set-motion-intent" ||
+      motion.input_message_id != 3204u || motion.output_message_id != 1u ||
+      motion.output_rate_hz != 0.0 ||
+      motion.operation_timeout_millis != 1000u ||
+      motion.stale_after_millis != 0u || motion.endpoint_count != 1u ||
+      motion.observes_count != 0u || motion.policy_count != 1u ||
+      std::string(motion.operation_contract.side_effect) != "idempotent" ||
+      std::string(motion.operation_contract.idempotency) != "required" ||
+      motion.operation_contract.cancellation_supported ||
+      !motion.operation_contract.deadline_required ||
+      !contract::channelPolicyInteger(motion, "timeout_ms",
+                                      &operation_timeout_millis) ||
+      operation_timeout_millis != 1000 ||
+      !contract::messageMetadata(motion.input_message_id, &motion_input) ||
+      std::string(motion_input.type_name) !=
+          "xgc.semantic.ground.v1.MotionIntentRequest" ||
+      !contract::messageMetadata(motion.output_message_id, &motion_output) ||
+      std::string(motion_output.type_name) != "xgc.v1.Empty") {
+    return fail(error, "Scout motion-intent operation binding drifted");
+  }
+  const auto *motion_endpoint = contract::channelEndpoint(
+      motion, contract::EndpointKind::kOutput, "output");
+  if (motion_endpoint == nullptr ||
+      std::string(motion_endpoint->name_template) != "cmd_vel" ||
+      std::string(motion_endpoint->ros_type) != "geometry_msgs/Twist" ||
+      motion_endpoint->scope != contract::EndpointScope::kRobotNamespace) {
+    return fail(error, "Scout motion-intent output topic binding drifted");
   }
   if (error != nullptr)
     error->clear();
@@ -343,6 +461,18 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     }
     return nullptr;
   }
+  const auto mocap_it = config.parameters.find("mocap_rigid_body");
+  std::string mocap_error;
+  if (mocap_it == config.parameters.end() ||
+      !validMocapRigidBodyName(mocap_it->second, &mocap_error)) {
+    if (error != nullptr) {
+      *error = mocap_it == config.parameters.end()
+                   ? "robot configuration is missing required "
+                     "mocap_rigid_body parameter"
+                   : "invalid mocap rigid-body name: " + mocap_error;
+    }
+    return nullptr;
+  }
 
   std::set<std::string> enabled_channels;
   for (const auto &channel : config.channels) {
@@ -368,16 +498,25 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     }
   }
 
-  std::string odometry_endpoint;
-  std::string velocity_endpoint;
+  std::string pose_endpoint;
+  std::string vrpn_velocity_endpoint;
+  std::string speed_endpoint;
+  std::string speed_pose_endpoint;
+  std::string command_velocity_endpoint;
   std::string imu_endpoint;
   std::string status_endpoint;
   std::string health_endpoint;
   std::string chassis_endpoint;
-  if (!resolveInputEndpoint(config, "state.pose", "odometry",
-                            &odometry_endpoint, error) ||
-      !resolveInputEndpoint(config, "state.velocity", "odometry",
-                            &velocity_endpoint, error) ||
+  if (!resolveInputEndpoint(config, "vrpn.position", "pose",
+                            &pose_endpoint, error) ||
+      !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
+                            &vrpn_velocity_endpoint, error) ||
+      !resolveInputEndpoint(config, "vrpn.speed", "velocity",
+                            &speed_endpoint, error) ||
+      !resolveInputEndpoint(config, "vrpn.speed", "pose",
+                            &speed_pose_endpoint, error) ||
+      !resolveInputEndpoint(config, "command.velocity", "command",
+                            &command_velocity_endpoint, error) ||
       !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint,
                             error) ||
       !resolveInputEndpoint(config, "state.power", "chassis_status",
@@ -388,8 +527,10 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &chassis_endpoint, error)) {
     return nullptr;
   }
-  if (odometry_endpoint != velocity_endpoint ||
-      status_endpoint != health_endpoint || status_endpoint != chassis_endpoint) {
+  if (vrpn_velocity_endpoint != speed_endpoint ||
+      pose_endpoint != speed_pose_endpoint ||
+      status_endpoint != health_endpoint ||
+      status_endpoint != chassis_endpoint) {
     fail(error,
          "Scout processors sharing a subscription resolved to different "
          "native endpoints");
@@ -401,7 +542,10 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        config.profile_id, namespace_it->second, spec_revision,
                        std::move(enabled_channels),
                        std::move(required_channels),
-                       std::move(odometry_endpoint), std::move(imu_endpoint),
+                       mocap_it->second, std::move(pose_endpoint),
+                       std::move(vrpn_velocity_endpoint),
+                       std::move(command_velocity_endpoint),
+                       std::move(imu_endpoint),
                        std::move(status_endpoint), std::move(emitter)));
   try {
     if (!runtime->install(error)) {
@@ -420,18 +564,24 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::uint64_t spec_revision,
                            std::set<std::string> enabled_channels,
                            std::set<std::string> required_channels,
-                           std::string odometry_endpoint,
+                           std::string mocap_rigid_body,
+                           std::string pose_endpoint,
+                           std::string vrpn_velocity_endpoint,
+                           std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string status_endpoint,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
       robot_namespace_(cleanTopicPart(robot_namespace)),
+      mocap_rigid_body_(std::move(mocap_rigid_body)),
       spec_revision_(spec_revision),
       enabled_channels_(std::move(enabled_channels)),
       required_channels_(std::move(required_channels)),
       emitter_(std::move(emitter)),
-      odometry_endpoint_(std::move(odometry_endpoint)),
+      pose_endpoint_(std::move(pose_endpoint)),
+      vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
+      command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
       status_endpoint_(std::move(status_endpoint)) {}
 
@@ -471,7 +621,9 @@ void RobotRuntime::Stop() {
     stopping_ = true;
   }
 
-  odometry_subscriber_.shutdown();
+  pose_subscriber_.shutdown();
+  vrpn_velocity_subscriber_.shutdown();
+  command_velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
   status_subscriber_.shutdown();
 
@@ -500,25 +652,56 @@ bool RobotRuntime::install(std::string *error) {
     // AsyncSpinner callbacks may start immediately after subscribe(). Keep
     // tracking state and subscriber registration behind the callback mutex.
     std::lock_guard<std::mutex> lock(mutex_);
-    if (required_channels_.count("state.pose") != 0u ||
-        required_channels_.count("state.velocity") != 0u) {
-      if (required_channels_.count("state.pose") != 0u)
-        ensureSourceLocked(
-            "state.pose",
-            channelStaleAfterSeconds(profile_id_, "state.pose"));
-      if (required_channels_.count("state.velocity") != 0u)
-        ensureSourceLocked(
-            "state.velocity",
-            channelStaleAfterSeconds(profile_id_, "state.velocity"));
-      odometry_subscriber_ = node_handle_.subscribe<nav_msgs::Odometry>(
-          odometry_endpoint_, 20,
-          [weak_self](const nav_msgs::Odometry::ConstPtr &message) {
+    if (required_channels_.count("vrpn.position") != 0u ||
+        required_channels_.count("vrpn.speed") != 0u) {
+      ensureSourceLocked(
+          "vrpn.position",
+          channelStaleAfterSeconds(profile_id_, "vrpn.position"));
+      pose_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
+          pose_endpoint_, 20,
+          [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
             if (const auto self = weak_self.lock()) {
-              self->odometryCallback(message);
+              self->poseCallback(message);
             }
           });
-      if (!requireRosRegistration(odometry_subscriber_, odometry_endpoint_,
-                                  error))
+      if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("vrpn.velocity") != 0u ||
+        required_channels_.count("vrpn.speed") != 0u) {
+      if (required_channels_.count("vrpn.velocity") != 0u)
+        ensureSourceLocked(
+            "vrpn.velocity",
+            channelStaleAfterSeconds(profile_id_, "vrpn.velocity"));
+      if (required_channels_.count("vrpn.speed") != 0u)
+        ensureSourceLocked(
+            "vrpn.speed", channelStaleAfterSeconds(profile_id_, "vrpn.speed"));
+      vrpn_velocity_subscriber_ =
+          node_handle_.subscribe<geometry_msgs::TwistStamped>(
+              vrpn_velocity_endpoint_, 20,
+              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                if (const auto self = weak_self.lock()) {
+                  self->vrpnVelocityCallback(message);
+                }
+              });
+      if (!requireRosRegistration(vrpn_velocity_subscriber_,
+                                  vrpn_velocity_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("command.velocity") != 0u) {
+      ensureSourceLocked(
+          "command.velocity",
+          channelStaleAfterSeconds(profile_id_, "command.velocity"));
+      command_velocity_subscriber_ =
+          node_handle_.subscribe<geometry_msgs::Twist>(
+              command_velocity_endpoint_, 20,
+              [weak_self](const geometry_msgs::Twist::ConstPtr &message) {
+                if (const auto self = weak_self.lock()) {
+                  self->commandVelocityCallback(message);
+                }
+              });
+      if (!requireRosRegistration(command_velocity_subscriber_,
+                                  command_velocity_endpoint_, error))
         return false;
     }
     if (required_channels_.count("state.imu") != 0u) {
@@ -535,7 +718,8 @@ bool RobotRuntime::install(std::string *error) {
         return false;
     }
     if (required_channels_.count("state.power") != 0u ||
-        required_channels_.count("state.health") != 0u) {
+        required_channels_.count("state.health") != 0u ||
+        required_channels_.count("state.chassis") != 0u) {
       if (required_channels_.count("state.power") != 0u)
         ensureSourceLocked(
             "state.power",
@@ -544,6 +728,10 @@ bool RobotRuntime::install(std::string *error) {
         ensureSourceLocked(
             "state.health",
             channelStaleAfterSeconds(profile_id_, "state.health"));
+      if (required_channels_.count("state.chassis") != 0u)
+        ensureSourceLocked(
+            "state.chassis",
+            channelStaleAfterSeconds(profile_id_, "state.chassis"));
       status_subscriber_ = node_handle_.subscribe<scout_msgs::ScoutStatus>(
           status_endpoint_, 10,
           [weak_self](const scout_msgs::ScoutStatus::ConstPtr &message) {
@@ -670,8 +858,8 @@ RobotRuntime::sourceAgeMillisLocked(const std::string &endpoint,
       std::max(0.0, (now - it->second.last_seen).toSec() * 1000.0));
 }
 
-void RobotRuntime::odometryCallback(
-    const nav_msgs::Odometry::ConstPtr &message) {
+void RobotRuntime::poseCallback(
+    const geometry_msgs::PoseStamped::ConstPtr &message) {
   CallbackGuard callback(this);
   if (!callback)
     return;
@@ -679,36 +867,98 @@ void RobotRuntime::odometryCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (required_channels_.count("state.pose") != 0u)
-      recordSourceLocked("state.pose", now);
-    if (required_channels_.count("state.velocity") != 0u)
-      recordSourceLocked("state.velocity", now);
-    if (channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
+    vrpn_orientation_ = message->pose.orientation;
+    has_vrpn_orientation_ = true;
+    recordSourceLocked("vrpn.position", now);
+    if (channelEnabled("vrpn.position") &&
+        shouldEmitLocked("vrpn.position", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(message->header.frame_id);
-      payload.set_child_frame_id(message->child_frame_id);
-      copyVector(message->pose.pose.position, payload.mutable_position());
-      copyQuaternion(message->pose.pose.orientation,
+      payload.set_child_frame_id(mocap_rigid_body_);
+      copyVector(message->pose.position, payload.mutable_position());
+      copyQuaternion(message->pose.orientation,
                      payload.mutable_orientation());
-      copyCovariance(message->pose.covariance, payload.mutable_covariance());
-      output.push_back(makeEnvelopeLocked("state.pose",
+      output.push_back(makeEnvelopeLocked("vrpn.position",
                                           message->header.stamp, payload));
-      recordOutputLocked("state.pose");
-    } else if (channelEnabled("state.pose")) {
-      ++sources_["state.pose"].dropped_samples;
+      recordOutputLocked("vrpn.position");
+    } else if (channelEnabled("vrpn.position")) {
+      ++sources_["vrpn.position"].dropped_samples;
     }
-    if (channelEnabled("state.velocity") &&
-        shouldEmitLocked("state.velocity", now)) {
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::commandVelocityCallback(
+    const geometry_msgs::Twist::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("command.velocity", now);
+    if (channelEnabled("command.velocity") &&
+        shouldEmitLocked("command.velocity", now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
-      payload.set_frame_id(message->child_frame_id);
-      copyVector(message->twist.twist.linear, payload.mutable_linear());
-      copyVector(message->twist.twist.angular, payload.mutable_angular());
-      copyCovariance(message->twist.covariance, payload.mutable_covariance());
-      output.push_back(makeEnvelopeLocked("state.velocity",
+      copyVector(message->linear, payload.mutable_linear());
+      copyVector(message->angular, payload.mutable_angular());
+      output.push_back(
+          makeEnvelopeLocked("command.velocity", ros::Time(), payload));
+      recordOutputLocked("command.velocity");
+    } else if (channelEnabled("command.velocity")) {
+      ++sources_["command.velocity"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::vrpnVelocityCallback(
+    const geometry_msgs::TwistStamped::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (required_channels_.count("vrpn.velocity") != 0u)
+      recordSourceLocked("vrpn.velocity", now);
+    if (required_channels_.count("vrpn.speed") != 0u)
+      recordSourceLocked("vrpn.speed", now);
+
+    if (channelEnabled("vrpn.velocity") &&
+        shouldEmitLocked("vrpn.velocity", now)) {
+      xgc::semantic::common::v1::VelocityEstimate payload;
+      payload.set_frame_id(message->header.frame_id);
+      copyVector(message->twist.linear, payload.mutable_linear());
+      copyVector(message->twist.angular, payload.mutable_angular());
+      output.push_back(makeEnvelopeLocked("vrpn.velocity",
                                           message->header.stamp, payload));
-      recordOutputLocked("state.velocity");
-    } else if (channelEnabled("state.velocity")) {
-      ++sources_["state.velocity"].dropped_samples;
+      recordOutputLocked("vrpn.velocity");
+    } else if (channelEnabled("vrpn.velocity")) {
+      ++sources_["vrpn.velocity"].dropped_samples;
+    }
+
+    const double speed = has_vrpn_orientation_ &&
+                                 sourceFreshLocked("vrpn.position", now)
+                             ? vrpnForwardSpeedMetersPerSecond(
+                                   message->twist.linear.x,
+                                   message->twist.linear.y,
+                                   message->twist.linear.z,
+                                   vrpn_orientation_.x, vrpn_orientation_.y,
+                                   vrpn_orientation_.z, vrpn_orientation_.w)
+                             : std::numeric_limits<double>::quiet_NaN();
+    if (channelEnabled("vrpn.speed") && std::isfinite(speed) &&
+        shouldEmitLocked("vrpn.speed", now)) {
+      xgc::semantic::common::v1::SpeedEstimate payload;
+      payload.set_frame_id(mocap_rigid_body_);
+      payload.set_meters_per_second(speed);
+      output.push_back(makeEnvelopeLocked("vrpn.speed", message->header.stamp,
+                                          payload));
+      recordOutputLocked("vrpn.speed");
+    } else if (channelEnabled("vrpn.speed")) {
+      ++sources_["vrpn.speed"].dropped_samples;
     }
   }
   emit(std::move(output));

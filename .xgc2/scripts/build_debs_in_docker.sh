@@ -200,7 +200,6 @@ docker exec "${container_name}" bash -lc '
       rsync \
       ros-noetic-geometry-msgs \
       ros-noetic-mavros-msgs \
-      ros-noetic-nav-msgs \
       ros-noetic-roscpp \
       ros-noetic-roslaunch \
       ros-noetic-rosmsg \

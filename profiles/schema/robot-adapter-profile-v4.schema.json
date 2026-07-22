@@ -244,7 +244,12 @@
         },
         "operation_id": {
           "type": "string",
-          "enum": ["arm", "set-flight-mode", "reboot-autopilot"]
+          "enum": [
+            "arm",
+            "set-flight-mode",
+            "reboot-autopilot",
+            "set-motion-intent"
+          ]
         },
         "operation_contract": {
           "$ref": "#/definitions/operationContract"
@@ -309,8 +314,17 @@
               "operation_contract",
               "input_message_id",
               "output_message_id",
-              "service",
               "policy"
+            ],
+            "oneOf": [
+              {
+                "required": ["service"],
+                "not": {"required": ["output"]}
+              },
+              {
+                "required": ["output"],
+                "not": {"required": ["service"]}
+              }
             ],
             "properties": {
               "policy": {
@@ -373,6 +387,18 @@
           "then": {
             "properties": {
               "input_message_id": {"const": 3203},
+              "output_message_id": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "set-motion-intent"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3204},
               "output_message_id": {"const": 1}
             }
           }

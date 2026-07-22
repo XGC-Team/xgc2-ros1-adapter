@@ -84,7 +84,7 @@ check_ros_package() {
 check_ros_package \
   "${PX4_ROS_PACKAGE}" \
   "px4_multirotor_ros1_adapter.launch" \
-  "px4-multirotor-ros1-v5.yaml" \
+  "px4-multirotor-ros1-v6.yaml" \
   "xgc2-px4-multirotor-ros1-adapter"
 PX4_SERVICE_HELPER="${PREFIX}/lib/${PX4_ROS_PACKAGE}/${PX4_ROS_PACKAGE}_service_helper"
 test -x "${PX4_SERVICE_HELPER}"

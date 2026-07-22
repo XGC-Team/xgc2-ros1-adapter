@@ -35,6 +35,7 @@ struct NativeProfileConfig {
   std::string state_endpoint;
   std::string extended_state_endpoint;
   std::string mocap_endpoint;
+  std::string mocap_velocity_endpoint;
   std::string vision_pose_endpoint;
   std::string local_setpoint_endpoint;
   std::string attitude_setpoint_endpoint;
@@ -61,6 +62,8 @@ bool validRobotNamespace(const std::string &value, std::string *error);
 bool validMocapRigidBodyName(const std::string &value, std::string *error);
 bool validVisionPose(const geometry_msgs::PoseStamped &message);
 bool normalizeVisionPose(geometry_msgs::PoseStamped *message);
+double positionDistanceMeters(const geometry_msgs::Point &left,
+                              const geometry_msgs::Point &right);
 std::uint32_t localSetpointValidFields(std::uint16_t type_mask);
 std::uint32_t attitudeSetpointValidFields(std::uint8_t type_mask);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
@@ -144,11 +147,16 @@ private:
   void recordStateSourceLocked(const std::string &channel_id,
                                bool count_sample);
   void recordOutputLocked(const std::string &channel_id);
+  void emitPositionErrorLocked(
+      const ros::Time &source_stamp, const ros::WallTime &now,
+      std::vector<xgc::robot::v1::RobotMessage> *messages);
   std::uint64_t sourceAgeMillisLocked(const std::string &channel_id,
                                       const ros::WallTime &now) const;
 
   void px4PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
   void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void mocapVelocityCallback(
+      const geometry_msgs::TwistStamped::ConstPtr &message);
   void
   px4VelocityCallback(const geometry_msgs::TwistStamped::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
@@ -191,6 +199,7 @@ private:
   const std::string state_endpoint_;
   const std::string extended_state_endpoint_;
   const std::string mocap_endpoint_;
+  const std::string mocap_velocity_endpoint_;
   const std::string vision_pose_endpoint_;
   const std::string local_setpoint_endpoint_;
   const std::string attitude_setpoint_endpoint_;
@@ -218,10 +227,16 @@ private:
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
   ros::WallTime last_vision_publish_;
+  geometry_msgs::Point local_position_;
+  geometry_msgs::Point mocap_position_;
+  std::string local_position_frame_id_;
+  bool has_local_position_ = false;
+  bool has_mocap_position_ = false;
   std::atomic<bool> native_outputs_active_{false};
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;
+  ros::Subscriber mocap_velocity_subscriber_;
   ros::Subscriber velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber power_subscriber_;

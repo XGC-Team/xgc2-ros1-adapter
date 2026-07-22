@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: px4.multirotor.ros1.v5
-profile_version: 5
+profile_id: px4.multirotor.ros1.v6
+profile_version: 6
 native_protocol: ros1
 robot_kind: px4_multirotor
 description: PX4 multirotor telemetry, mocap relay, diagnostics, and native commands through MAVROS.
@@ -21,6 +21,9 @@ semantic_traits:
   channel_stale_after_ms:
     state.pose: 1000
     state.mocap.pose: 500
+    state.mocap.velocity: 500
+    state.mocap.speed: 500
+    state.localization.error: 500
   online_conditions:
     - channel_id: state.flight
       maximum_age_ms: 2000
@@ -70,6 +73,37 @@ channels:
       velocity:
         name: mavros/local_position/velocity_local
         type: geometry_msgs/TwistStamped
+
+  - id: state.mocap.velocity
+    kind: stream_out
+    output_message_id: 2002
+    processor: px4.mocap-velocity
+    output_rate_hz: 10
+    inputs:
+      velocity:
+        name: vrpn_client_node/{mocap_rigid_body}/twist
+        type: geometry_msgs/TwistStamped
+        scope: global
+
+  - id: state.mocap.speed
+    kind: stream_out
+    output_message_id: 2006
+    processor: px4.mocap-speed
+    output_rate_hz: 10
+    inputs:
+      velocity:
+        name: vrpn_client_node/{mocap_rigid_body}/twist
+        type: geometry_msgs/TwistStamped
+        scope: global
+
+  - id: state.localization.error
+    kind: stream_out
+    output_message_id: 2007
+    processor: px4.localization-position-error
+    output_rate_hz: 10
+    observes:
+      - state.pose
+      - state.mocap.pose
 
   - id: state.imu
     kind: stream_out
@@ -168,6 +202,9 @@ channels:
     observes:
       - state.pose
       - state.mocap.pose
+      - state.mocap.velocity
+      - state.mocap.speed
+      - state.localization.error
       - state.velocity
       - state.imu
       - state.power

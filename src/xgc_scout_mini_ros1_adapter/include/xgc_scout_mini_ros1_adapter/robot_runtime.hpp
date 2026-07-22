@@ -10,7 +10,9 @@
 #include <string>
 #include <vector>
 
-#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/Twist.h>
+#include <geometry_msgs/TwistStamped.h>
 #include <ros/ros.h>
 #include <scout_msgs/ScoutStatus.h>
 #include <sensor_msgs/Imu.h>
@@ -24,9 +26,17 @@ namespace xgc_scout_mini_ros1_adapter {
 std::string topicName(const std::string &robot_namespace,
                       const std::string &relative_name);
 bool validRobotNamespace(const std::string &value, std::string *error);
+bool validMocapRigidBodyName(const std::string &value, std::string *error);
+bool resolveMotionCommandTopic(
+    const xgc2_ros1_robot_adapter::RobotConfig &config, std::string *topic,
+    std::string *error);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
 bool scoutIsOnline(bool status_fresh);
+double vrpnForwardSpeedMetersPerSecond(
+    double velocity_x, double velocity_y, double velocity_z,
+    double orientation_x, double orientation_y, double orientation_z,
+    double orientation_w);
 double scoutBatteryPercentage(double voltage_v);
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
@@ -82,7 +92,9 @@ private:
                std::uint64_t spec_revision,
                std::set<std::string> enabled_channels,
                std::set<std::string> required_channels,
-               std::string odometry_endpoint, std::string imu_endpoint,
+               std::string mocap_rigid_body, std::string pose_endpoint,
+               std::string vrpn_velocity_endpoint,
+               std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string status_endpoint, EnvelopeEmitter emitter);
 
   bool install(std::string *error);
@@ -105,7 +117,10 @@ private:
   std::uint64_t sourceAgeMillisLocked(const std::string &endpoint,
                                       const ros::WallTime &now) const;
 
-  void odometryCallback(const nav_msgs::Odometry::ConstPtr &message);
+  void poseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void vrpnVelocityCallback(
+      const geometry_msgs::TwistStamped::ConstPtr &message);
+  void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void statusCallback(const scout_msgs::ScoutStatus::ConstPtr &message);
   void emitHealthLocked(const ros::WallTime &now,
@@ -117,12 +132,15 @@ private:
   const std::string robot_id_;
   const std::string profile_id_;
   const std::string robot_namespace_;
+  const std::string mocap_rigid_body_;
   const std::uint64_t spec_revision_;
   const std::set<std::string> enabled_channels_;
   const std::set<std::string> required_channels_;
   const EnvelopeEmitter emitter_;
 
-  const std::string odometry_endpoint_;
+  const std::string pose_endpoint_;
+  const std::string vrpn_velocity_endpoint_;
+  const std::string command_velocity_endpoint_;
   const std::string imu_endpoint_;
   const std::string status_endpoint_;
 
@@ -137,8 +155,12 @@ private:
 
   scout_msgs::ScoutStatus scout_status_;
   bool has_status_ = false;
+  geometry_msgs::Quaternion vrpn_orientation_;
+  bool has_vrpn_orientation_ = false;
 
-  ros::Subscriber odometry_subscriber_;
+  ros::Subscriber pose_subscriber_;
+  ros::Subscriber vrpn_velocity_subscriber_;
+  ros::Subscriber command_velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber status_subscriber_;
 };

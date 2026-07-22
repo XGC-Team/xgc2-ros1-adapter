@@ -40,6 +40,7 @@ OPERATION_INPUT_TYPES = {
     "arm": "xgc.semantic.aerial.v1.ArmRequest",
     "set-flight-mode": "xgc.semantic.aerial.v1.ModeRequest",
     "reboot-autopilot": "xgc.semantic.aerial.v1.AutopilotRebootRequest",
+    "set-motion-intent": "xgc.semantic.ground.v1.MotionIntentRequest",
 }
 
 KIND_ENUM = {
@@ -150,9 +151,10 @@ def validate_operation_parameter_schema(schema, label):
         if not isinstance(definition, dict) or set(definition) not in (
             {"type"},
             {"type", "enum"},
+            {"type", "minimum", "maximum"},
         ):
             raise ValueError(
-                "{} must declare only type and an optional enum".format(
+                "{} must declare only type with an optional enum or bounds".format(
                     property_label
                 )
             )
@@ -177,6 +179,29 @@ def validate_operation_parameter_schema(schema, label):
                         property_label
                     )
                 )
+        if "minimum" in definition:
+            if definition["type"] not in {"integer", "number"}:
+                raise ValueError(
+                    "{} bounds require an integer or number type".format(
+                        property_label
+                    )
+                )
+            minimum = definition["minimum"]
+            maximum = definition["maximum"]
+            if (
+                isinstance(minimum, bool)
+                or isinstance(maximum, bool)
+                or not isinstance(minimum, (int, float))
+                or not isinstance(maximum, (int, float))
+                or not math.isfinite(minimum)
+                or not math.isfinite(maximum)
+                or minimum > maximum
+                or (
+                    definition["type"] == "integer"
+                    and (not isinstance(minimum, int) or not isinstance(maximum, int))
+                )
+            ):
+                raise ValueError("{} has invalid bounds".format(property_label))
     return schema
 
 
@@ -218,6 +243,16 @@ def operation_parameter_schema(profile_path, channel, messages):
             )
         properties = {
             "mode": {"type": "string", "enum": list(allowed_modes)}
+        }
+    elif operation_id == "set-motion-intent":
+        properties = {
+            "gear": {"type": "integer", "minimum": 1, "maximum": 3},
+            "longitudinal": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 1,
+            },
+            "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
         }
     else:
         properties = {}
@@ -503,7 +538,7 @@ def validate_profile_document(profile_path, profile, schema, messages):
         }
         allowed_native_fields = {
             "stream_out": {"inputs", "observes", "output"},
-            "operation": {"service"},
+            "operation": {"service", "output"},
         }[kind]
         unexpected_native_fields = native_fields - allowed_native_fields
         if unexpected_native_fields:
@@ -513,6 +548,12 @@ def validate_profile_document(profile_path, profile, schema, messages):
                     channel_id,
                     kind,
                     sorted(unexpected_native_fields),
+                )
+            )
+        if kind == "operation" and len(native_fields) != 1:
+            raise ValueError(
+                "{}: operation channel {} must declare exactly one native service or output endpoint".format(
+                    profile_path, channel_id
                 )
             )
 

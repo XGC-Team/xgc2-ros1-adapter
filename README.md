@@ -6,7 +6,7 @@ specialize that abstraction for PX4 multirotors and Scout Mini robots.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v5` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v6` |
 | `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v4` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
@@ -52,12 +52,38 @@ typed MAVROS services. Flight modes are restricted by the source Profile's
 single native allowlist; reboot requires a known, fresh, connected, disarmed
 vehicle state.
 
-Scout Mini telemetry consumes `odom`, `imu/data_raw`, and `scout_status` under
-the configured namespace. `state.power.voltageV` retains the measured chassis
-voltage. `state.power.percentage` is currently a clamped linear projection from
+Scout Mini telemetry consumes the global
+`/vrpn_client_node/{mocap_rigid_body}/pose` and `twist` streams plus `cmd_vel`,
+`imu/data_raw`, and `scout_status` under the configured namespace.
+`vrpn.position` records position and orientation, while `vrpn.velocity`
+retains the raw linear and angular vectors. The Adapter combines both VRPN
+streams to project world-frame linear velocity onto the signed body X axis;
+that processed scalar is `vrpn.speed`, so lateral slip is excluded.
+`command.velocity` separately records the commanded
+linear and angular velocity; the Adapter does not consume odometry. `state.power.voltageV`
+retains the measured chassis voltage. `state.power.percentage` is currently a
+clamped linear projection from
 the Scout Mini manual's 20.5 V protection voltage (0%) to 29.2 V full-charge
 voltage (100%); it is a display estimate rather than a battery state-of-charge
-model. The Scout profile intentionally exposes no command capability.
+model.
+
+Scout Mini also exposes the idempotent `set-motion-intent` operation with a
+three-field `xgc.semantic.ground.v1.MotionIntentRequest`: `gear` is 1, 2, or 3,
+while `longitudinal` and `yaw` are each -1, 0, or 1. The Adapter maps the three
+gears to 0.5/1.0/1.5 m/s and approximately 0.1745/0.3490/0.5235 rad/s, clamps
+the generated `geometry_msgs/Twist` to the Scout SDK limits, and republishes
+the latest intent to the profile-owned namespaced `cmd_vel` topic at 10 Hz.
+The caller only sends state changes; a zero intent is published immediately.
+The intent remains active until the next change or until the robot source,
+instance spec, or Adapter Runtime session is closed, at which point the
+Adapter publishes a final zero command. Before the first motion operation the
+Adapter does not publish `cmd_vel`, so an enabled but unused command channel
+does not take control away from another ROS controller. `command.velocity`
+observes the same topic for telemetry. Real-robot bringup must place
+`scout_base_node` in that same namespace and subscribe to relative `cmd_vel`
+(or explicitly remap its legacy absolute `/cmd_vel` subscription); the Adapter
+does not publish a second global command topic because that would couple
+multiple Scout robots.
 
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
@@ -92,8 +118,8 @@ sudo apt update
 sudo apt install \
   libxgc2-adapter-runtime-client-dev \
   xgc2-protobuf-dev \
+  ros-noetic-geometry-msgs \
   ros-noetic-mavros-msgs \
-  ros-noetic-nav-msgs \
   ros-noetic-scout-msgs \
   python3-jsonschema \
   python3-yaml

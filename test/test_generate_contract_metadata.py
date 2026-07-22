@@ -20,7 +20,7 @@ SCHEMA_PATH = (
     / "schema"
     / "robot-adapter-profile-v4.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v5.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
 SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 
@@ -36,6 +36,8 @@ MESSAGE_ROLES = {
     2003: "telemetry",
     2004: "telemetry",
     2005: "telemetry",
+    2006: "telemetry",
+    2007: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
     3001: "telemetry",
@@ -47,17 +49,21 @@ MESSAGE_ROLES = {
     3201: "request",
     3202: "request",
     3203: "request",
+    3204: "request",
     4001: "configuration",
     4002: "telemetry",
 }
 
 TYPE_NAMES = {
     2005: "xgc.semantic.common.v1.VehicleHealth",
+    2006: "xgc.semantic.common.v1.SpeedEstimate",
+    2007: "xgc.semantic.common.v1.DistanceEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
+    3204: "xgc.semantic.ground.v1.MotionIntentRequest",
 }
 
 
@@ -106,7 +112,7 @@ class ContractGeneratorTest(unittest.TestCase):
             SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v5"]
+        px4 = px4_profiles["px4.multirotor.ros1.v6"]
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
@@ -114,6 +120,9 @@ class ContractGeneratorTest(unittest.TestCase):
                 "state.pose",
                 "state.mocap.pose",
                 "state.velocity",
+                "state.mocap.velocity",
+                "state.mocap.speed",
+                "state.localization.error",
                 "state.imu",
                 "state.power",
                 "state.health",
@@ -142,6 +151,28 @@ class ContractGeneratorTest(unittest.TestCase):
             px4_channels["state.mocap.pose"]["stale_after_millis"], 500
         )
         self.assertEqual(px4_channels["state.velocity"]["stale_after_millis"], 2000)
+        self.assertEqual(
+            px4_channels["state.mocap.velocity"]["stale_after_millis"], 500
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.speed"]["stale_after_millis"], 500
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.velocity"]["output_message_id"], 2002
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.speed"]["output_message_id"], 2006
+        )
+        self.assertEqual(
+            px4_channels["state.localization.error"]["output_message_id"], 2007
+        )
+        self.assertEqual(
+            px4_channels["state.localization.error"]["stale_after_millis"], 500
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.velocity"]["endpoints"][0]["name_template"],
+            "vrpn_client_node/{mocap_rigid_body}/twist",
+        )
         self.assertEqual(
             px4_channels["state.mocap.pose"]["endpoints"][0],
             {
@@ -205,8 +236,97 @@ class ContractGeneratorTest(unittest.TestCase):
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
         scout = scout_profiles["scout-mini.ros1.v4"]
-        self.assertFalse(
-            any(channel["kind"] == "operation" for channel in scout["channels"])
+        scout_channels = {channel["id"]: channel for channel in scout["channels"]}
+        self.assertNotIn("state.pose", scout_channels)
+        self.assertNotIn("state.velocity", scout_channels)
+        self.assertEqual(
+            scout_channels["vrpn.position"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "pose",
+                "name_template": "vrpn_client_node/{mocap_rigid_body}/pose",
+                "ros_type": "geometry_msgs/PoseStamped",
+                "scope": "global",
+            },
+        )
+        self.assertEqual(
+            scout_channels["command.velocity"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "command",
+                "name_template": "cmd_vel",
+                "ros_type": "geometry_msgs/Twist",
+                "scope": "robot_namespace",
+            },
+        )
+        self.assertEqual(
+            scout_channels["vrpn.velocity"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "velocity",
+                "name_template": "vrpn_client_node/{mocap_rigid_body}/twist",
+                "ros_type": "geometry_msgs/TwistStamped",
+                "scope": "global",
+            },
+        )
+        self.assertEqual(
+            scout_channels["vrpn.speed"]["output_message_id"], 2006
+        )
+        self.assertEqual(
+            {endpoint["role"] for endpoint in scout_channels["vrpn.speed"]["endpoints"]},
+            {"pose", "velocity"},
+        )
+        motion = scout_channels["operation.motion-intent"]
+        self.assertEqual(motion["kind"], "operation")
+        self.assertEqual(motion["operation_id"], "set-motion-intent")
+        self.assertEqual(motion["input_message_id"], 3204)
+        self.assertEqual(motion["output_message_id"], 1)
+        self.assertEqual(
+            motion["endpoints"],
+            [
+                {
+                    "kind": "output",
+                    "role": "output",
+                    "name_template": "cmd_vel",
+                    "ros_type": "geometry_msgs/Twist",
+                    "scope": "robot_namespace",
+                }
+            ],
+        )
+        scout_body = GENERATOR.catalog_profile_body(
+            scout, self.messages, "xgc2-scout-mini-ros1-adapter"
+        )
+        self.assertEqual(
+            scout_body["semantics"]["operations"],
+            [
+                {
+                    "id": "set-motion-intent",
+                    "channelId": "operation.motion-intent",
+                    "timeoutMillis": 1000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": ["gear", "longitudinal", "yaw"],
+                        "properties": {
+                            "gear": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3,
+                            },
+                            "longitudinal": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                            "yaw": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            ],
         )
 
         header = GENERATOR.generate(
@@ -216,8 +336,8 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v5")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v5"', header)
+        self.assertIn('if (profile_id == "px4.multirotor.ros1.v6")', header)
+        self.assertIn('kProfileId = "px4.multirotor.ros1.v6"', header)
         self.assertIn('"namespace", ParameterType::kString, true', header)
         self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
@@ -235,6 +355,17 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertIn(px4_digest, header)
         self.assertNotIn("xgc::adapter::v1", header)
         self.assertNotIn("ProfileAdvertisement", header)
+
+        scout_header = GENERATOR.generate(
+            self.registry_fingerprint,
+            self.messages,
+            scout_profiles,
+            "xgc2-scout-mini-ros1-adapter",
+            "xgc_scout_mini_ros1_adapter",
+        )
+        self.assertIn('"set-motion-intent", 3204u, 1u, 0.0, 1000u, 0u', scout_header)
+        self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
+        self.assertIn('"xgc.semantic.ground.v1.MotionIntentRequest"', scout_header)
 
     def test_px4_native_operation_policies_are_explicit(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -505,11 +636,11 @@ int main() {
 
     def test_profile_identity_and_parameters_have_exact_source_bounds(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["profile_id"] = "a" * 125 + ".v5"
+        profile["profile_id"] = "a" * 125 + ".v6"
         path = self.write_profile(profile)
         GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
-        profile["profile_id"] = "a" * 126 + ".v5"
+        profile["profile_id"] = "a" * 126 + ".v6"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -692,6 +823,56 @@ int main() {
                 malformed, "fixture parameterSchema"
             )
 
+        malformed_bounds = {
+            "type": "object",
+            "required": ["gear"],
+            "properties": {
+                "gear": {"type": "integer", "minimum": 3, "maximum": 1}
+            },
+            "additionalProperties": False,
+        }
+        with self.assertRaisesRegex(ValueError, "invalid bounds"):
+            GENERATOR.validate_operation_parameter_schema(
+                malformed_bounds, "fixture parameterSchema"
+            )
+
+    def test_operation_native_endpoint_is_exactly_one_service_or_output(self):
+        profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
+        motion = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "set-motion-intent"
+        )
+        motion["service"] = {
+            "name": "cmd_vel",
+            "type": "geometry_msgs/Twist",
+        }
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed|exactly one"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
+        motion = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "set-motion-intent"
+        )
+        motion["output_message_id"] = 2001
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+        profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
+        motion = next(
+            channel
+            for channel in profile["channels"]
+            if channel.get("operation_id") == "set-motion-intent"
+        )
+        del motion["output"]
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed|exactly one"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
     def test_endpoint_parameters_must_be_declared_required_strings(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
         profile["channels"][1]["inputs"]["pose"]["name"] = (
@@ -739,6 +920,19 @@ int main() {
     def test_generic_profile_parameters_can_be_empty_without_a_namespace_role(self):
         profile = yaml.safe_load(SCOUT_PROFILE_PATH.read_text(encoding="utf-8"))
         profile["parameters"] = {}
+        channels = {channel["id"]: channel for channel in profile["channels"]}
+        channels["vrpn.position"]["inputs"]["pose"]["name"] = (
+            "vrpn_client_node/fixture/pose"
+        )
+        channels["vrpn.velocity"]["inputs"]["velocity"]["name"] = (
+            "vrpn_client_node/fixture/twist"
+        )
+        channels["vrpn.speed"]["inputs"]["velocity"]["name"] = (
+            "vrpn_client_node/fixture/twist"
+        )
+        channels["vrpn.speed"]["inputs"]["pose"]["name"] = (
+            "vrpn_client_node/fixture/pose"
+        )
         path = self.write_profile(profile)
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         header = GENERATOR.generate(
@@ -787,7 +981,7 @@ int main() {
                 self.assertIn("contract::kProfileId", source)
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v5", source)
+                self.assertNotIn("px4.multirotor.ros1.v6", source)
                 self.assertNotIn("scout-mini.ros1.v4", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
@@ -826,13 +1020,17 @@ int main() {
             }
         )
         profile["channels"][1]["policy"]["source_timeout_ms"] = 321
-        profile["channels"][10]["observes"] = ["state.flight"]
+        next(
+            channel
+            for channel in profile["channels"]
+            if channel["id"] == "diagnostic.offboard-input"
+        )["observes"] = ["state.flight"]
         path = self.write_profile(profile)
 
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v5"]["channels"]
+            for channel in profiles["px4.multirotor.ros1.v6"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],
@@ -893,7 +1091,11 @@ int main() {
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["channels"][10]["policy"]["minimum_rate_hz"] = float("inf")
+        next(
+            channel
+            for channel in profile["channels"]
+            if channel["id"] == "diagnostic.offboard-input"
+        )["policy"]["minimum_rate_hz"] = float("inf")
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "finite"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)

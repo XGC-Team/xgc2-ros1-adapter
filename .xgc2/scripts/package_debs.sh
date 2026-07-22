@@ -201,16 +201,16 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
-  "px4-multirotor-ros1-v5.yaml" \
+  "px4-multirotor-ros1-v6.yaml" \
   "xgc2-px4-multirotor-ros1-adapter" \
   "xgc_px4_multirotor_ros1_adapter_service_helper"
 
 package_adapter \
   "${SCOUT_PACKAGE}" \
   "${SCOUT_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
-  "Provides Scout Mini telemetry and channel-diagnostic capabilities." \
+  "Provides Scout Mini telemetry, discrete motion control, and channel-diagnostic capabilities." \
   "scout-mini-ros1-v4.yaml" \
   "xgc2-scout-mini-ros1-adapter"
 
