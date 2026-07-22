@@ -19,11 +19,8 @@ import jsonschema
 import yaml
 
 
-PROFILE_SCHEMA_IDS = {
-    "xgc.robot.adapter-profile/v4",
-    "xgc.robot.adapter-profile/v5",
-}
-PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v5"
+PROFILE_SCHEMA_ID = "xgc.robot.adapter-profile/v4"
+PROFILE_CONTRACT_DIGEST_SCHEMA = "xgc.robot.profile-contract-digest/v4"
 KINDS = {"stream_out", "operation"}
 INPUT_KINDS = {"operation"}
 OUTPUT_KINDS = {"stream_out", "operation"}
@@ -414,13 +411,11 @@ def load_profile_schema(path):
     except (OSError, UnicodeError, json.JSONDecodeError, jsonschema.SchemaError) as error:
         raise ValueError("{}: invalid profile schema: {}".format(path, error))
     schema_marker = document.get("properties", {}).get("schema", {}).get("const")
-    if schema_marker not in PROFILE_SCHEMA_IDS:
+    if schema_marker != PROFILE_SCHEMA_ID:
         raise ValueError(
-            "{}: profile schema marker {} is unsupported".format(
-                path, schema_marker or "<missing>"
-            )
+            "{}: profile schema does not declare {}".format(path, PROFILE_SCHEMA_ID)
         )
-    return document, schema_marker
+    return document
 
 
 def validate_endpoint_parameters(profile_path, profile, channel_id, endpoint):
@@ -468,9 +463,7 @@ def require_registered_message(messages, profile_path, channel, field, roles):
     return message_id
 
 
-def validate_profile_document(
-    profile_path, profile, schema, profile_schema_id, messages
-):
+def validate_profile_document(profile_path, profile, schema, messages):
     validator = jsonschema.Draft7Validator(schema)
     errors = sorted(
         validator.iter_errors(profile),
@@ -485,7 +478,7 @@ def validate_profile_document(
             )
         )
 
-    if profile["schema"] != profile_schema_id:
+    if profile["schema"] != PROFILE_SCHEMA_ID:
         raise ValueError(
             "{}: unsupported profile schema {}".format(profile_path, profile["schema"])
         )
@@ -508,7 +501,6 @@ def validate_profile_document(
     seen_channels = set()
     channels_by_id = {}
     operation_ids = set()
-    pulse_endpoint_ids = set()
     ordered_channels = []
     for channel in profile["channels"]:
         channel_id = channel["id"]
@@ -525,12 +517,6 @@ def validate_profile_document(
         operation_id = channel.get("operation_id")
         operation_contract = channel.get("operation_contract")
         if kind == "operation":
-            if operation_id in pulse_endpoint_ids:
-                raise ValueError(
-                    "{}: operation identity {} collides with a lease pulse endpoint".format(
-                        profile_path, operation_id
-                    )
-                )
             if operation_id in operation_ids:
                 raise ValueError(
                     "{}: duplicate operation identity {}".format(
@@ -669,70 +655,6 @@ def validate_profile_document(
             if kind == "operation"
             else None
         )
-        lease = channel.get("lease")
-        if lease is not None:
-            if kind != "operation":
-                raise ValueError(
-                    "{}: channel {} lease requires an operation".format(
-                        profile_path, channel_id
-                    )
-                )
-            pulse_endpoint_id = lease["pulse_endpoint_id"]
-            if (
-                pulse_endpoint_id == operation_id
-                or pulse_endpoint_id in operation_ids
-                or pulse_endpoint_id in pulse_endpoint_ids
-            ):
-                raise ValueError(
-                    "{}: operation {} lease pulse endpoint {} is not unique".format(
-                        profile_path, operation_id, pulse_endpoint_id
-                    )
-                )
-            pulse_endpoint_ids.add(pulse_endpoint_id)
-            heartbeat_interval_ms = require_positive_integer(
-                lease["heartbeat_interval_ms"],
-                "{}: operation {} lease heartbeat_interval_ms".format(
-                    profile_path, operation_id
-                ),
-                NATIVE_OPERATION_TIMEOUT_MAX_MILLIS,
-            )
-            lease_timeout_ms = require_positive_integer(
-                lease["timeout_ms"],
-                "{}: operation {} lease timeout_ms".format(
-                    profile_path, operation_id
-                ),
-                NATIVE_OPERATION_TIMEOUT_MAX_MILLIS,
-            )
-            if lease_timeout_ms < 2 * heartbeat_interval_ms:
-                raise ValueError(
-                    "{}: operation {} lease timeout must be at least twice its heartbeat interval".format(
-                        profile_path, operation_id
-                    )
-                )
-            if not lease["volatile_supported"]:
-                raise ValueError(
-                    "{}: operation {} lease pulse must explicitly opt in to volatile dispatch".format(
-                        profile_path, operation_id
-                    )
-                )
-            if not operation_contract.get("cancellation_supported"):
-                raise ValueError(
-                    "{}: leased operation {} must support cancellation".format(
-                        profile_path, operation_id
-                    )
-                )
-            properties = parameter_schema["properties"]
-            inactive = lease["inactive_parameter_values"]
-            for name, value in inactive.items():
-                definition = properties.get(name)
-                if definition is None or not jsonschema.Draft7Validator(
-                    definition
-                ).is_valid(value):
-                    raise ValueError(
-                        "{}: operation {} inactive lease value {} does not match its parameter schema".format(
-                            profile_path, operation_id, name
-                        )
-                    )
 
         ordered_channels.append(
             {
@@ -749,7 +671,6 @@ def validate_profile_document(
                 "policy": policy,
                 "operation_contract": dict(operation_contract or {}),
                 "operation_parameter_schema": parameter_schema,
-                "lease": dict(lease or {}),
             }
         )
         seen_channels.add(channel_id)
@@ -861,10 +782,8 @@ def load_profile(profile_path, schema_path, messages):
         raise ValueError("{}: invalid profile YAML: {}".format(profile_path, error))
     if not isinstance(profile, dict):
         raise ValueError("{}: profile root must be an object".format(profile_path))
-    schema, profile_schema_id = load_profile_schema(schema_path)
-    channels = validate_profile_document(
-        profile_path, profile, schema, profile_schema_id, messages
-    )
+    schema = load_profile_schema(schema_path)
+    channels = validate_profile_document(profile_path, profile, schema, messages)
     return {
         profile["profile_id"]: {
             "profile_id": profile["profile_id"],
@@ -928,30 +847,6 @@ def catalog_semantics(source_profile):
                     "parameterSchema": channel[
                         "operation_parameter_schema"
                     ],
-                    **(
-                        {
-                            "lease": {
-                                "pulseEndpointId": channel["lease"][
-                                    "pulse_endpoint_id"
-                                ],
-                                "heartbeatIntervalMillis": channel["lease"][
-                                    "heartbeat_interval_ms"
-                                ],
-                                "timeoutMillis": channel["lease"][
-                                    "timeout_ms"
-                                ],
-                                "inactiveParameterValues": dict(
-                                    sorted(
-                                        channel["lease"][
-                                            "inactive_parameter_values"
-                                        ].items()
-                                    )
-                                ),
-                            }
-                        }
-                        if channel["lease"]
-                        else {}
-                    ),
                 }
                 for channel in source_profile["channels"]
                 if channel["kind"] == "operation"
@@ -1157,14 +1052,6 @@ def generate(
         "  bool deadline_required;",
         "};",
         "",
-        "struct OperationLeaseMetadata {",
-        "  const char* pulse_endpoint_id;",
-        "  std::uint32_t heartbeat_interval_millis;",
-        "  std::uint32_t timeout_millis;",
-        "  bool volatile_supported;",
-        "  const char* inactive_parameter_values_json;",
-        "};",
-        "",
         "struct OperationMetadata {",
         "  const char* operation_id;",
         "  const char* channel_id;",
@@ -1189,7 +1076,6 @@ def generate(
         "  const PolicyMetadata* policy;",
         "  std::size_t policy_count;",
         "  OperationContractMetadata operation_contract;",
-        "  OperationLeaseMetadata operation_lease;",
         "};",
         "",
         "inline bool messageMetadata(std::uint32_t id, MessageMetadata* out) {",
@@ -1485,15 +1371,8 @@ def generate(
                 else "0u"
             )
             operation = channel["operation_contract"]
-            lease = channel["lease"]
-            inactive_json = json.dumps(
-                lease.get("inactive_parameter_values", {}),
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
             lines.append(
-                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}}}, {{{}, {}u, {}u, {}, {}}}}},".format(
+                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}}}}},".format(
                     cpp_string(channel["id"]),
                     KIND_ENUM[channel["kind"]],
                     cpp_string(channel["processor"]),
@@ -1513,11 +1392,6 @@ def generate(
                     cpp_string(operation.get("idempotency", "")),
                     cpp_bool(operation.get("cancellation_supported", False)),
                     cpp_bool(operation.get("deadline_required", False)),
-                    cpp_string(lease.get("pulse_endpoint_id", "")),
-                    lease.get("heartbeat_interval_ms", 0),
-                    lease.get("timeout_ms", 0),
-                    cpp_bool(lease.get("volatile_supported", False)),
-                    cpp_string(inactive_json),
                 )
             )
         lines.extend(

@@ -228,10 +228,10 @@ package_adapter \
   "${MECANUM_ROS_PACKAGE}" \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
   "XGC2 Mecanum UGV ROS1 semantic adapter" \
-  "Provides Mecanum UGV VRPN telemetry, leased motion control, and channel-diagnostic capabilities." \
+  "Provides Mecanum UGV VRPN telemetry, discrete motion control, and channel-diagnostic capabilities." \
   "mecanum-ugv-ros1-v1.yaml" \
   "xgc2-mecanum-ugv-ros1-adapter" \
-  "robot-adapter-profile-v5.schema.json"
+  "robot-adapter-profile-v4.schema.json"
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" -o -name "${MECANUM_PACKAGE}_*.deb" \) \

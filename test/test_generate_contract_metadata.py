@@ -20,12 +20,6 @@ SCHEMA_PATH = (
     / "schema"
     / "robot-adapter-profile-v4.schema.json"
 )
-LEASE_SCHEMA_PATH = (
-    REPOSITORY_ROOT
-    / "profiles"
-    / "schema"
-    / "robot-adapter-profile-v5.schema.json"
-)
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
 SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
 MECANUM_PROFILE_PATH = (
@@ -122,7 +116,7 @@ class ContractGeneratorTest(unittest.TestCase):
             SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
         mecanum_profiles = GENERATOR.load_profile(
-            MECANUM_PROFILE_PATH, LEASE_SCHEMA_PATH, self.messages
+            MECANUM_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
         px4 = px4_profiles["px4.multirotor.ros1.v6"]
@@ -381,26 +375,9 @@ class ContractGeneratorTest(unittest.TestCase):
             mecanum_body["semantics"]["onlineConditions"],
             [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
         )
-        mecanum_operation = mecanum_body["semantics"]["operations"][0]
         self.assertEqual(
-            {
-                key: value
-                for key, value in mecanum_operation.items()
-                if key != "lease"
-            },
-            scout_body["semantics"]["operations"][0],
-        )
-        self.assertEqual(
-            mecanum_operation["lease"],
-            {
-                "pulseEndpointId": "pulse-motion-intent-lease",
-                "heartbeatIntervalMillis": 250,
-                "timeoutMillis": 750,
-                "inactiveParameterValues": {
-                    "longitudinal": 0,
-                    "yaw": 0,
-                },
-            },
+            mecanum_body["semantics"]["operations"],
+            scout_body["semantics"]["operations"],
         )
 
         header = GENERATOR.generate(
@@ -438,7 +415,6 @@ class ContractGeneratorTest(unittest.TestCase):
             "xgc_scout_mini_ros1_adapter",
         )
         self.assertIn('"set-motion-intent", 3204u, 1u, 0.0, 1000u, 0u', scout_header)
-        self.assertNotIn("pulse-motion-intent-lease", scout_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
         self.assertIn('"xgc.semantic.ground.v1.MotionIntentRequest"', scout_header)
 
@@ -451,10 +427,6 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         self.assertIn('kProfileId = "mecanum-ugv.ros1.v1"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
-        self.assertIn(
-            '{"pulse-motion-intent-lease", 250u, 750u, true,',
-            mecanum_header,
-        )
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
 
     def test_px4_native_operation_policies_are_explicit(self):
@@ -578,20 +550,17 @@ class ContractGeneratorTest(unittest.TestCase):
             (
                 "xgc_px4_multirotor_ros1_adapter",
                 "xgc2-px4-multirotor-ros1-adapter",
-                "robot-adapter-profile-v4.schema.json",
             ),
             (
                 "xgc_scout_mini_ros1_adapter",
                 "xgc2-scout-mini-ros1-adapter",
-                "robot-adapter-profile-v4.schema.json",
             ),
             (
                 "xgc_mecanum_ugv_ros1_adapter",
                 "xgc2-mecanum-ugv-ros1-adapter",
-                "robot-adapter-profile-v5.schema.json",
             ),
         )
-        for package, definition_id, schema_name in packages:
+        for package, definition_id in packages:
             cmake = (
                 REPOSITORY_ROOT / "src" / package / "CMakeLists.txt"
             ).read_text(encoding="utf-8")
@@ -604,7 +573,7 @@ class ContractGeneratorTest(unittest.TestCase):
                     '--definition-id "${ADAPTER_DEFINITION_ID}"', cmake
                 )
                 self.assertIn(
-                    schema_name, cmake
+                    "robot-adapter-profile-v4.schema.json", cmake
                 )
                 self.assertNotIn(
                     "robot-adapter-profile-v3.schema.json", cmake

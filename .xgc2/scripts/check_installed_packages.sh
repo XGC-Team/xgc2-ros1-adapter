@@ -109,7 +109,7 @@ check_ros_package \
   "${MECANUM_ROS_PACKAGE}" \
   "mecanum_ugv_ros1_adapter.launch" \
   "mecanum-ugv-ros1-v1.yaml" \
-  "robot-adapter-profile-v5.schema.json" \
+  "robot-adapter-profile-v4.schema.json" \
   "xgc2-mecanum-ugv-ros1-adapter"
 
 test ! -e "${PREFIX}/share/xgc_ros1_adapter"

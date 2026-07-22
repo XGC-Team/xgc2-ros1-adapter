@@ -1,9 +1,9 @@
-schema: xgc.robot.adapter-profile/v5
+schema: xgc.robot.adapter-profile/v4
 profile_id: mecanum-ugv.ros1.v1
 profile_version: 1
 native_protocol: ros1
 robot_kind: mecanum_ugv
-description: Mecanum UGV VRPN pose, raw velocity, signed body-X speed, command observation, and leased motion control.
+description: Mecanum UGV VRPN pose, raw velocity, signed body-X speed, command observation, and motion control.
 parameters:
   namespace:
     type: string
@@ -84,16 +84,8 @@ channels:
     operation_contract:
       side_effect: idempotent
       idempotency: required
-      cancellation_supported: true
+      cancellation_supported: false
       deadline_required: true
-    lease:
-      pulse_endpoint_id: pulse-motion-intent-lease
-      heartbeat_interval_ms: 250
-      timeout_ms: 750
-      inactive_parameter_values:
-        longitudinal: 0
-        yaw: 0
-      volatile_supported: true
     output:
       name: cmd_vel
       type: geometry_msgs/Twist

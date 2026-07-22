@@ -102,9 +102,8 @@ reverse sign while excluding lateral slip. Motion intent keeps the existing
 protobuf contract (there is no lateral field) and maps its three gears to the
 deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
 0.5236/1.0472/1.5708 rad/s yaw. Before the first accepted intent, the adapter
-publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz only
-while the profile-declared volatile lease pulse remains fresh. Lease expiry,
-source/session loss, or shutdown sends a final zero.
+publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz and
+sends a final zero on shutdown.
 
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
