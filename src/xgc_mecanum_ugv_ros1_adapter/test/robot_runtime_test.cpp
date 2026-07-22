@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <deque>
 #include <stdexcept>
 #include <string>
@@ -28,27 +29,26 @@ TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
 }
 
 TEST(RosNames, BuildsNamespacedMecanumTopics) {
-  EXPECT_EQ("/scout1/cmd_vel", topicName("/scout1", "cmd_vel"));
-  EXPECT_EQ("/vrpn_client_node/Mecanum1/pose",
-            topicName("", "vrpn_client_node/Mecanum1/pose"));
-  EXPECT_EQ("/fleet/scout2/scout_status",
-            topicName("/fleet/scout2", "/scout_status"));
+  EXPECT_EQ("/ugv1/cmd_vel", topicName("/ugv1", "cmd_vel"));
+  EXPECT_EQ("/vrpn_client_node/Ugv1/pose",
+            topicName("", "vrpn_client_node/Ugv1/pose"));
+  EXPECT_EQ("/fleet/ugv2/twist", topicName("/fleet/ugv2", "/twist"));
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
   std::string error;
-  EXPECT_TRUE(validRobotNamespace("/scout1", &error));
+  EXPECT_TRUE(validRobotNamespace("/ugv1", &error));
 
   error.clear();
-  EXPECT_FALSE(validRobotNamespace("scout1", &error));
+  EXPECT_FALSE(validRobotNamespace("ugv1", &error));
   EXPECT_EQ("namespace must be absolute", error);
 
   error.clear();
-  EXPECT_FALSE(validRobotNamespace("/scout1/", &error));
+  EXPECT_FALSE(validRobotNamespace("/ugv1/", &error));
   EXPECT_EQ("namespace must not have a trailing slash", error);
 
   error.clear();
-  EXPECT_FALSE(validRobotNamespace("/fleet//scout1", &error));
+  EXPECT_FALSE(validRobotNamespace("/fleet//ugv1", &error));
   EXPECT_EQ("namespace must not contain repeated slashes", error);
 }
 
@@ -56,36 +56,36 @@ TEST(RosNames, AcceptsOnlyCanonicalMocapRigidBodyNames) {
   std::string error;
   EXPECT_TRUE(validMocapRigidBodyName("ugv1", &error));
   EXPECT_TRUE(validMocapRigidBodyName("Mecanum_01", &error));
-  EXPECT_FALSE(validMocapRigidBodyName("scout-01", &error));
-  EXPECT_FALSE(validMocapRigidBodyName("/vrpn/scout1", &error));
-  EXPECT_FALSE(validMocapRigidBodyName("scout 1", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("ugv-01", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("/vrpn/ugv1", &error));
+  EXPECT_FALSE(validMocapRigidBodyName("ugv 1", &error));
 }
 
-TEST(RosNames, ResolvesTheMotionOutputFromTheProfileAndRobotNamespace) {
+TEST(RosNames, ResolvesMotionOutputFromProfileAndRobotNamespace) {
   xgc2_ros1_robot_adapter::RobotConfig config;
   config.profile_id = contract::kProfileId;
-  config.parameters["namespace"] = "/fleet/scout1";
-  config.parameters["mocap_rigid_body"] = "Mecanum1";
+  config.parameters["namespace"] = "/fleet/ugv1";
+  config.parameters["mocap_rigid_body"] = "Ugv1";
 
   std::string topic;
   std::string error;
   ASSERT_TRUE(resolveMotionCommandTopic(config, &topic, &error)) << error;
-  EXPECT_EQ("/fleet/scout1/cmd_vel", topic);
+  EXPECT_EQ("/fleet/ugv1/cmd_vel", topic);
 }
 
-TEST(MotionIntent, MapsThreeGearsAndClampsToMecanumSdkLimits) {
+TEST(MotionIntent, MapsThreeGearsToTheDeployedSssLimits) {
   geometry_msgs::Twist command;
   std::string error;
 
   ASSERT_TRUE(motionIntentCommand(1, 1, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.5, command.linear.x);
-  EXPECT_DOUBLE_EQ(0.1745, command.angular.z);
+  EXPECT_NEAR(0.5235987755982988, command.angular.z, 1e-15);
   EXPECT_DOUBLE_EQ(0.0, command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.x);
 
   ASSERT_TRUE(motionIntentCommand(2, -1, -1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(-1.0, command.linear.x);
-  EXPECT_DOUBLE_EQ(-0.349, command.angular.z);
+  EXPECT_NEAR(-1.0471975511965976, command.angular.z, 1e-15);
 
   ASSERT_TRUE(motionIntentCommand(3, 1, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(kMecanumMaximumLinearVelocityMetersPerSecond,
@@ -95,10 +95,11 @@ TEST(MotionIntent, MapsThreeGearsAndClampsToMecanumSdkLimits) {
 
   ASSERT_TRUE(motionIntentCommand(3, 0, 0, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.0, command.linear.x);
+  EXPECT_DOUBLE_EQ(0.0, command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.z);
 }
 
-TEST(MotionIntent, RejectsValuesOutsideTheClosedDiscreteContract) {
+TEST(MotionIntent, RejectsValuesOutsideTheClosedExistingContract) {
   geometry_msgs::Twist command;
   std::string error;
   EXPECT_FALSE(motionIntentCommand(0, 0, 0, &command, &error));
@@ -122,23 +123,18 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   ASSERT_TRUE(publisher.SetIntent(2, 1, -1, &error)) << error;
   ASSERT_EQ(1u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
-  EXPECT_DOUBLE_EQ(-0.349, published.back().angular.z);
+  EXPECT_NEAR(-1.0471975511965976, published.back().angular.z, 1e-15);
 
   publisher.PublishPeriodic();
   ASSERT_EQ(2u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
 
-  ASSERT_TRUE(publisher.SetIntent(2, 0, 0, &error)) << error;
+  publisher.Stop();
   ASSERT_EQ(3u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
-
-  publisher.Stop();
-  ASSERT_EQ(4u, published.size());
-  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
-  EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
-  EXPECT_EQ(4u, published.size());
+  EXPECT_EQ(3u, published.size());
   EXPECT_FALSE(publisher.SetIntent(1, 1, 0, &error));
 }
 
@@ -161,25 +157,20 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
   EXPECT_DOUBLE_EQ(0.5, published.back().linear.x);
 }
 
-TEST(Freshness, AppliesTheMecanumStatusBoundary) {
+TEST(Freshness, AppliesTheVrpnPositionBoundary) {
   const ros::WallTime now(10, 0);
-  contract::ChannelMetadata health{};
-  ASSERT_TRUE(
-      contract::channelMetadata(contract::kProfileId, "state.health", &health));
+  contract::ChannelMetadata position{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.position",
+                                        &position));
   const double stale_after_seconds =
-      static_cast<double>(health.stale_after_millis) / 1000.0;
+      static_cast<double>(position.stale_after_millis) / 1000.0;
   EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, stale_after_seconds));
   EXPECT_TRUE(sourceIsFresh(ros::WallTime(9, 0), now, stale_after_seconds));
   EXPECT_FALSE(
       sourceIsFresh(ros::WallTime(8, 999999999), now, stale_after_seconds));
 }
 
-TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
-  EXPECT_TRUE(scoutIsOnline(true));
-  EXPECT_FALSE(scoutIsOnline(false));
-}
-
-TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
+TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoSignedBodyXAxis) {
   const double half_sqrt_two = std::sqrt(0.5);
   EXPECT_DOUBLE_EQ(
       3.0, vrpnForwardSpeedMetersPerSecond(3.0, 4.0, 12.0,
@@ -199,64 +190,62 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
       1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
-TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
-  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(20.5));
-  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(29.2));
-  EXPECT_NEAR(0.95, scoutBatteryPercentage(28.765), 1e-12);
-  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(18.0));
-  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(32.0));
-}
-
-TEST(ChassisProjection, MapsNativeMecanumControlModes) {
-  using Status = xgc::semantic::ground::v1::ChassisStatus;
-  EXPECT_EQ(Status::CONTROL_MODE_REMOTE, scoutControlMode(0));
-  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_CAN, scoutControlMode(1));
-  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_UART, scoutControlMode(2));
-  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(255));
-}
-
-TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
+TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("mecanum-ugv.ros1.v4");
-  ASSERT_NE(nullptr, digest);
-  EXPECT_EQ(64u, std::string(digest).size());
+  EXPECT_EQ("mecanum-ugv.ros1.v1", std::string(contract::kProfileId));
 
-  contract::ChannelMetadata position;
-  ASSERT_TRUE(
-      contract::channelMetadata("mecanum-ugv.ros1.v4", "vrpn.position", &position));
-  EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
+  std::size_t channel_count = 0u;
+  const auto *channels =
+      contract::profileChannels(contract::kProfileId, &channel_count);
+  ASSERT_NE(nullptr, channels);
+  ASSERT_EQ(6u, channel_count);
+
+  const std::vector<std::string> streams{
+      "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",
+      "diagnostic.channel-health"};
+  for (const auto &channel_id : streams) {
+    contract::ChannelMetadata channel{};
+    ASSERT_TRUE(
+        contract::channelMetadata(contract::kProfileId, channel_id, &channel));
+    EXPECT_EQ(contract::ChannelKind::kStreamOut, channel.kind);
+    EXPECT_DOUBLE_EQ(10.0, channel.output_rate_hz);
+  }
+
+  contract::ChannelMetadata position{};
+  contract::ChannelMetadata raw_velocity{};
+  contract::ChannelMetadata speed{};
+  contract::ChannelMetadata command{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.position",
+                                        &position));
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.velocity",
+                                        &raw_velocity));
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.speed",
+                                        &speed));
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId,
+                                        "command.velocity", &command));
   EXPECT_EQ(2001u, position.output_message_id);
-  EXPECT_FALSE(contract::channelMetadata("mecanum-ugv.ros1.v4", "state.pose",
-                                         &position));
+  EXPECT_EQ(2002u, raw_velocity.output_message_id);
+  EXPECT_EQ(2006u, speed.output_message_id);
+  EXPECT_EQ(2002u, command.output_message_id);
 
-  contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("mecanum-ugv.ros1.v4", "vrpn.velocity",
-                                        &vrpn_velocity));
-  EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
+  contract::ChannelMetadata forbidden{};
+  EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.odom",
+                                         &forbidden));
+  EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.health",
+                                         &forbidden));
+  EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.chassis",
+                                         &forbidden));
+}
 
-  contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("mecanum-ugv.ros1.v4", "vrpn.speed",
-                                        &vrpn_speed));
-  EXPECT_EQ(2006u, vrpn_speed.output_message_id);
-
-  contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("mecanum-ugv.ros1.v4",
-                                        "command.velocity",
-                                        &command_velocity));
-  EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
-  EXPECT_EQ(2002u, command_velocity.output_message_id);
-
-  contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("mecanum-ugv.ros1.v4", "operation.arm",
-                                         &unknown));
-
-  contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("mecanum-ugv.ros1.v4",
+TEST(InstalledProfile, KeepsTheExistingLongitudinalYawOperation) {
+  contract::ChannelMetadata motion{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId,
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3204u, motion.input_message_id);
   EXPECT_EQ(1u, motion.output_message_id);
+  EXPECT_EQ("mecanum-ugv.set-motion-intent", std::string(motion.processor));
   const auto *output = contract::channelEndpoint(
       motion, contract::EndpointKind::kOutput, "output");
   ASSERT_NE(nullptr, output);
@@ -264,26 +253,16 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ("geometry_msgs/Twist", std::string(output->ros_type));
 
   std::size_t operation_count = 0u;
-  const auto *operations = contract::profileOperations(
-      "mecanum-ugv.ros1.v4", &operation_count);
+  const auto *operations =
+      contract::profileOperations(contract::kProfileId, &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));
 }
 
-TEST(InstalledContract, ContainsMecanumMotionButNotPx4Operations) {
-  contract::MessageMetadata metadata;
-  EXPECT_TRUE(contract::messageMetadata(2001, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3102, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3204, &metadata));
-  EXPECT_EQ("xgc.semantic.ground.v1.MotionIntentRequest",
-            std::string(metadata.type_name));
-  EXPECT_FALSE(contract::messageMetadata(3201, &metadata));
-}
-
 TEST(TelemetryBatch, BindsItemsToAnExactQueuePrefix) {
   const std::deque<TelemetryQueueItem> queue{
-      {1u, "pose"}, {2u, "velocity"}, {3u, "power"}};
+      {1u, "pose"}, {2u, "velocity"}, {3u, "speed"}};
   const auto batch = buildTelemetryBatch(queue, 2u, 1024u);
   ASSERT_EQ(2u, batch.items.size());
   EXPECT_EQ((std::vector<std::uint64_t>{1u, 2u}), batch.tokens);
@@ -296,17 +275,13 @@ TEST(TelemetryBatch, BindsItemsToAnExactQueuePrefix) {
   EXPECT_FALSE(telemetryBatchMatchesPrefix(advanced, batch.tokens));
 }
 
-TEST(TelemetryBatch, EnforcesBothItemAndByteLimitsWithoutSplittingItems) {
+TEST(TelemetryBatch, EnforcesItemAndByteLimitsWithoutSplittingItems) {
   const std::deque<TelemetryQueueItem> queue{
       {1u, "1234"}, {2u, "5678"}, {3u, "9"}};
   const auto byte_limited = buildTelemetryBatch(queue, 3u, 8u);
   EXPECT_EQ(2u, byte_limited.items.size());
   EXPECT_EQ(8u, byte_limited.bytes);
-
-  const auto item_limited = buildTelemetryBatch(queue, 1u, 1024u);
-  ASSERT_EQ(1u, item_limited.items.size());
-  EXPECT_EQ("1234", item_limited.items.front());
-
+  EXPECT_EQ(1u, buildTelemetryBatch(queue, 1u, 1024u).items.size());
   EXPECT_TRUE(buildTelemetryBatch(queue, 0u, 1024u).items.empty());
   EXPECT_TRUE(buildTelemetryBatch(queue, 3u, 3u).items.empty());
 }

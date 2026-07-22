@@ -32,6 +32,7 @@ VERIFY_SPEC.loader.exec_module(VERIFIER)
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v6.yaml"
 SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v4.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -258,6 +259,28 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(
             scout["semantics"]["onlineConditions"][0]["predicate"],
             "xgc.semantic.common.vehicle-health.online",
+        )
+
+        _, _, mecanum_catalog = GENERATOR.build_documents(
+            self.arguments(MECANUM_PROFILE)
+        )
+        mecanum = mecanum_catalog["profiles"][0]
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v1")
+        self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
+        self.assertEqual(
+            mecanum["semantics"]["onlineConditions"],
+            [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
+        )
+        self.assertEqual(
+            [channel["channelId"] for channel in mecanum["semantics"]["channels"]],
+            [
+                "command.velocity",
+                "diagnostic.channel-health",
+                "operation.motion-intent",
+                "vrpn.position",
+                "vrpn.speed",
+                "vrpn.velocity",
+            ],
         )
 
     def test_profile_v4_contract_and_legacy_schema_are_explicit(self):

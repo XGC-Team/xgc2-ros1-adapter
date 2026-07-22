@@ -96,7 +96,8 @@ if [[ "${COPY_OUTPUT}" == "true" ]]; then
   mkdir -p "${OUTPUT_DIR}"
   rm -f \
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb
+    "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb
 fi
 
 docker_network_args=()
@@ -303,7 +304,8 @@ docker exec "${container_name}" bash -lc '
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
       apt-get install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb
+        /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb
       /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
     fi
   '

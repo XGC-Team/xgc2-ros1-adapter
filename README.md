@@ -1,13 +1,15 @@
 # XGC2 ROS1 Robot Adapters
 
-This Catkin workspace contains two robot-domain Adapter Runtime applications.
-An Adapter is a general capability plugin for Core or Agent; these two products
-specialize that abstraction for PX4 multirotors and Scout Mini robots.
+This Catkin workspace contains three robot-domain Adapter Runtime applications.
+An Adapter is a general capability plugin for Core or Agent; these applications
+specialize that abstraction for PX4 multirotors, Scout Mini robots, and Mecanum
+UGVs.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
 | `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v6` |
 | `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v4` |
+| `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v1` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -21,7 +23,7 @@ provider instance uses a `robot-group` scope containing `target-id`, `run-id`,
 and `provider`; each invocation and telemetry source uses a separate
 `robot-resource` subject containing `target-id`, `run-id`, and `robot-id`.
 
-Both products expose:
+All three applications expose:
 
 - `xgc.robot.telemetry@1`: `telemetry` source of serialized
   `xgc.robot.v1.RobotMessage`
@@ -36,7 +38,7 @@ PX4 command operations require deadlines and idempotency keys. A successful
 operation returns the registry-owned `xgc.v1.Empty` payload. Native ROS service
 calls are not advertised as cancellable after dispatch.
 
-The installed Profile v3 catalog owns each operation's closed JSON parameter
+The installed Profile catalog owns each operation's closed JSON parameter
 schema and timeout. The flight-mode enum is projected directly from the PX4
 source Profile's `policy.allowed_modes`, and every Profile timeout is generated
 from the same `policy.timeout_ms` used by its provider endpoint.
@@ -90,6 +92,19 @@ have one effective command owner. Stop any autonomous controller first, or put
 both sources behind an explicit ROS command mux; competing publishers would
 otherwise interleave velocity commands.
 
+The Mecanum UGV profile intentionally contains only `vrpn.position`, raw
+`vrpn.velocity`, processed `vrpn.speed`, `command.velocity`, the existing
+longitudinal/yaw motion-intent operation, and channel diagnostics. Online state
+depends only on a fresh `vrpn.position`; it has no Scout status or odometry
+dependency. The scalar speed is computed in C++ by projecting the world-frame
+VRPN linear vector onto the body X axis from the VRPN pose quaternion, preserving
+reverse sign while excluding lateral slip. Motion intent keeps the existing
+protobuf contract (there is no lateral field) and maps its three gears to the
+deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
+0.5236/1.0472/1.5708 rad/s yaw. Before the first accepted intent, the adapter
+publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz and
+sends a final zero on shutdown.
+
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
 
@@ -137,13 +152,13 @@ catkin_make run_tests
 catkin_test_results --verbose build/test_results
 ```
 
-The release path builds and install-checks both independent Debian packages:
+The release path builds and install-checks all three independent Debian packages:
 
 ```bash
 .xgc2/scripts/build_debs_in_docker.sh --output-dir "$PWD/debs"
 ```
 
-Both adapters are compiled against the exact
+All adapters are compiled against the exact
 `libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Their
 installed Debian packages deliberately omit those build-only dependencies:
 `dpkg-shlibdeps` derives a lower-bounded
@@ -159,6 +174,7 @@ The Process Supervisor starts the fixed installed executable directly:
 ```text
 /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
+/opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
 ```
 
 For a diagnostic manual launch, pass a real supervisor-generated bootstrap:

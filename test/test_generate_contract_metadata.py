@@ -22,7 +22,11 @@ SCHEMA_PATH = (
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
 SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
+MECANUM_PROFILE_PATH = (
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v1.yaml"
+)
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
+MECANUM_DEFINITION_ID = "xgc2-mecanum-ugv-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
 GENERATOR = importlib.util.module_from_spec(SPEC)
@@ -110,6 +114,9 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         scout_profiles = GENERATOR.load_profile(
             SCOUT_PROFILE_PATH, SCHEMA_PATH, self.messages
+        )
+        mecanum_profiles = GENERATOR.load_profile(
+            MECANUM_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
         px4 = px4_profiles["px4.multirotor.ros1.v6"]
@@ -329,6 +336,50 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v1"]
+        mecanum_channels = {
+            channel["id"]: channel for channel in mecanum["channels"]
+        }
+        self.assertEqual(
+            set(mecanum_channels),
+            {
+                "vrpn.position",
+                "vrpn.velocity",
+                "vrpn.speed",
+                "command.velocity",
+                "operation.motion-intent",
+                "diagnostic.channel-health",
+            },
+        )
+        for channel_id in (
+            "vrpn.position",
+            "vrpn.velocity",
+            "vrpn.speed",
+            "command.velocity",
+            "diagnostic.channel-health",
+        ):
+            self.assertEqual(mecanum_channels[channel_id]["output_rate_hz"], 10)
+        self.assertEqual(mecanum_channels["vrpn.position"]["output_message_id"], 2001)
+        self.assertEqual(mecanum_channels["vrpn.velocity"]["output_message_id"], 2002)
+        self.assertEqual(mecanum_channels["vrpn.speed"]["output_message_id"], 2006)
+        self.assertEqual(mecanum_channels["command.velocity"]["output_message_id"], 2002)
+        self.assertEqual(
+            {endpoint["role"] for endpoint in mecanum_channels["vrpn.speed"]["endpoints"]},
+            {"pose", "velocity"},
+        )
+        mecanum_body = GENERATOR.catalog_profile_body(
+            mecanum, self.messages, MECANUM_DEFINITION_ID
+        )
+        self.assertEqual(mecanum_body["robotKind"], "mecanum_ugv")
+        self.assertEqual(
+            mecanum_body["semantics"]["onlineConditions"],
+            [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
+        )
+        self.assertEqual(
+            mecanum_body["semantics"]["operations"],
+            scout_body["semantics"]["operations"],
+        )
+
         header = GENERATOR.generate(
             self.registry_fingerprint,
             self.messages,
@@ -366,6 +417,17 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertIn('"set-motion-intent", 3204u, 1u, 0.0, 1000u, 0u', scout_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
         self.assertIn('"xgc.semantic.ground.v1.MotionIntentRequest"', scout_header)
+
+        mecanum_header = GENERATOR.generate(
+            self.registry_fingerprint,
+            self.messages,
+            mecanum_profiles,
+            MECANUM_DEFINITION_ID,
+            "xgc_mecanum_ugv_ros1_adapter",
+        )
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v1"', mecanum_header)
+        self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
+        self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
 
     def test_px4_native_operation_policies_are_explicit(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -492,6 +554,10 @@ class ContractGeneratorTest(unittest.TestCase):
             (
                 "xgc_scout_mini_ros1_adapter",
                 "xgc2-scout-mini-ros1-adapter",
+            ),
+            (
+                "xgc_mecanum_ugv_ros1_adapter",
+                "xgc2-mecanum-ugv-ros1-adapter",
             ),
         )
         for package, definition_id in packages:
@@ -972,6 +1038,16 @@ int main() {
             REPOSITORY_ROOT
             / "src"
             / "xgc_scout_mini_ros1_adapter"
+            / "src"
+            / "robot_runtime.cpp",
+            REPOSITORY_ROOT
+            / "src"
+            / "xgc_mecanum_ugv_ros1_adapter"
+            / "src"
+            / "mecanum_ugv_ros1_adapter_node.cpp",
+            REPOSITORY_ROOT
+            / "src"
+            / "xgc_mecanum_ugv_ros1_adapter"
             / "src"
             / "robot_runtime.cpp",
         )

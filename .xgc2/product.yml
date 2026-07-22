@@ -1,9 +1,9 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-2
+version: 0.5.0-3
 kind: ros1-apt
-summary: Robot-owned PX4 multirotor and Scout Mini ROS1 semantic adapters.
+summary: Robot-owned PX4 multirotor, Scout Mini, and Mecanum UGV ROS1 semantic adapters.
 groups:
   - ros1
   - communication
@@ -15,14 +15,17 @@ ros:
   packages:
   - xgc_px4_multirotor_ros1_adapter
   - xgc_scout_mini_ros1_adapter
+  - xgc_mecanum_ugv_ros1_adapter
 apt:
   distribution: focal
   install:
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-scout-mini-adapter
+  - ros-noetic-xgc2-mecanum-ugv-adapter
   packages:
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-scout-mini-adapter
+  - ros-noetic-xgc2-mecanum-ugv-adapter
   depends:
   - libxgc2-adapter-runtime-client1
   - ros-noetic-geometry-msgs
@@ -37,21 +40,28 @@ usage:
     sudo apt update
     sudo apt install \
       ros-noetic-xgc2-px4-multirotor-adapter \
-      ros-noetic-xgc2-scout-mini-adapter
+      ros-noetic-xgc2-scout-mini-adapter \
+      ros-noetic-xgc2-mecanum-ugv-adapter
   smoke_test: |
     rospack find xgc_px4_multirotor_ros1_adapter
     rospack find xgc_scout_mini_ros1_adapter
+    rospack find xgc_mecanum_ugv_ros1_adapter
     test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_service_helper
     test -x /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
+    test -x /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
     test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v6.yaml
     test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v4.yaml
+    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v1.yaml
     test -f /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
     test -f /usr/share/xgc2/adapter-definitions/xgc2-scout-mini-ros1-adapter.json
+    test -f /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
     test -f /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
     test -f /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
+    test -f /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-scout-mini-ros1-adapter.json
+    test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-mecanum-ugv-ros1-adapter.json
   notes: |
     Each robot Adapter is a domain-specific Adapter Runtime application. Core
     resolves its provider definition from the installed robot profile catalog;
@@ -65,12 +75,17 @@ ownership:
   - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_service_helper
   - /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter
   - /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
+  - /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter
+  - /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
   - /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/adapter-definitions/xgc2-scout-mini-ros1-adapter.json
+  - /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
   - /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
+  - /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-scout-mini-ros1-adapter.json
+  - /usr/share/xgc2/robot-adapter-profiles/xgc2-mecanum-ugv-ros1-adapter.json
 release:
   repository: lxk36/xgc2-ros1-adapter
   ref: master

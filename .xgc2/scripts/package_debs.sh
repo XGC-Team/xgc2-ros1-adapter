@@ -11,6 +11,8 @@ PX4_PACKAGE="ros-${ROS_DISTRO}-xgc2-px4-multirotor-adapter"
 PX4_ROS_PACKAGE="xgc_px4_multirotor_ros1_adapter"
 SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
+MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
+MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
 
 product_version() {
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
@@ -59,7 +61,8 @@ trap cleanup EXIT
 mkdir -p "${OUTPUT_DIR}"
 rm -f \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb
+  "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb
 
 mkdir -p "${BUILD_DIR}/debian"
 cat > "${BUILD_DIR}/debian/control" <<EOF
@@ -72,6 +75,9 @@ Package: ${PX4_PACKAGE}
 Architecture: any
 
 Package: ${SCOUT_PACKAGE}
+Architecture: any
+
+Package: ${MECANUM_PACKAGE}
 Architecture: any
 EOF
 
@@ -120,7 +126,8 @@ package_adapter() {
   local detail="$5"
   local profile_file="$6"
   local definition_id="$7"
-  local helper_name="${8:-}"
+  local profile_schema_file="$8"
+  local helper_name="${9:-}"
   local pkg_root="${BUILD_DIR}/${package}"
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
   local helper_executable=""
@@ -147,7 +154,7 @@ package_adapter() {
     echo "missing installed ${ros_package} native profile" >&2
     exit 1
   fi
-  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v3.schema.json" ]]; then
+  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}" ]]; then
     echo "missing installed ${ros_package} profile schema" >&2
     exit 1
   fi
@@ -203,6 +210,7 @@ package_adapter \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
   "px4-multirotor-ros1-v6.yaml" \
   "xgc2-px4-multirotor-ros1-adapter" \
+  "robot-adapter-profile-v4.schema.json" \
   "xgc_px4_multirotor_ros1_adapter_service_helper"
 
 package_adapter \
@@ -212,8 +220,19 @@ package_adapter \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini telemetry, discrete motion control, and channel-diagnostic capabilities." \
   "scout-mini-ros1-v4.yaml" \
-  "xgc2-scout-mini-ros1-adapter"
+  "xgc2-scout-mini-ros1-adapter" \
+  "robot-adapter-profile-v4.schema.json"
+
+package_adapter \
+  "${MECANUM_PACKAGE}" \
+  "${MECANUM_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
+  "XGC2 Mecanum UGV ROS1 semantic adapter" \
+  "Provides Mecanum UGV VRPN telemetry, discrete motion control, and channel-diagnostic capabilities." \
+  "mecanum-ugv-ros1-v1.yaml" \
+  "xgc2-mecanum-ugv-ros1-adapter" \
+  "robot-adapter-profile-v4.schema.json"
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
-  \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \) \
+  \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" -o -name "${MECANUM_PACKAGE}_*.deb" \) \
   -print | sort
