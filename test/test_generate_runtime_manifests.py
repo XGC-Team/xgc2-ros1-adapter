@@ -477,6 +477,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             scout_endpoints["set-motion-intent"]["defaultTimeoutMillis"], 1000
         )
         pulse = scout_endpoints["pulse-motion-intent-lease"]
+        self.assertEqual(pulse["interaction"], "unary")
         self.assertEqual(pulse["inputSchema"], scout_endpoints["set-motion-intent"]["inputSchema"])
         self.assertEqual(pulse["outputSchema"], scout_endpoints["set-motion-intent"]["outputSchema"])
         self.assertEqual(pulse["idempotency"], "not-supported")

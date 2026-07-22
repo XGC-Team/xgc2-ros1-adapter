@@ -224,18 +224,16 @@ bool operationDeadline(const xgc::adapter::v1::WorkContext &context,
 
 std::string operationLeaseOwner(
     const xgc::adapter::v1::ScopeReference &subject,
-    const std::string &robot_id, const std::string &operation_id,
-    std::uint32_t gear, std::int32_t longitudinal, std::int32_t yaw) {
+    const std::string &robot_id, const std::string &operation_id) {
   const auto run = subject.attributes().find("run-id");
   if (run == subject.attributes().end() || run->second.empty() ||
       robot_id.empty() || operation_id.empty()) {
     return {};
   }
-  // Base commands and volatile pulses derive the same stable lease identity
-  // from the owning run, robot, operation, and canonical command values.
-  return run->second + "\n" + robot_id + "\n" + operation_id + "\n" +
-         std::to_string(gear) + "\n" + std::to_string(longitudinal) + "\n" +
-         std::to_string(yaw);
+  // Base commands, renewal pulses, and the declared inactive pulse derive the
+  // same stable lease identity. RenewIntent separately requires the exact
+  // command payload, so a stale pulse cannot change the current intent.
+  return run->second + "\n" + robot_id + "\n" + operation_id;
 }
 
 bool inputSchemaMatches(const xgc::v1::Payload &input,
@@ -307,6 +305,11 @@ public:
         };
 
     xgc2::adapter_runtime::CapabilityCallbacks command;
+    command.unary =
+        [this](const xgc::adapter::v1::UnaryRequest &request,
+               const xgc2::adapter_runtime::CancellationToken &cancellation) {
+          return handleLeasePulse(request, cancellation);
+        };
     command.operation =
         [this](const xgc::adapter::v1::OperationRequest &request,
                const xgc2::adapter_runtime::CancellationToken &cancellation) {
@@ -791,7 +794,31 @@ private:
   xgc2::adapter_runtime::OperationResult handleCommand(
       const xgc::adapter::v1::OperationRequest &request,
       const xgc2::adapter_runtime::CancellationToken &cancellation) {
-    if (request.input().encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
+    return executeMotionCommand(request.context(), request.input(),
+                                cancellation, false);
+  }
+
+  xgc2::adapter_runtime::UnaryResult handleLeasePulse(
+      const xgc::adapter::v1::UnaryRequest &request,
+      const xgc2::adapter_runtime::CancellationToken &cancellation) {
+    auto result = executeMotionCommand(request.context(), request.input(),
+                                       cancellation, true);
+    if (result.phase == xgc::adapter::v1::OPERATION_PHASE_SUCCEEDED &&
+        result.has_output) {
+      return xgc2::adapter_runtime::UnaryResult::Success(
+          std::move(result.output));
+    }
+    return xgc2::adapter_runtime::UnaryResult::Failure(
+        result.error.error_class(), result.error.code(), result.error.message(),
+        result.error.retry_after_ms());
+  }
+
+  xgc2::adapter_runtime::OperationResult executeMotionCommand(
+      const xgc::adapter::v1::WorkContext &context,
+      const xgc::v1::Payload &wire_input,
+      const xgc2::adapter_runtime::CancellationToken &cancellation,
+      bool expected_lease_pulse) {
+    if (wire_input.encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF) {
       return rejectOperation("invalid-command-encoding",
                              "Scout command input must use protobuf encoding");
     }
@@ -809,15 +836,14 @@ private:
                                "robot instance configuration is not applied");
       }
       if (!xgc2_ros1_robot_adapter::ResolveRobotSubject(
-              request.context(), configuration_, &robot_id, &error)) {
+              context, configuration_, &robot_id, &error)) {
         return rejectOperation("invalid-robot-subject", error);
       }
       const auto found = connected_.find(robot_id);
       if (found == connected_.end() || !found->second.runtime ||
           !found->second.fence.matches(configuration_.fence) ||
-          found->second.fence.revision !=
-              request.context().spec_revision() ||
-          !sameSubject(found->second.subject, request.context().subject())) {
+          found->second.fence.revision != context.spec_revision() ||
+          !sameSubject(found->second.subject, context.subject())) {
         return rejectOperation(
             "telemetry-source-not-open",
             "Scout command requires the current robot source to be open");
@@ -832,7 +858,7 @@ private:
 
     ResolvedOperation operation;
     bool known_operation = false;
-    const std::string &endpoint = request.context().endpoint_id();
+    const std::string &endpoint = context.endpoint_id();
     if (!resolveOperation(robot.profile_id, endpoint, &operation,
                           &known_operation, &error)) {
       if (!known_operation)
@@ -841,16 +867,22 @@ private:
           xgc::adapter::v1::ERROR_CLASS_PERMANENT,
           "operation-contract-invalid", error);
     }
+    if (operation.lease_pulse != expected_lease_pulse) {
+      return xgc2::adapter_runtime::OperationResult::Failure(
+          xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+          "operation-contract-invalid",
+          "Scout command interaction does not match its endpoint contract");
+    }
     if (!channelEnabled(robot, operation.channel.channel_id)) {
       return rejectOperation("command-disabled",
                              endpoint + " is disabled by the robot spec");
     }
-    if (!inputSchemaMatches(request.input(), operation)) {
+    if (!inputSchemaMatches(wire_input, operation)) {
       return rejectOperation(
           "invalid-command-schema",
           "Scout command schema does not match the installed operation");
     }
-    if (request.context().volatile_() != operation.lease_pulse) {
+    if (context.volatile_() != operation.lease_pulse) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_PERMANENT,
           "operation-contract-invalid",
@@ -872,7 +904,7 @@ private:
           "operation-contract-invalid",
           "Scout motion-intent input schema drifted");
     }
-    if (!input.ParseFromString(request.input().value())) {
+    if (!input.ParseFromString(wire_input.value())) {
       return rejectOperation("invalid-command-input",
                              "MotionIntentRequest is malformed");
     }
@@ -888,15 +920,14 @@ private:
     ros::WallTime expires_at;
     const std::uint32_t lease_timeout_millis =
         operation.channel.operation_lease.timeout_millis;
-    if (!operationDeadline(request.context(), lease_timeout_millis,
+    if (!operationDeadline(context, lease_timeout_millis,
                            &expires_at, &error)) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_DEADLINE,
           "command-deadline-exceeded", error);
     }
     const std::string command_owner = operationLeaseOwner(
-        request.context().subject(), robot_id, operation.channel.operation_id,
-        input.gear(), input.longitudinal(), input.yaw());
+        context.subject(), robot_id, operation.channel.operation_id);
     if (command_owner.empty())
       return rejectOperation("invalid-command-owner",
                              "Scout motion lease has no run owner");
