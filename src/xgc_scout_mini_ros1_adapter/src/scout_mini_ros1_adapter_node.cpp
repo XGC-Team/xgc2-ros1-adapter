@@ -174,11 +174,11 @@ bool resolveOperation(const std::string &profile_id,
     *error = "installed Scout operation descriptor is incomplete or unsafe";
     return false;
   }
-  if (resolved->lease_pulse &&
-      (channel.operation_lease.pulse_endpoint_id == nullptr ||
-       channel.operation_lease.heartbeat_interval_millis == 0u ||
-       channel.operation_lease.timeout_millis == 0u ||
-       !channel.operation_lease.volatile_supported)) {
+  if (channel.operation_lease.pulse_endpoint_id == nullptr ||
+      channel.operation_lease.pulse_endpoint_id[0] == '\0' ||
+      channel.operation_lease.heartbeat_interval_millis == 0u ||
+      channel.operation_lease.timeout_millis == 0u ||
+      !channel.operation_lease.volatile_supported) {
     *error = "installed Scout lease pulse descriptor is incomplete or unsafe";
     return false;
   }
@@ -223,9 +223,19 @@ bool operationDeadline(const xgc::adapter::v1::WorkContext &context,
 }
 
 std::string operationLeaseOwner(
-    const xgc::adapter::v1::ScopeReference &subject) {
-  const auto owner = subject.attributes().find("run-id");
-  return owner == subject.attributes().end() ? std::string() : owner->second;
+    const xgc::adapter::v1::ScopeReference &subject,
+    const std::string &robot_id, const std::string &operation_id,
+    std::uint32_t gear, std::int32_t longitudinal, std::int32_t yaw) {
+  const auto run = subject.attributes().find("run-id");
+  if (run == subject.attributes().end() || run->second.empty() ||
+      robot_id.empty() || operation_id.empty()) {
+    return {};
+  }
+  // Base commands and volatile pulses derive the same stable lease identity
+  // from the owning run, robot, operation, and canonical command values.
+  return run->second + "\n" + robot_id + "\n" + operation_id + "\n" +
+         std::to_string(gear) + "\n" + std::to_string(longitudinal) + "\n" +
+         std::to_string(yaw);
 }
 
 bool inputSchemaMatches(const xgc::v1::Payload &input,
@@ -884,8 +894,9 @@ private:
           xgc::adapter::v1::ERROR_CLASS_DEADLINE,
           "command-deadline-exceeded", error);
     }
-    const std::string command_owner =
-        operationLeaseOwner(request.context().subject());
+    const std::string command_owner = operationLeaseOwner(
+        request.context().subject(), robot_id, operation.channel.operation_id,
+        input.gear(), input.longitudinal(), input.yaw());
     if (command_owner.empty())
       return rejectOperation("invalid-command-owner",
                              "Scout motion lease has no run owner");

@@ -696,14 +696,14 @@ def validate_profile_document(
                 ),
                 NATIVE_OPERATION_TIMEOUT_MAX_MILLIS,
             )
-            timeout_ms = require_positive_integer(
+            lease_timeout_ms = require_positive_integer(
                 lease["timeout_ms"],
                 "{}: operation {} lease timeout_ms".format(
                     profile_path, operation_id
                 ),
                 NATIVE_OPERATION_TIMEOUT_MAX_MILLIS,
             )
-            if timeout_ms < 2 * heartbeat_interval_ms:
+            if lease_timeout_ms < 2 * heartbeat_interval_ms:
                 raise ValueError(
                     "{}: operation {} lease timeout must be at least twice its heartbeat interval".format(
                         profile_path, operation_id
