@@ -1,0 +1,10 @@
+<launch>
+  <arg name="adapter_bootstrap_file" />
+
+  <node pkg="xgc_mecanum_ugv_ros1_adapter"
+        type="xgc_mecanum_ugv_ros1_adapter_node"
+        name="$(anon xgc_mecanum_ugv_ros1_adapter)"
+        output="screen"
+        required="true"
+        args="--adapter-bootstrap-file $(arg adapter_bootstrap_file)" />
+</launch>
