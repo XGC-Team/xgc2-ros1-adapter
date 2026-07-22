@@ -30,8 +30,9 @@ VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
+SCOUT_SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v5.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v4.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v5.yaml"
 MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
@@ -116,12 +117,13 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         )
 
     def arguments(self, profile_file):
+        profile_schema = SCOUT_SCHEMA if Path(profile_file) == SCOUT_PROFILE else SCHEMA
         return SimpleNamespace(
             executable="/bin/true",
             artifact_path="/usr/bin/fixture-adapter",
             registry=str(self.registry),
             profile_file=str(profile_file),
-            profile_schema=str(SCHEMA),
+            profile_schema=str(profile_schema),
             definition_id="fixture-robot-adapter",
             version="1.0.0",
             label="Fixture",
@@ -130,7 +132,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
 
     def test_catalog_carries_exact_kind_and_semantic_traits(self):
         _, _, catalog = GENERATOR.build_documents(self.arguments(PX4_PROFILE))
-        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v4")
+        self.assertEqual(catalog["schema"], "xgc.robot.adapter-profile-catalog/v5")
         profile = catalog["profiles"][0]
         self.assertEqual(
             set(profile),
@@ -246,6 +248,15 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                         },
                         "additionalProperties": False,
                     },
+                    "lease": {
+                        "pulseEndpointId": "pulse-motion-intent-lease",
+                        "heartbeatIntervalMillis": 250,
+                        "timeoutMillis": 750,
+                        "inactiveParameterValues": {
+                            "longitudinal": 0,
+                            "yaw": 0,
+                        },
+                    },
                 }
             ],
         )
@@ -283,14 +294,17 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ],
         )
 
-    def test_profile_v4_contract_and_legacy_schema_are_explicit(self):
+    def test_profile_schema_epochs_and_catalog_digest_are_explicit(self):
         self.assertEqual(
-            CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
-            "xgc.robot.adapter-profile/v4",
+            CONTRACT_GENERATOR.PROFILE_SCHEMA_IDS,
+            {
+                "xgc.robot.adapter-profile/v4",
+                "xgc.robot.adapter-profile/v5",
+            },
         )
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_CONTRACT_DIGEST_SCHEMA,
-            "xgc.robot.profile-contract-digest/v4",
+            "xgc.robot.profile-contract-digest/v5",
         )
 
         legacy_schema = json.loads(
@@ -446,17 +460,31 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ]["capabilities"]
             if capability["ref"]["id"] == "xgc.robot.command"
         )
-        self.assertEqual(len(scout_command["endpoints"]), 1)
+        self.assertEqual(len(scout_command["endpoints"]), 2)
+        scout_endpoints = {
+            endpoint["endpointId"]: endpoint
+            for endpoint in scout_command["endpoints"]
+        }
         self.assertEqual(
-            scout_command["endpoints"][0]["endpointId"],
-            "set-motion-intent",
+            set(scout_endpoints),
+            {"set-motion-intent", "pulse-motion-intent-lease"},
         )
         self.assertEqual(
-            scout_command["endpoints"][0]["inputSchema"]["messageId"], 3204
+            scout_endpoints["set-motion-intent"]["inputSchema"]["messageId"],
+            3204,
         )
         self.assertEqual(
-            scout_command["endpoints"][0]["defaultTimeoutMillis"], 1000
+            scout_endpoints["set-motion-intent"]["defaultTimeoutMillis"], 1000
         )
+        pulse = scout_endpoints["pulse-motion-intent-lease"]
+        self.assertEqual(pulse["inputSchema"], scout_endpoints["set-motion-intent"]["inputSchema"])
+        self.assertEqual(pulse["outputSchema"], scout_endpoints["set-motion-intent"]["outputSchema"])
+        self.assertEqual(pulse["idempotency"], "not-supported")
+        self.assertTrue(pulse["cancellationSupported"])
+        self.assertTrue(pulse["deadlineRequired"])
+        self.assertTrue(pulse["volatileSupported"])
+        self.assertEqual(pulse["defaultTimeoutMillis"], 750)
+        self.assertEqual(pulse["maximumTimeoutMillis"], 750)
         self.assertEqual(
             scout_process["definitions"][0]["command"]["env"],
             ROS_NOETIC_ENVIRONMENT,

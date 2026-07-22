@@ -370,6 +370,14 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3204u, motion.input_message_id);
   EXPECT_EQ(1u, motion.output_message_id);
+  EXPECT_EQ("pulse-motion-intent-lease",
+            std::string(motion.operation_lease.pulse_endpoint_id));
+  EXPECT_EQ(250u, motion.operation_lease.heartbeat_interval_millis);
+  EXPECT_EQ(750u, motion.operation_lease.timeout_millis);
+  EXPECT_TRUE(motion.operation_lease.volatile_supported);
+  EXPECT_EQ("{\"longitudinal\":0,\"yaw\":0}",
+            std::string(
+                motion.operation_lease.inactive_parameter_values_json));
   const auto *output = contract::channelEndpoint(
       motion, contract::EndpointKind::kOutput, "output");
   ASSERT_NE(nullptr, output);
