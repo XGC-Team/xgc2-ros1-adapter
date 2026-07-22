@@ -506,6 +506,16 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn("--profile-schema", script)
         self.assertNotIn("--with-commands", script)
 
+    def test_ground_adapters_stop_motion_before_ros_transport_shutdown(self):
+        for package, node_source in (
+            ("scout", "xgc_scout_mini_ros1_adapter/src/scout_mini_ros1_adapter_node.cpp"),
+            ("mecanum", "xgc_mecanum_ugv_ros1_adapter/src/mecanum_ugv_ros1_adapter_node.cpp"),
+        ):
+            with self.subTest(package=package):
+                source = (REPOSITORY_ROOT / "src" / node_source).read_text(encoding="utf-8")
+                self.assertIn("client_.reset();", source)
+                self.assertLess(source.index("node.Shutdown();"), source.index("ros::shutdown();"))
+
     def test_duplicate_operation_identity_is_rejected_without_fallback(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))
         duplicate_arm = copy.deepcopy(

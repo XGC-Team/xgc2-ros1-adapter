@@ -282,10 +282,14 @@ public:
         ros::WallDuration(0.1), &MecanumUgvRos1AdapterNode::periodicTimer, this);
   }
 
-  ~MecanumUgvRos1AdapterNode() {
+  ~MecanumUgvRos1AdapterNode() { Shutdown(); }
+
+  void Shutdown() {
     periodic_timer_.stop();
-    if (client_)
+    if (client_) {
       client_->Stop();
+      client_.reset();
+    }
     clearInstanceSpec();
   }
 
@@ -1008,8 +1012,13 @@ int main(int argc, char **argv) {
            !node.exitRequested()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    if ((shutdown_signals.requested() || node.exitRequested()) && ros::ok())
+    // Stop the Runtime client and publish the final zero command while ROS
+    // transport is still alive. The destructor remains an idempotent fallback.
+    node.Shutdown();
+    if ((shutdown_signals.requested() || node.exitRequested()) && ros::ok()) {
+      ros::WallDuration(0.05).sleep();
       ros::shutdown();
+    }
     ros::waitForShutdown();
     spinner.stop();
   } catch (const std::exception &exception) {
