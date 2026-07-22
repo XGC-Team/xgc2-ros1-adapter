@@ -85,6 +85,11 @@ observes the same topic for telemetry. Real-robot bringup must place
 does not publish a second global command topic because that would couple
 multiple Scout robots.
 
+After the first accepted motion intent, the namespaced `cmd_vel` topic must
+have one effective command owner. Stop any autonomous controller first, or put
+both sources behind an explicit ROS command mux; competing publishers would
+otherwise interleave velocity commands.
+
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
 
