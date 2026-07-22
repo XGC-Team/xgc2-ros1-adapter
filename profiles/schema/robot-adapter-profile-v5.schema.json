@@ -232,7 +232,8 @@
         "pulse_endpoint_id",
         "heartbeat_interval_ms",
         "timeout_ms",
-        "inactive_parameter_values"
+        "inactive_parameter_values",
+        "volatile_supported"
       ],
       "properties": {
         "pulse_endpoint_id": {
@@ -248,6 +249,9 @@
           "type": "integer",
           "minimum": 200,
           "maximum": 10000
+        },
+        "volatile_supported": {
+          "const": true
         },
         "inactive_parameter_values": {
           "type": "object",

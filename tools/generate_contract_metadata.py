@@ -525,6 +525,12 @@ def validate_profile_document(
         operation_id = channel.get("operation_id")
         operation_contract = channel.get("operation_contract")
         if kind == "operation":
+            if operation_id in pulse_endpoint_ids:
+                raise ValueError(
+                    "{}: operation identity {} collides with a lease pulse endpoint".format(
+                        profile_path, operation_id
+                    )
+                )
             if operation_id in operation_ids:
                 raise ValueError(
                     "{}: duplicate operation identity {}".format(
@@ -1151,6 +1157,14 @@ def generate(
         "  bool deadline_required;",
         "};",
         "",
+        "struct OperationLeaseMetadata {",
+        "  const char* pulse_endpoint_id;",
+        "  std::uint32_t heartbeat_interval_millis;",
+        "  std::uint32_t timeout_millis;",
+        "  bool volatile_supported;",
+        "  const char* inactive_parameter_values_json;",
+        "};",
+        "",
         "struct OperationMetadata {",
         "  const char* operation_id;",
         "  const char* channel_id;",
@@ -1175,6 +1189,7 @@ def generate(
         "  const PolicyMetadata* policy;",
         "  std::size_t policy_count;",
         "  OperationContractMetadata operation_contract;",
+        "  OperationLeaseMetadata operation_lease;",
         "};",
         "",
         "inline bool messageMetadata(std::uint32_t id, MessageMetadata* out) {",
@@ -1470,8 +1485,15 @@ def generate(
                 else "0u"
             )
             operation = channel["operation_contract"]
+            lease = channel["lease"]
+            inactive_json = json.dumps(
+                lease.get("inactive_parameter_values", {}),
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
             lines.append(
-                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}}}}},".format(
+                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}}}, {{{}, {}u, {}u, {}, {}}}}},".format(
                     cpp_string(channel["id"]),
                     KIND_ENUM[channel["kind"]],
                     cpp_string(channel["processor"]),
@@ -1491,6 +1513,11 @@ def generate(
                     cpp_string(operation.get("idempotency", "")),
                     cpp_bool(operation.get("cancellation_supported", False)),
                     cpp_bool(operation.get("deadline_required", False)),
+                    cpp_string(lease.get("pulse_endpoint_id", "")),
+                    lease.get("heartbeat_interval_ms", 0),
+                    lease.get("timeout_ms", 0),
+                    cpp_bool(lease.get("volatile_supported", False)),
+                    cpp_string(inactive_json),
                 )
             )
         lines.extend(
