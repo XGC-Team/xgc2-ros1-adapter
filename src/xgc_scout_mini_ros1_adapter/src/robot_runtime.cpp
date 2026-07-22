@@ -9,6 +9,7 @@
 #include <ros/names.h>
 
 #include "xgc/semantic/common/v1/telemetry.pb.h"
+#include "xgc/semantic/ground/v1/chassis.pb.h"
 #include "xgc_scout_mini_ros1_adapter/generated_contract.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
@@ -87,7 +88,7 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 6u> kNativeBindings{{
+const std::array<NativeChannelBinding, 7u> kNativeBindings{{
     {"state.pose", "scout-mini.pose-estimate", "odometry",
      "nav_msgs/Odometry", "xgc.semantic.common.v1.PoseEstimate", false},
     {"state.velocity", "scout-mini.velocity-estimate", "odometry",
@@ -98,6 +99,8 @@ const std::array<NativeChannelBinding, 6u> kNativeBindings{{
      "scout_msgs/ScoutStatus", "xgc.semantic.common.v1.PowerStatus", false},
     {"state.health", "scout-mini.vehicle-health", "chassis_status",
      "scout_msgs/ScoutStatus", "xgc.semantic.common.v1.VehicleHealth", false},
+    {"state.chassis", "scout-mini.chassis-status", "chassis_status",
+     "scout_msgs/ScoutStatus", "xgc.semantic.ground.v1.ChassisStatus", false},
     {"diagnostic.channel-health", "common.channel-health", nullptr, nullptr,
      "xgc.semantic.common.v1.ChannelHealth", true},
 }};
@@ -215,6 +218,30 @@ bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
 }
 
 bool scoutIsOnline(bool status_fresh) { return status_fresh; }
+
+double scoutBatteryPercentage(double voltage_v) {
+  constexpr double kEmptyVoltage = 20.5;
+  constexpr double kFullVoltage = 29.2;
+  if (!std::isfinite(voltage_v))
+    return 0.0;
+  return std::max(0.0, std::min(1.0, (voltage_v - kEmptyVoltage) /
+                                         (kFullVoltage - kEmptyVoltage)));
+}
+
+xgc::semantic::ground::v1::ChassisStatus::ControlMode
+scoutControlMode(std::uint8_t native_mode) {
+  using Status = xgc::semantic::ground::v1::ChassisStatus;
+  switch (native_mode) {
+  case 0u:
+    return Status::CONTROL_MODE_REMOTE;
+  case 1u:
+    return Status::CONTROL_MODE_COMMAND_CAN;
+  case 2u:
+    return Status::CONTROL_MODE_COMMAND_UART;
+  default:
+    return Status::CONTROL_MODE_UNSPECIFIED;
+  }
+}
 
 bool validateNativeProfileContract(std::string *error) {
   std::size_t parameter_count = 0u;
@@ -346,6 +373,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string imu_endpoint;
   std::string status_endpoint;
   std::string health_endpoint;
+  std::string chassis_endpoint;
   if (!resolveInputEndpoint(config, "state.pose", "odometry",
                             &odometry_endpoint, error) ||
       !resolveInputEndpoint(config, "state.velocity", "odometry",
@@ -355,11 +383,13 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
       !resolveInputEndpoint(config, "state.power", "chassis_status",
                             &status_endpoint, error) ||
       !resolveInputEndpoint(config, "state.health", "chassis_status",
-                            &health_endpoint, error)) {
+                            &health_endpoint, error) ||
+      !resolveInputEndpoint(config, "state.chassis", "chassis_status",
+                            &chassis_endpoint, error)) {
     return nullptr;
   }
   if (odometry_endpoint != velocity_endpoint ||
-      status_endpoint != health_endpoint) {
+      status_endpoint != health_endpoint || status_endpoint != chassis_endpoint) {
     fail(error,
          "Scout processors sharing a subscription resolved to different "
          "native endpoints");
@@ -731,16 +761,29 @@ void RobotRuntime::statusCallback(
       recordSourceLocked("state.power", now);
     if (required_channels_.count("state.health") != 0u)
       recordSourceLocked("state.health", now);
+    if (required_channels_.count("state.chassis") != 0u)
+      recordSourceLocked("state.chassis", now);
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
       if (std::isfinite(message->battery_voltage)) {
         payload.set_voltage_v(message->battery_voltage);
+        payload.set_percentage(scoutBatteryPercentage(message->battery_voltage));
       }
       output.push_back(makeEnvelopeLocked("state.power",
                                           message->header.stamp, payload));
       recordOutputLocked("state.power");
     } else if (channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
+    }
+    if (channelEnabled("state.chassis") && shouldEmitLocked("state.chassis", now)) {
+      xgc::semantic::ground::v1::ChassisStatus payload;
+      payload.set_control_mode(scoutControlMode(message->control_mode));
+      payload.set_native_control_mode(message->control_mode);
+      output.push_back(makeEnvelopeLocked("state.chassis",
+                                          message->header.stamp, payload));
+      recordOutputLocked("state.chassis");
+    } else if (channelEnabled("state.chassis")) {
+      ++sources_["state.chassis"].dropped_samples;
     }
   }
   emit(std::move(output));

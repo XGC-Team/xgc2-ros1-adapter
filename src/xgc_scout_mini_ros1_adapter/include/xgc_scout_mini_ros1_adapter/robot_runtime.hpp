@@ -16,6 +16,7 @@
 #include <sensor_msgs/Imu.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/ground/v1/chassis.pb.h"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
@@ -26,6 +27,9 @@ bool validRobotNamespace(const std::string &value, std::string *error);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
 bool scoutIsOnline(bool status_fresh);
+double scoutBatteryPercentage(double voltage_v);
+xgc::semantic::ground::v1::ChassisStatus::ControlMode
+scoutControlMode(std::uint8_t native_mode);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:

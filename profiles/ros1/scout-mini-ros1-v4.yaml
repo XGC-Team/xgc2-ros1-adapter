@@ -1,0 +1,99 @@
+schema: xgc.robot.adapter-profile/v4
+profile_id: scout-mini.ros1.v4
+profile_version: 4
+native_protocol: ros1
+robot_kind: scout_mini
+description: Scout Mini odometry, chassis status, IMU telemetry, and channel diagnostics.
+parameters:
+  namespace:
+    type: string
+    required: true
+    delivery: target_binding
+    description: Product-owned ROS namespace assigned to this Scout Mini robot.
+semantic_traits:
+  default_stale_after_ms: 2000
+  channel_stale_after_ms:
+    state.pose: 1000
+    state.power: 1000
+    state.health: 1000
+    state.chassis: 1000
+  online_conditions:
+    - channel_id: state.pose
+      maximum_age_ms: 1000
+    - channel_id: state.health
+      maximum_age_ms: 1000
+      predicate: xgc.semantic.common.vehicle-health.online
+  operational_ready_conditions: []
+channels:
+  - id: state.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: scout-mini.pose-estimate
+    output_rate_hz: 10
+    inputs:
+      odometry:
+        name: odom
+        type: nav_msgs/Odometry
+
+  - id: state.velocity
+    kind: stream_out
+    output_message_id: 2002
+    processor: scout-mini.velocity-estimate
+    output_rate_hz: 10
+    inputs:
+      odometry:
+        name: odom
+        type: nav_msgs/Odometry
+
+  - id: state.imu
+    kind: stream_out
+    output_message_id: 2003
+    processor: scout-mini.imu-estimate
+    output_rate_hz: 10
+    inputs:
+      imu:
+        name: imu/data_raw
+        type: sensor_msgs/Imu
+
+  - id: state.power
+    kind: stream_out
+    output_message_id: 2004
+    processor: scout-mini.power-status
+    output_rate_hz: 2
+    inputs:
+      chassis_status:
+        name: scout_status
+        type: scout_msgs/ScoutStatus
+
+  - id: state.health
+    kind: stream_out
+    output_message_id: 2005
+    processor: scout-mini.vehicle-health
+    output_rate_hz: 2
+    inputs:
+      chassis_status:
+        name: scout_status
+        type: scout_msgs/ScoutStatus
+
+  - id: state.chassis
+    kind: stream_out
+    output_message_id: 3102
+    processor: scout-mini.chassis-status
+    output_rate_hz: 2
+    inputs:
+      chassis_status:
+        name: scout_status
+        type: scout_msgs/ScoutStatus
+
+  - id: diagnostic.channel-health
+    kind: stream_out
+    output_message_id: 2010
+    processor: common.channel-health
+    output_rate_hz: 1
+    observes:
+      - state.pose
+      - state.velocity
+      - state.imu
+      - state.power
+      - state.health
+      - state.chassis

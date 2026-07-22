@@ -92,7 +92,7 @@ ldd "${PX4_SERVICE_HELPER}" | grep -q 'libroscpp'
 check_ros_package \
   "${SCOUT_ROS_PACKAGE}" \
   "scout_mini_ros1_adapter.launch" \
-  "scout-mini-ros1-v3.yaml" \
+  "scout-mini-ros1-v4.yaml" \
   "xgc2-scout-mini-ros1-adapter"
 
 test ! -e "${PREFIX}/share/xgc_ros1_adapter"

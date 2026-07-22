@@ -211,7 +211,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini telemetry and channel-diagnostic capabilities." \
-  "scout-mini-ros1-v3.yaml" \
+  "scout-mini-ros1-v4.yaml" \
   "xgc2-scout-mini-ros1-adapter"
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \

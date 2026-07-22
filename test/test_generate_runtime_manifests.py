@@ -31,7 +31,7 @@ VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v5.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v3.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v4.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -60,6 +60,7 @@ MESSAGE_ROLES = {
     3003: "telemetry",
     3004: "diagnostic",
     3005: "diagnostic",
+    3102: "telemetry",
     3201: "request",
     3202: "request",
     3203: "request",
@@ -70,6 +71,7 @@ TYPE_NAMES = {
     1: "xgc.v1.Empty",
     2005: "xgc.semantic.common.v1.VehicleHealth",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
+    3102: "xgc.semantic.ground.v1.ChassisStatus",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",

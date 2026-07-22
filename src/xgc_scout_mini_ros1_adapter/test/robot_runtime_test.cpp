@@ -66,25 +66,41 @@ TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
   EXPECT_FALSE(scoutIsOnline(false));
 }
 
+TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
+  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(20.5));
+  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(29.2));
+  EXPECT_NEAR(0.95, scoutBatteryPercentage(28.765), 1e-12);
+  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(18.0));
+  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(32.0));
+}
+
+TEST(ChassisProjection, MapsNativeScoutControlModes) {
+  using Status = xgc::semantic::ground::v1::ChassisStatus;
+  EXPECT_EQ(Status::CONTROL_MODE_REMOTE, scoutControlMode(0));
+  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_CAN, scoutControlMode(1));
+  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_UART, scoutControlMode(2));
+  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(255));
+}
+
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v3");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v4");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("scout-mini.ros1.v3", "state.pose", &pose));
+      contract::channelMetadata("scout-mini.ros1.v4", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v3", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v4", "operation.arm",
                                          &unknown));
 
   std::size_t operation_count = 1u;
-  EXPECT_EQ(nullptr, contract::profileOperations("scout-mini.ros1.v3",
+  EXPECT_EQ(nullptr, contract::profileOperations("scout-mini.ros1.v4",
                                                  &operation_count));
   EXPECT_EQ(0u, operation_count);
 }
@@ -92,6 +108,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 TEST(InstalledContract, DoesNotContainPx4OperationMetadata) {
   contract::MessageMetadata metadata;
   EXPECT_TRUE(contract::messageMetadata(2001, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3102, &metadata));
   EXPECT_FALSE(contract::messageMetadata(3201, &metadata));
 }
 

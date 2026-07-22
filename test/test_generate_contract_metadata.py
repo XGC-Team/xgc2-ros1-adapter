@@ -21,7 +21,7 @@ SCHEMA_PATH = (
     / "robot-adapter-profile-v4.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v5.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v3.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
@@ -43,6 +43,7 @@ MESSAGE_ROLES = {
     3003: "telemetry",
     3004: "diagnostic",
     3005: "diagnostic",
+    3102: "telemetry",
     3201: "request",
     3202: "request",
     3203: "request",
@@ -53,6 +54,7 @@ MESSAGE_ROLES = {
 TYPE_NAMES = {
     2005: "xgc.semantic.common.v1.VehicleHealth",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
+    3102: "xgc.semantic.ground.v1.ChassisStatus",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
@@ -202,7 +204,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v3"]
+        scout = scout_profiles["scout-mini.ros1.v4"]
         self.assertFalse(
             any(channel["kind"] == "operation" for channel in scout["channels"])
         )
@@ -750,7 +752,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v3") {\n'
+            'if (profile_id == "scout-mini.ros1.v4") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -786,7 +788,7 @@ int main() {
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
                 self.assertNotIn("px4.multirotor.ros1.v5", source)
-                self.assertNotIn("scout-mini.ros1.v3", source)
+                self.assertNotIn("scout-mini.ros1.v4", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")

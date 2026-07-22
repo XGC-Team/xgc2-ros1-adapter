@@ -7,7 +7,7 @@ specialize that abstraction for PX4 multirotors and Scout Mini robots.
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
 | `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v5` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v3` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v4` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -53,8 +53,11 @@ single native allowlist; reboot requires a known, fresh, connected, disarmed
 vehicle state.
 
 Scout Mini telemetry consumes `odom`, `imu/data_raw`, and `scout_status` under
-the configured namespace. The Scout profile intentionally exposes no command
-capability.
+the configured namespace. `state.power.voltageV` retains the measured chassis
+voltage. `state.power.percentage` is currently a clamped linear projection from
+the Scout Mini manual's 20.5 V protection voltage (0%) to 29.2 V full-charge
+voltage (100%); it is a display estimate rather than a battery state-of-charge
+model. The Scout profile intentionally exposes no command capability.
 
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
