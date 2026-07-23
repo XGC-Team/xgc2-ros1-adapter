@@ -28,13 +28,15 @@ buildTelemetryBatch(const std::deque<TelemetryQueueItem> &queue,
                     std::size_t maximum_items = kMaximumTelemetryBatchItems,
                     std::size_t maximum_bytes = kMaximumTelemetryBatchBytes) {
   TelemetryBatch batch;
-  if (maximum_items == 0u || maximum_bytes == 0u)
+  const std::size_t item_limit =
+      std::min(maximum_items, kMaximumTelemetryBatchItems);
+  if (item_limit == 0u || maximum_bytes == 0u)
     return batch;
-  const std::size_t reserve = std::min(queue.size(), maximum_items);
+  const std::size_t reserve = std::min(queue.size(), item_limit);
   batch.tokens.reserve(reserve);
   batch.items.reserve(reserve);
   for (const auto &queued : queue) {
-    if (batch.items.size() >= maximum_items ||
+    if (batch.items.size() >= item_limit ||
         queued.value.size() > maximum_bytes - batch.bytes) {
       break;
     }

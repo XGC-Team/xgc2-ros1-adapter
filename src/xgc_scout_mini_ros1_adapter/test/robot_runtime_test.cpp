@@ -311,6 +311,30 @@ TEST(TelemetryBatch, EnforcesBothItemAndByteLimitsWithoutSplittingItems) {
   EXPECT_TRUE(buildTelemetryBatch(queue, 3u, 3u).items.empty());
 }
 
+TEST(TelemetryBatch, DrainsQueuesLargerThanTheProtocolWindowInBoundedBatches) {
+  std::deque<TelemetryQueueItem> queue;
+  for (std::uint64_t token = 1u; token <= 37u; ++token)
+    queue.push_back({token, "telemetry"});
+
+  std::vector<std::size_t> batch_sizes;
+  std::uint64_t expected_token = 1u;
+  while (!queue.empty()) {
+    const auto batch =
+        buildTelemetryBatch(queue, 256u, kMaximumTelemetryBatchBytes);
+    ASSERT_FALSE(batch.items.empty());
+    ASSERT_LE(batch.items.size(), kMaximumTelemetryBatchItems);
+    ASSERT_EQ(batch.items.size(), batch.tokens.size());
+    for (const auto token : batch.tokens)
+      EXPECT_EQ(expected_token++, token);
+    batch_sizes.push_back(batch.items.size());
+    for (std::size_t index = 0u; index < batch.items.size(); ++index)
+      queue.pop_front();
+  }
+
+  EXPECT_EQ((std::vector<std::size_t>{16u, 16u, 5u}), batch_sizes);
+  EXPECT_EQ(38u, expected_token);
+}
+
 } // namespace
 } // namespace xgc_scout_mini_ros1_adapter
 
