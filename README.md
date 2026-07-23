@@ -162,7 +162,7 @@ All adapters are compiled against the exact
 `libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Their
 installed Debian packages deliberately omit those build-only dependencies:
 `dpkg-shlibdeps` derives a lower-bounded
-`libxgc2-adapter-runtime-client1` dependency from the ELF SONAME, while the ROS
+`libxgc2-adapter-runtime-client2` dependency from the ELF SONAME, while the ROS
 message packages remain explicit runtime dependencies. Compatible ABI-1 SDK
 updates can therefore be compatibility-verified without republishing these
 adapters. An ABI break must use a new SONAME/runtime package and rebuild them.

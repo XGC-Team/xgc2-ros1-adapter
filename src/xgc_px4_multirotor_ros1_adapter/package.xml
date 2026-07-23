@@ -19,7 +19,7 @@
   <build_depend>xgc2-protobuf-dev</build_depend>
 
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>libxgc2-adapter-runtime-client1</exec_depend>
+  <exec_depend>libxgc2-adapter-runtime-client2</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
   <exec_depend>roscpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

@@ -9,14 +9,14 @@ SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
 MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-3~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-1~focal}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
 dpkg -s "${MECANUM_PACKAGE}" >/dev/null
-dpkg -s libxgc2-adapter-runtime-client1 >/dev/null
-test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client1)" = \
+dpkg -s libxgc2-adapter-runtime-client2 >/dev/null
+test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client2)" = \
   "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
 test -f "${PROTOBUF_REGISTRY}"
 if dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-adapter" >/dev/null 2>&1; then
@@ -28,7 +28,7 @@ px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 scout_depends="$(dpkg-query -W -f='${Depends}' "${SCOUT_PACKAGE}")"
 mecanum_depends="$(dpkg-query -W -f='${Depends}' "${MECANUM_PACKAGE}")"
 for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
-  grep -Eq '(^|, )libxgc2-adapter-runtime-client1( |[(])' <<<"${depends}"
+  grep -Eq '(^|, )libxgc2-adapter-runtime-client2( |[(])' <<<"${depends}"
   if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${depends}"; then
     echo "Adapter runtime dependencies leaked SDK/schema packages" >&2

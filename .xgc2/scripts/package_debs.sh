@@ -20,7 +20,7 @@ product_version() {
 }
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
-ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client1"
+ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client2"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

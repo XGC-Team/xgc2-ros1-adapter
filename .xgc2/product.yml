@@ -27,7 +27,7 @@ apt:
   - ros-noetic-xgc2-scout-mini-adapter
   - ros-noetic-xgc2-mecanum-ugv-adapter
   depends:
-  - libxgc2-adapter-runtime-client1
+  - libxgc2-adapter-runtime-client2
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
   - python3-jsonschema
@@ -95,6 +95,6 @@ release:
   - libxgc2-adapter-runtime-client-dev
   - xgc2-protobuf
   dependency_policy:
-    libxgc2-adapter-runtime-client-dev: verify
+    libxgc2-adapter-runtime-client-dev: rebuild
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild

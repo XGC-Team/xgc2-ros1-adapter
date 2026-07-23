@@ -72,8 +72,8 @@ case "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" in
     ;;
 esac
 if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
-  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.5.0-3~focal}"
-  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-2~focal}"
+  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-1~focal}"
+  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-3~focal}"
 fi
 
 expected_deb_arch=""
@@ -120,9 +120,9 @@ docker_env_args=(
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
   -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
-  -e "XGC2_PROTOBUF_GIT_TAG=${XGC2_PROTOBUF_GIT_TAG:-v0.5.0-2}"
+  -e "XGC2_PROTOBUF_GIT_TAG=${XGC2_PROTOBUF_GIT_TAG:-v0.5.0-3}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-runtime-client-cpp.git}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.5.0-3}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.6.0-1}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -281,7 +281,7 @@ docker exec "${container_name}" bash -lc '
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
         /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
       apt_install -y \
-        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client1_*.deb \
+        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client2_*.deb \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
     else
       apt_install -y \
@@ -294,7 +294,7 @@ docker exec "${container_name}" bash -lc '
       echo "Adapter Runtime client version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
       exit 1
     fi
-    installed_runtime_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client1)"
+    installed_runtime_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client2)"
     if [[ "${installed_runtime_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
       echo "Adapter Runtime ABI version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_runtime_version}" >&2
       exit 1
