@@ -64,11 +64,8 @@ usage:
 
     test -f /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
 
-    test -f /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
 
-    test -f /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
 
-    test -f /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
 
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
 
@@ -100,9 +97,6 @@ ownership:
   - /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/adapter-definitions/xgc2-scout-mini-ros1-adapter.json
   - /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
-  - /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
-  - /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
-  - /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-scout-mini-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-mecanum-ugv-ros1-adapter.json
