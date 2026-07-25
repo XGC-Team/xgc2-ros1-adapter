@@ -193,7 +193,7 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoSignedBodyXAxis) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v1", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v2", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =
