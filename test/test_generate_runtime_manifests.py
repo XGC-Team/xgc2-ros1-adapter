@@ -31,8 +31,8 @@ VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v4.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v1.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v5.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v2.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -249,26 +249,30 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 }
             ],
         )
+        # Online and localized are separate facts and a robot is ready only when
+        # both hold, so the ground vehicles gate online on their own IMU and let
+        # VRPN gate operational readiness. Both UGVs carry the identical pair.
         self.assertEqual(
-            [
-                condition["channelId"]
-                for condition in scout["semantics"]["onlineConditions"]
-            ],
-            ["state.health", "vrpn.position"],
+            scout["semantics"]["onlineConditions"],
+            [{"channelId": "state.imu", "maximumAgeMillis": 1000}],
         )
         self.assertEqual(
-            scout["semantics"]["onlineConditions"][0]["predicate"],
-            "xgc.semantic.common.vehicle-health.online",
+            scout["semantics"]["operationalReadyConditions"],
+            [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
         )
 
         _, _, mecanum_catalog = GENERATOR.build_documents(
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v1")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v2")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
+            [{"channelId": "state.imu", "maximumAgeMillis": 1000}],
+        )
+        self.assertEqual(
+            mecanum["semantics"]["operationalReadyConditions"],
             [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
         )
         self.assertEqual(
@@ -277,6 +281,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "command.velocity",
                 "diagnostic.channel-health",
                 "operation.motion-intent",
+                "state.imu",
                 "vrpn.position",
                 "vrpn.speed",
                 "vrpn.velocity",

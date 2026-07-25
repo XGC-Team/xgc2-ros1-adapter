@@ -21,9 +21,9 @@ SCHEMA_PATH = (
     / "robot-adapter-profile-v4.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v4.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v5.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v1.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v2.yaml"
 )
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 MECANUM_DEFINITION_ID = "xgc2-mecanum-ugv-ros1-adapter"
@@ -242,7 +242,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v4"]
+        scout = scout_profiles["scout-mini.ros1.v5"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -336,7 +336,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v1"]
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v2"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -347,6 +347,9 @@ class ContractGeneratorTest(unittest.TestCase):
                 "vrpn.velocity",
                 "vrpn.speed",
                 "command.velocity",
+                # The on-board IMU is this chassis's liveness stream: the Robot
+                # Profile gates online on it and leaves VRPN to gate readiness.
+                "state.imu",
                 "operation.motion-intent",
                 "diagnostic.channel-health",
             },
@@ -363,6 +366,7 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertEqual(mecanum_channels["vrpn.velocity"]["output_message_id"], 2002)
         self.assertEqual(mecanum_channels["vrpn.speed"]["output_message_id"], 2006)
         self.assertEqual(mecanum_channels["command.velocity"]["output_message_id"], 2002)
+        self.assertEqual(mecanum_channels["state.imu"]["output_message_id"], 2003)
         self.assertEqual(
             {endpoint["role"] for endpoint in mecanum_channels["vrpn.speed"]["endpoints"]},
             {"pose", "velocity"},
@@ -371,9 +375,24 @@ class ContractGeneratorTest(unittest.TestCase):
             mecanum, self.messages, MECANUM_DEFINITION_ID
         )
         self.assertEqual(mecanum_body["robotKind"], "mecanum_ugv")
+        # Both ground vehicles carry the identical readiness contract: the
+        # on-board IMU proves the vehicle is online, VRPN proves it is localized,
+        # and a robot is ready only when both hold.
         self.assertEqual(
             mecanum_body["semantics"]["onlineConditions"],
+            [{"channelId": "state.imu", "maximumAgeMillis": 1000}],
+        )
+        self.assertEqual(
+            mecanum_body["semantics"]["operationalReadyConditions"],
             [{"channelId": "vrpn.position", "maximumAgeMillis": 1000}],
+        )
+        self.assertEqual(
+            mecanum_body["semantics"]["onlineConditions"],
+            scout_body["semantics"]["onlineConditions"],
+        )
+        self.assertEqual(
+            mecanum_body["semantics"]["operationalReadyConditions"],
+            scout_body["semantics"]["operationalReadyConditions"],
         )
         self.assertEqual(
             mecanum_body["semantics"]["operations"],
@@ -425,7 +444,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v1"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v2"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
 
@@ -1012,7 +1031,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v4") {\n'
+            'if (profile_id == "scout-mini.ros1.v5") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1058,7 +1077,7 @@ int main() {
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
                 self.assertNotIn("px4.multirotor.ros1.v6", source)
-                self.assertNotIn("scout-mini.ros1.v4", source)
+                self.assertNotIn("scout-mini.ros1.v5", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")

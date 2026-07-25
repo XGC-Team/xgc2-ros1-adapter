@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <ros/names.h>
+#include <sensor_msgs/Imu.h>
 
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc_mecanum_ugv_ros1_adapter/generated_contract.hpp"
@@ -34,6 +35,17 @@ void copyVector(const RosVector &source,
   target->set_x(source.x);
   target->set_y(source.y);
   target->set_z(source.z);
+}
+
+// Covariance arrays arrive as a fixed-size boost::array on the ROS message and
+// leave as a repeated field, so the copy is the same shape as the Scout Mini's.
+template <typename Covariance>
+void copyCovariance(const Covariance &source,
+                    google::protobuf::RepeatedField<double> *target) {
+  target->Reserve(static_cast<int>(source.size()));
+  for (const double value : source) {
+    target->Add(value);
+  }
 }
 
 template <typename RosQuaternion>
@@ -71,7 +83,7 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 5u> kNativeBindings{{
+const std::array<NativeChannelBinding, 6u> kNativeBindings{{
     {"vrpn.position", "mecanum-ugv.vrpn-pose", "pose",
      "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
     {"vrpn.velocity", "mecanum-ugv.vrpn-velocity", "velocity",
@@ -82,6 +94,8 @@ const std::array<NativeChannelBinding, 5u> kNativeBindings{{
      false},
     {"command.velocity", "mecanum-ugv.velocity-command-observation", "command",
      "geometry_msgs/Twist", "xgc.semantic.common.v1.VelocityEstimate", false},
+    {"state.imu", "mecanum-ugv.imu-estimate", "imu", "sensor_msgs/Imu",
+     "xgc.semantic.common.v1.ImuEstimate", false},
     {"diagnostic.channel-health", "common.channel-health", nullptr, nullptr,
      "xgc.semantic.common.v1.ChannelHealth", true},
 }};
@@ -450,6 +464,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string speed_endpoint;
   std::string speed_pose_endpoint;
   std::string command_velocity_endpoint;
+  std::string imu_endpoint;
   if (!resolveInputEndpoint(config, "vrpn.position", "pose",
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
@@ -459,7 +474,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
       !resolveInputEndpoint(config, "vrpn.speed", "pose",
                             &speed_pose_endpoint, error) ||
       !resolveInputEndpoint(config, "command.velocity", "command",
-                            &command_velocity_endpoint, error)) {
+                            &command_velocity_endpoint, error) ||
+      !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint, error)) {
     return nullptr;
   }
   if (vrpn_velocity_endpoint != speed_endpoint ||
@@ -478,7 +494,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        mocap_it->second, std::move(pose_endpoint),
                        std::move(vrpn_velocity_endpoint),
                        std::move(command_velocity_endpoint),
-                       std::move(emitter)));
+                       std::move(imu_endpoint), std::move(emitter)));
   try {
     if (!runtime->install(error)) {
       runtime->Stop();
@@ -500,7 +516,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string pose_endpoint,
                            std::string vrpn_velocity_endpoint,
                            std::string command_velocity_endpoint,
-                           EnvelopeEmitter emitter)
+                           std::string imu_endpoint, EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
       robot_namespace_(cleanTopicPart(robot_namespace)),
@@ -511,7 +527,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       emitter_(std::move(emitter)),
       pose_endpoint_(std::move(pose_endpoint)),
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
-      command_velocity_endpoint_(std::move(command_velocity_endpoint)) {}
+      command_velocity_endpoint_(std::move(command_velocity_endpoint)),
+      imu_endpoint_(std::move(imu_endpoint)) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -552,6 +569,7 @@ void RobotRuntime::Stop() {
   pose_subscriber_.shutdown();
   vrpn_velocity_subscriber_.shutdown();
   command_velocity_subscriber_.shutdown();
+  imu_subscriber_.shutdown();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -628,6 +646,19 @@ bool RobotRuntime::install(std::string *error) {
               });
       if (!requireRosRegistration(command_velocity_subscriber_,
                                   command_velocity_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("state.imu") != 0u) {
+      ensureSourceLocked("state.imu",
+                         channelStaleAfterSeconds(profile_id_, "state.imu"));
+      imu_subscriber_ = node_handle_.subscribe<sensor_msgs::Imu>(
+          imu_endpoint_, 20,
+          [weak_self](const sensor_msgs::Imu::ConstPtr &message) {
+            if (const auto self = weak_self.lock()) {
+              self->imuCallback(message);
+            }
+          });
+      if (!requireRosRegistration(imu_subscriber_, imu_endpoint_, error))
         return false;
     }
   }
@@ -796,6 +827,41 @@ void RobotRuntime::commandVelocityCallback(
       recordOutputLocked("command.velocity");
     } else if (channelEnabled("command.velocity")) {
       ++sources_["command.velocity"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+// The on-board IMU is this chassis's liveness signal: it is the only stream the
+// vehicle publishes without being commanded, so the Robot Profile gates "online"
+// on it and leaves VRPN to gate operational readiness.
+void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("state.imu", now);
+    if (channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
+      xgc::semantic::common::v1::ImuEstimate payload;
+      payload.set_frame_id(message->header.frame_id);
+      copyQuaternion(message->orientation, payload.mutable_orientation());
+      copyVector(message->angular_velocity, payload.mutable_angular_velocity());
+      copyVector(message->linear_acceleration,
+                 payload.mutable_linear_acceleration());
+      copyCovariance(message->orientation_covariance,
+                     payload.mutable_orientation_covariance());
+      copyCovariance(message->angular_velocity_covariance,
+                     payload.mutable_angular_velocity_covariance());
+      copyCovariance(message->linear_acceleration_covariance,
+                     payload.mutable_linear_acceleration_covariance());
+      output.push_back(
+          makeEnvelopeLocked("state.imu", message->header.stamp, payload));
+      recordOutputLocked("state.imu");
+    } else if (channelEnabled("state.imu")) {
+      ++sources_["state.imu"].dropped_samples;
     }
   }
   emit(std::move(output));

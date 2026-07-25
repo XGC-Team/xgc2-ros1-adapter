@@ -13,6 +13,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
+#include <sensor_msgs/Imu.h>
 #include <ros/ros.h>
 
 #include "xgc/robot/v1/message.pb.h"
@@ -87,7 +88,8 @@ private:
                std::set<std::string> required_channels,
                std::string mocap_rigid_body, std::string pose_endpoint,
                std::string vrpn_velocity_endpoint,
-               std::string command_velocity_endpoint, EnvelopeEmitter emitter);
+               std::string command_velocity_endpoint, std::string imu_endpoint,
+               EnvelopeEmitter emitter);
 
   bool install(std::string *error);
   bool beginCallback();
@@ -113,6 +115,7 @@ private:
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
+  void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void emitChannelHealthLocked(const ros::WallTime &now,
                                std::vector<xgc::robot::v1::RobotMessage> *messages);
 
@@ -129,6 +132,7 @@ private:
   const std::string pose_endpoint_;
   const std::string vrpn_velocity_endpoint_;
   const std::string command_velocity_endpoint_;
+  const std::string imu_endpoint_;
 
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;
@@ -145,6 +149,7 @@ private:
   ros::Subscriber pose_subscriber_;
   ros::Subscriber vrpn_velocity_subscriber_;
   ros::Subscriber command_velocity_subscriber_;
+  ros::Subscriber imu_subscriber_;
 };
 
 } // namespace xgc_mecanum_ugv_ros1_adapter
