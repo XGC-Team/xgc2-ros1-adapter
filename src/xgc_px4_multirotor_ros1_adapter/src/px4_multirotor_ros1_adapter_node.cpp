@@ -19,12 +19,14 @@
 #include <ros/ros.h>
 
 #include "xgc/semantic/aerial/v1/control.pb.h"
+#include "xgc/semantic/common/v1/control.pb.h"
 #include "xgc/v1/message.pb.h"
 #include "xgc2/adapter_runtime/client.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 #include "xgc2_ros1_robot_adapter/runtime_support.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/generated_contract.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/px4_operations.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/remote_control.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/shutdown_signal.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/telemetry_batch.hpp"
@@ -382,6 +384,7 @@ private:
   struct ConnectedRobot {
     std::shared_ptr<RobotRuntime> runtime;
     std::shared_ptr<Px4OperationExecutor> operations;
+    std::shared_ptr<RemoteControlPublisher> remote_control;
     xgc2_ros1_robot_adapter::RobotConfig robot;
     xgc2_ros1_robot_adapter::InstanceSpecFence fence;
     xgc::adapter::v1::SourceOpenRequest source_request;
@@ -575,6 +578,9 @@ private:
       return;
     if (connected->runtime)
       connected->runtime->Stop();
+    if (connected->remote_control)
+      connected->remote_control->Stop();
+    connected->remote_control.reset();
     connected->operations.reset();
     connected->runtime.reset();
   }
@@ -768,9 +774,14 @@ private:
 
     std::shared_ptr<RobotRuntime> runtime;
     std::shared_ptr<Px4OperationExecutor> operations;
-    auto native_resources = makeScopeExit([&runtime, &operations] {
+    std::shared_ptr<RemoteControlPublisher> remote_control;
+    auto native_resources =
+        makeScopeExit([&runtime, &operations, &remote_control] {
       if (runtime)
         runtime->Stop();
+      if (remote_control)
+        remote_control->Stop();
+      remote_control.reset();
       operations.reset();
       runtime.reset();
     });
@@ -845,6 +856,25 @@ private:
       operations =
           std::shared_ptr<Px4OperationExecutor>(std::move(unique_operations));
     }
+    if (channelEnabled(robot, "operation.motion-intent")) {
+      remote_control = RemoteControlPublisher::Create(
+          node_handle_, native_profile.remote_control_endpoint,
+          native_profile.remote_control_altitude_meters,
+          native_profile.remote_control_maximum_linear_velocity_mps,
+          native_profile.remote_control_maximum_yaw_rate_rps, &error);
+      if (!remote_control) {
+        ConnectedRobot removed;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          takeConnectedRobotLocked(locator, nullptr, &removed);
+        }
+        runtime->Stop();
+        operations.reset();
+        return rejectedSource(
+            xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
+            "remote-control-publisher-start-failed", error);
+      }
+    }
 
     auto decision = xgc2::adapter_runtime::SourceOpenDecision::Accept();
     bool committed = false;
@@ -858,6 +888,7 @@ private:
           sameSourceRequest(found->second.source_request, request)) {
         found->second.runtime = runtime;
         found->second.operations = operations;
+        found->second.remote_control = remote_control;
         runtime->Activate();
         found->second.active = true;
         committed = true;
@@ -868,6 +899,8 @@ private:
     }
     if (!committed) {
       runtime->Stop();
+      if (remote_control)
+        remote_control->Stop();
       operations.reset();
       return rejectedSource(
           xgc::adapter::v1::ERROR_CLASS_CANCELLED, "stale-source-open",
@@ -967,6 +1000,7 @@ private:
     std::string robot_id;
     std::uint64_t source_generation = 0;
     std::shared_ptr<Px4OperationExecutor> operation_executor;
+    std::shared_ptr<RemoteControlPublisher> remote_control;
     xgc2_ros1_robot_adapter::RobotConfig robot;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -994,6 +1028,7 @@ private:
       robot = found->second.robot;
       source_generation = found->second.source_generation;
       operation_executor = found->second.operations;
+      remote_control = found->second.remote_control;
       ++found->second.in_flight_commands;
     }
     CommandLease operations(this, std::move(robot_id), source_generation,
@@ -1068,6 +1103,28 @@ private:
                         "AutopilotRebootRequest is malformed");
       }
       native = operations->rebootAutopilot(timing);
+    } else if (processor == "px4.set-motion-intent") {
+      xgc::semantic::common::v1::RemoteControlIntentRequest input;
+      if (operation.input_schema.type_name !=
+          input.GetDescriptor()->full_name()) {
+        return xgc2::adapter_runtime::OperationResult::Failure(
+            xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+            "operation-contract-invalid",
+            "PX4 remote-control input schema drifted");
+      }
+      if (!input.ParseFromString(request.input().value()))
+        return rejected("invalid-command-input",
+                        "RemoteControlIntentRequest is malformed");
+      if (!remote_control)
+        return rejected("command-disabled",
+                        "PX4 remote control is disabled by robot spec");
+      if (!remote_control->SetIntent(input.gear(), input.longitudinal(),
+                                     input.lateral(), input.yaw(), &error)) {
+        return xgc2::adapter_runtime::OperationResult::Failure(
+            xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
+            "motion-command-publication-failed", error);
+      }
+      return succeeded(operation);
     } else {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_PERMANENT, "operation-contract-invalid",
@@ -1212,16 +1269,21 @@ private:
     if (!periodic_lock.owns_lock())
       return;
     std::vector<std::shared_ptr<RobotRuntime>> runtimes;
+    std::vector<std::shared_ptr<RemoteControlPublisher>> remote_controls;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       for (const auto &entry : connected_) {
         if (entry.second.active && entry.second.runtime)
           runtimes.push_back(entry.second.runtime);
+        if (entry.second.active && entry.second.remote_control)
+          remote_controls.push_back(entry.second.remote_control);
       }
     }
     const ros::WallTime now = ros::WallTime::now();
     for (const auto &runtime : runtimes)
       runtime->emitPeriodic(now);
+    for (const auto &remote_control : remote_controls)
+      remote_control->PublishPeriodic();
     flushTelemetry();
   }
 

@@ -398,7 +398,7 @@
           },
           "then": {
             "properties": {
-              "input_message_id": {"const": 3204},
+              "input_message_id": {"const": 3205},
               "output_message_id": {"const": 1}
             }
           }

@@ -19,7 +19,7 @@
 #include <ros/master.h>
 #include <ros/ros.h>
 
-#include "xgc/semantic/ground/v1/control.pb.h"
+#include "xgc/semantic/common/v1/control.pb.h"
 #include "xgc/v1/message.pb.h"
 #include "xgc2/adapter_runtime/client.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
@@ -810,7 +810,7 @@ private:
           "operation-contract-invalid",
           "installed Scout operation processor has no native binding");
     }
-    xgc::semantic::ground::v1::MotionIntentRequest input;
+    xgc::semantic::common::v1::RemoteControlIntentRequest input;
     if (operation.input_schema.type_name !=
         input.GetDescriptor()->full_name()) {
       return xgc2::adapter_runtime::OperationResult::Failure(
@@ -820,19 +820,20 @@ private:
     }
     if (!input.ParseFromString(request.input().value())) {
       return rejectOperation("invalid-command-input",
-                             "MotionIntentRequest is malformed");
+                             "RemoteControlIntentRequest is malformed");
     }
     if (input.gear() < 1u || input.gear() > 3u ||
         input.longitudinal() < -1 || input.longitudinal() > 1 ||
+        input.lateral() < -1 || input.lateral() > 1 ||
         input.yaw() < -1 || input.yaw() > 1) {
       return rejectOperation(
           "invalid-command-input",
-          "gear must be 1..3 and longitudinal/yaw must be -1..1");
+          "gear must be 1..3 and longitudinal/lateral/yaw must be -1..1");
     }
     if (cancellation.IsCancellationRequested())
       return xgc2::adapter_runtime::OperationResult::Cancelled();
-    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.yaw(),
-                           &error)) {
+    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.lateral(),
+                           input.yaw(), &error)) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
           "motion-command-publication-failed", error);

@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: px4.multirotor.ros1.v6
-profile_version: 6
+profile_id: px4.multirotor.ros1.v7
+profile_version: 7
 native_protocol: ros1
 robot_kind: px4_multirotor
 description: PX4 multirotor telemetry, mocap relay, diagnostics, and native commands through MAVROS.
@@ -277,3 +277,24 @@ channels:
       require_disarmed: true
       state_timeout_ms: 1000
       timeout_ms: 5000
+
+  - id: operation.motion-intent
+    kind: operation
+    operation_id: set-motion-intent
+    input_message_id: 3205
+    output_message_id: 1
+    processor: px4.set-motion-intent
+    operation_contract:
+      side_effect: idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    output:
+      name: mavros/setpoint_raw/local
+      type: mavros_msgs/PositionTarget
+    policy:
+      altitude_meters: 1.0
+      maximum_linear_velocity_mps: 1.5
+      maximum_yaw_rate_rps: 1.0
+      publish_rate_hz: 10
+      timeout_ms: 1000

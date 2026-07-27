@@ -20,7 +20,8 @@ double clamp(double value, double limit) {
 } // namespace
 
 bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
-                         std::int32_t yaw, geometry_msgs::Twist *command,
+                         std::int32_t lateral, std::int32_t yaw,
+                         geometry_msgs::Twist *command,
                          std::string *error) {
   if (command == nullptr)
     return fail(error, "motion command output is required");
@@ -30,11 +31,17 @@ bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
     return fail(error, "longitudinal intent must be between -1 and 1");
   if (yaw < -1 || yaw > 1)
     return fail(error, "yaw intent must be between -1 and 1");
+  if (lateral < -1 || lateral > 1)
+    return fail(error, "lateral intent must be between -1 and 1");
 
   geometry_msgs::Twist candidate;
   const double gear_scale = static_cast<double>(gear) / 3.0;
   candidate.linear.x = clamp(
       static_cast<double>(longitudinal) *
+          kMecanumMaximumLinearVelocityMetersPerSecond * gear_scale,
+      kMecanumMaximumLinearVelocityMetersPerSecond);
+  candidate.linear.y = clamp(
+      static_cast<double>(lateral) *
           kMecanumMaximumLinearVelocityMetersPerSecond * gear_scale,
       kMecanumMaximumLinearVelocityMetersPerSecond);
   candidate.angular.z = clamp(
@@ -118,10 +125,11 @@ bool MotionCommandPublisher::publishLocked(const geometry_msgs::Twist &command,
 
 bool MotionCommandPublisher::SetIntent(std::uint32_t gear,
                                        std::int32_t longitudinal,
+                                       std::int32_t lateral,
                                        std::int32_t yaw,
                                        std::string *error) {
   geometry_msgs::Twist command;
-  if (!motionIntentCommand(gear, longitudinal, yaw, &command, error))
+  if (!motionIntentCommand(gear, longitudinal, lateral, yaw, &command, error))
     return false;
 
   std::lock_guard<std::mutex> lock(mutex_);

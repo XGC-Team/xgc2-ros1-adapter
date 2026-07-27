@@ -18,7 +18,8 @@ constexpr double kMecanumMaximumAngularVelocityRadiansPerSecond =
     1.5707963267948966;
 
 bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
-                         std::int32_t yaw, geometry_msgs::Twist *command,
+                         std::int32_t lateral, std::int32_t yaw,
+                         geometry_msgs::Twist *command,
                          std::string *error);
 
 // Holds the last discrete operator intent and republishes its Twist locally.
@@ -40,7 +41,7 @@ public:
   MotionCommandPublisher &operator=(const MotionCommandPublisher &) = delete;
 
   bool SetIntent(std::uint32_t gear, std::int32_t longitudinal,
-                 std::int32_t yaw, std::string *error);
+                 std::int32_t lateral, std::int32_t yaw, std::string *error);
   void PublishPeriodic();
   void Stop() noexcept;
 

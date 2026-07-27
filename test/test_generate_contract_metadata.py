@@ -20,10 +20,10 @@ SCHEMA_PATH = (
     / "schema"
     / "robot-adapter-profile-v4.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v5.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v7.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v6.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v2.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v3.yaml"
 )
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 MECANUM_DEFINITION_ID = "xgc2-mecanum-ugv-ros1-adapter"
@@ -54,6 +54,7 @@ MESSAGE_ROLES = {
     3202: "request",
     3203: "request",
     3204: "request",
+    3205: "request",
     4001: "configuration",
     4002: "telemetry",
 }
@@ -68,6 +69,7 @@ TYPE_NAMES = {
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
     3204: "xgc.semantic.ground.v1.MotionIntentRequest",
+    3205: "xgc.semantic.common.v1.RemoteControlIntentRequest",
 }
 
 
@@ -119,7 +121,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v6"]
+        px4 = px4_profiles["px4.multirotor.ros1.v7"]
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
@@ -142,6 +144,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "operation.arm",
                 "operation.mode",
                 "operation.autopilot-reboot",
+                "operation.motion-intent",
             },
         )
         self.assertEqual(px4_channels["operation.arm"]["input_message_id"], 3201)
@@ -242,7 +245,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v5"]
+        scout = scout_profiles["scout-mini.ros1.v6"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -286,7 +289,7 @@ class ContractGeneratorTest(unittest.TestCase):
         motion = scout_channels["operation.motion-intent"]
         self.assertEqual(motion["kind"], "operation")
         self.assertEqual(motion["operation_id"], "set-motion-intent")
-        self.assertEqual(motion["input_message_id"], 3204)
+        self.assertEqual(motion["input_message_id"], 3205)
         self.assertEqual(motion["output_message_id"], 1)
         self.assertEqual(
             motion["endpoints"],
@@ -312,7 +315,7 @@ class ContractGeneratorTest(unittest.TestCase):
                     "timeoutMillis": 1000,
                     "parameterSchema": {
                         "type": "object",
-                        "required": ["gear", "longitudinal", "yaw"],
+                        "required": ["gear", "lateral", "longitudinal", "yaw"],
                         "properties": {
                             "gear": {
                                 "type": "integer",
@@ -320,6 +323,11 @@ class ContractGeneratorTest(unittest.TestCase):
                                 "maximum": 3,
                             },
                             "longitudinal": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                            "lateral": {
                                 "type": "integer",
                                 "minimum": -1,
                                 "maximum": 1,
@@ -336,7 +344,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v2"]
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v3"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -406,8 +414,8 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v6")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v6"', header)
+        self.assertIn('if (profile_id == "px4.multirotor.ros1.v7")', header)
+        self.assertIn('kProfileId = "px4.multirotor.ros1.v7"', header)
         self.assertIn('"namespace", ParameterType::kString, true', header)
         self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
@@ -433,9 +441,9 @@ class ContractGeneratorTest(unittest.TestCase):
             "xgc2-scout-mini-ros1-adapter",
             "xgc_scout_mini_ros1_adapter",
         )
-        self.assertIn('"set-motion-intent", 3204u, 1u, 0.0, 1000u, 0u', scout_header)
+        self.assertIn('"set-motion-intent", 3205u, 1u, 0.0, 1000u, 0u', scout_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
-        self.assertIn('"xgc.semantic.ground.v1.MotionIntentRequest"', scout_header)
+        self.assertIn('"xgc.semantic.common.v1.RemoteControlIntentRequest"', scout_header)
 
         mecanum_header = GENERATOR.generate(
             self.registry_fingerprint,
@@ -444,7 +452,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v2"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v3"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
 
@@ -721,11 +729,11 @@ int main() {
 
     def test_profile_identity_and_parameters_have_exact_source_bounds(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["profile_id"] = "a" * 125 + ".v6"
+        profile["profile_id"] = "a" * 125 + ".v7"
         path = self.write_profile(profile)
         GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
-        profile["profile_id"] = "a" * 126 + ".v6"
+        profile["profile_id"] = "a" * 126 + ".v7"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -1031,7 +1039,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v5") {\n'
+            'if (profile_id == "scout-mini.ros1.v6") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1076,8 +1084,8 @@ int main() {
                 self.assertIn("contract::kProfileId", source)
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v6", source)
-                self.assertNotIn("scout-mini.ros1.v5", source)
+                self.assertNotIn("px4.multirotor.ros1.v7", source)
+                self.assertNotIn("scout-mini.ros1.v6", source)
 
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
@@ -1125,7 +1133,7 @@ int main() {
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v6"]["channels"]
+            for channel in profiles["px4.multirotor.ros1.v7"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],

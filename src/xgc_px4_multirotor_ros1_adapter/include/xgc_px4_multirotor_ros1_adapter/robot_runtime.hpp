@@ -43,12 +43,16 @@ struct NativeProfileConfig {
   std::string arm_service_endpoint;
   std::string mode_service_endpoint;
   std::string reboot_service_endpoint;
+  std::string remote_control_endpoint;
   double vision_minimum_period_seconds = 0.0;
   double mocap_timeout_seconds = 0.0;
   double offboard_source_timeout_seconds = 0.0;
   double offboard_minimum_rate_hz = 0.0;
   double reboot_state_timeout_seconds = 0.0;
   double maximum_operation_timeout_seconds = 0.0;
+  double remote_control_altitude_meters = 0.0;
+  double remote_control_maximum_linear_velocity_mps = 0.0;
+  double remote_control_maximum_yaw_rate_rps = 0.0;
   std::vector<std::string> allowed_modes;
 };
 
@@ -58,6 +62,9 @@ bool BuildNativeProfileConfig(
 
 std::string topicName(const std::string &robot_namespace,
                       const std::string &relative_name);
+bool resolveRemoteControlTopic(
+    const xgc2_ros1_robot_adapter::RobotConfig &config, std::string *topic,
+    std::string *error);
 bool validRobotNamespace(const std::string &value, std::string *error);
 bool validMocapRigidBodyName(const std::string &value, std::string *error);
 bool validVisionPose(const geometry_msgs::PoseStamped &message);

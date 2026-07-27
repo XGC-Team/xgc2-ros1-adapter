@@ -30,9 +30,9 @@ VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
-PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v6.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v5.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v2.yaml"
+PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v7.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v6.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v3.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -68,6 +68,7 @@ MESSAGE_ROLES = {
     3202: "request",
     3203: "request",
     3204: "request",
+    3205: "request",
     4001: "configuration",
     4002: "telemetry",
 }
@@ -82,6 +83,7 @@ TYPE_NAMES = {
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
     3204: "xgc.semantic.ground.v1.MotionIntentRequest",
+    3205: "xgc.semantic.common.v1.RemoteControlIntentRequest",
     4001: "xgc.robot.v1.RobotAdapterSpec",
     4002: "xgc.robot.v1.RobotMessage",
 }
@@ -199,6 +201,22 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                         "additionalProperties": False,
                     },
                 },
+                {
+                    "id": "set-motion-intent",
+                    "channelId": "operation.motion-intent",
+                    "timeoutMillis": 1000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": ["gear", "lateral", "longitudinal", "yaw"],
+                        "properties": {
+                            "gear": {"type": "integer", "minimum": 1, "maximum": 3},
+                            "longitudinal": {"type": "integer", "minimum": -1, "maximum": 1},
+                            "lateral": {"type": "integer", "minimum": -1, "maximum": 1},
+                            "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
             ],
         )
         self.assertEqual(
@@ -226,7 +244,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                     "timeoutMillis": 1000,
                     "parameterSchema": {
                         "type": "object",
-                        "required": ["gear", "longitudinal", "yaw"],
+                        "required": ["gear", "lateral", "longitudinal", "yaw"],
                         "properties": {
                             "gear": {
                                 "type": "integer",
@@ -234,6 +252,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                                 "maximum": 3,
                             },
                             "longitudinal": {
+                                "type": "integer",
+                                "minimum": -1,
+                                "maximum": 1,
+                            },
+                            "lateral": {
                                 "type": "integer",
                                 "minimum": -1,
                                 "maximum": 1,
@@ -265,7 +288,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v2")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v3")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
@@ -384,12 +407,20 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ]
             if capability["ref"]["id"] == "xgc.robot.command"
         )
-        self.assertTrue(
-            all(
-                endpoint["defaultTimeoutMillis"] == 5000
-                and endpoint["maximumTimeoutMillis"] == 5000
+        self.assertEqual(
+            {
+                endpoint["endpointId"]: (
+                    endpoint["defaultTimeoutMillis"],
+                    endpoint["maximumTimeoutMillis"],
+                )
                 for endpoint in command_capability["endpoints"]
-            )
+            },
+            {
+                "arm": (5000, 5000),
+                "reboot-autopilot": (5000, 5000),
+                "set-flight-mode": (5000, 5000),
+                "set-motion-intent": (1000, 1000),
+            },
         )
         endpoints = {
             endpoint["endpointId"]: endpoint
@@ -457,7 +488,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             "set-motion-intent",
         )
         self.assertEqual(
-            scout_command["endpoints"][0]["inputSchema"]["messageId"], 3204
+            scout_command["endpoints"][0]["inputSchema"]["messageId"], 3205
         )
         self.assertEqual(
             scout_command["endpoints"][0]["defaultTimeoutMillis"], 1000

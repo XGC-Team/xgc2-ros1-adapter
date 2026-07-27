@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: scout-mini.ros1.v5
-profile_version: 5
+profile_id: scout-mini.ros1.v6
+profile_version: 6
 native_protocol: ros1
 robot_kind: scout_mini
 description: Scout Mini VRPN, chassis, IMU, command telemetry, and discrete motion control. Online follows the on-board IMU; VRPN localization gates operational readiness.
@@ -63,7 +63,7 @@ channels:
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent
-    input_message_id: 3204
+    input_message_id: 3205
     output_message_id: 1
     processor: scout-mini.set-motion-intent
     operation_contract:

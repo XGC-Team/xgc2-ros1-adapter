@@ -402,7 +402,7 @@ bool validateNativeProfileContract(std::string *error) {
       motion.kind != contract::ChannelKind::kOperation ||
       std::string(motion.processor) != "scout-mini.set-motion-intent" ||
       std::string(motion.operation_id) != "set-motion-intent" ||
-      motion.input_message_id != 3204u || motion.output_message_id != 1u ||
+      motion.input_message_id != 3205u || motion.output_message_id != 1u ||
       motion.output_rate_hz != 0.0 ||
       motion.operation_timeout_millis != 1000u ||
       motion.stale_after_millis != 0u || motion.endpoint_count != 1u ||
@@ -416,7 +416,7 @@ bool validateNativeProfileContract(std::string *error) {
       operation_timeout_millis != 1000 ||
       !contract::messageMetadata(motion.input_message_id, &motion_input) ||
       std::string(motion_input.type_name) !=
-          "xgc.semantic.ground.v1.MotionIntentRequest" ||
+          "xgc.semantic.common.v1.RemoteControlIntentRequest" ||
       !contract::messageMetadata(motion.output_message_id, &motion_output) ||
       std::string(motion_output.type_name) != "xgc.v1.Empty") {
     return fail(error, "Scout motion-intent operation binding drifted");

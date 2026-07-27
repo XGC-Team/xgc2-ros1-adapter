@@ -77,23 +77,23 @@ TEST(MotionIntent, MapsThreeGearsAndClampsToScoutSdkLimits) {
   geometry_msgs::Twist command;
   std::string error;
 
-  ASSERT_TRUE(motionIntentCommand(1, 1, 1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(1, 1, 1, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.5, command.linear.x);
   EXPECT_DOUBLE_EQ(0.1745, command.angular.z);
   EXPECT_DOUBLE_EQ(0.0, command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.x);
 
-  ASSERT_TRUE(motionIntentCommand(2, -1, -1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(2, -1, 0, -1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(-1.0, command.linear.x);
   EXPECT_DOUBLE_EQ(-0.349, command.angular.z);
 
-  ASSERT_TRUE(motionIntentCommand(3, 1, 1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(3, 1, 0, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(kScoutMaximumLinearVelocityMetersPerSecond,
                    command.linear.x);
   EXPECT_DOUBLE_EQ(kScoutMaximumAngularVelocityRadiansPerSecond,
                    command.angular.z);
 
-  ASSERT_TRUE(motionIntentCommand(3, 0, 0, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(3, 0, 0, 0, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.0, command.linear.x);
   EXPECT_DOUBLE_EQ(0.0, command.angular.z);
 }
@@ -101,11 +101,12 @@ TEST(MotionIntent, MapsThreeGearsAndClampsToScoutSdkLimits) {
 TEST(MotionIntent, RejectsValuesOutsideTheClosedDiscreteContract) {
   geometry_msgs::Twist command;
   std::string error;
-  EXPECT_FALSE(motionIntentCommand(0, 0, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(4, 0, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, -2, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, 0, 2, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, 0, 0, nullptr, &error));
+  EXPECT_FALSE(motionIntentCommand(0, 0, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(4, 0, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, -2, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 2, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 0, 2, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 0, 0, nullptr, &error));
 }
 
 TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
@@ -119,7 +120,7 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_TRUE(published.empty());
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(2, 1, -1, &error)) << error;
+  ASSERT_TRUE(publisher.SetIntent(2, 1, 0, -1, &error)) << error;
   ASSERT_EQ(1u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(-0.349, published.back().angular.z);
@@ -128,7 +129,7 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   ASSERT_EQ(2u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
 
-  ASSERT_TRUE(publisher.SetIntent(2, 0, 0, &error)) << error;
+  ASSERT_TRUE(publisher.SetIntent(2, 0, 0, 0, &error)) << error;
   ASSERT_EQ(3u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
@@ -139,7 +140,7 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
   EXPECT_EQ(4u, published.size());
-  EXPECT_FALSE(publisher.SetIntent(1, 1, 0, &error));
+  EXPECT_FALSE(publisher.SetIntent(1, 1, 0, 0, &error));
 }
 
 TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
@@ -152,8 +153,8 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
       });
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(1, 1, 0, &error)) << error;
-  ASSERT_FALSE(publisher.SetIntent(3, 1, 0, &error));
+  ASSERT_TRUE(publisher.SetIntent(1, 1, 0, 0, &error)) << error;
+  ASSERT_FALSE(publisher.SetIntent(3, 1, 0, 0, &error));
   EXPECT_NE(std::string::npos, error.find("injected publication failure"));
 
   publisher.PublishPeriodic();
@@ -218,44 +219,44 @@ TEST(ChassisProjection, MapsNativeScoutControlModes) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v5");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v6");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
   ASSERT_TRUE(
-      contract::channelMetadata("scout-mini.ros1.v5", "vrpn.position", &position));
+      contract::channelMetadata("scout-mini.ros1.v6", "vrpn.position", &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v5", "state.pose",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6", "state.pose",
                                          &position));
 
   contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5", "vrpn.velocity",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6", "vrpn.velocity",
                                         &vrpn_velocity));
   EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
 
   contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5", "vrpn.speed",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6", "vrpn.speed",
                                         &vrpn_speed));
   EXPECT_EQ(2006u, vrpn_speed.output_message_id);
 
   contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6",
                                         "command.velocity",
                                         &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v5", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6", "operation.arm",
                                          &unknown));
 
   contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v5",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6",
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
-  EXPECT_EQ(3204u, motion.input_message_id);
+  EXPECT_EQ(3205u, motion.input_message_id);
   EXPECT_EQ(1u, motion.output_message_id);
   const auto *output = contract::channelEndpoint(
       motion, contract::EndpointKind::kOutput, "output");
@@ -265,7 +266,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   std::size_t operation_count = 0u;
   const auto *operations = contract::profileOperations(
-      "scout-mini.ros1.v5", &operation_count);
+      "scout-mini.ros1.v6", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));
@@ -275,8 +276,8 @@ TEST(InstalledContract, ContainsScoutMotionButNotPx4Operations) {
   contract::MessageMetadata metadata;
   EXPECT_TRUE(contract::messageMetadata(2001, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3102, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3204, &metadata));
-  EXPECT_EQ("xgc.semantic.ground.v1.MotionIntentRequest",
+  EXPECT_TRUE(contract::messageMetadata(3205, &metadata));
+  EXPECT_EQ("xgc.semantic.common.v1.RemoteControlIntentRequest",
             std::string(metadata.type_name));
   EXPECT_FALSE(contract::messageMetadata(3201, &metadata));
 }

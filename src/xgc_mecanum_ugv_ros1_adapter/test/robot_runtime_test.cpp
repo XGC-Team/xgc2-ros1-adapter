@@ -77,23 +77,23 @@ TEST(MotionIntent, MapsThreeGearsToTheDeployedSssLimits) {
   geometry_msgs::Twist command;
   std::string error;
 
-  ASSERT_TRUE(motionIntentCommand(1, 1, 1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(1, 1, 1, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.5, command.linear.x);
   EXPECT_NEAR(0.5235987755982988, command.angular.z, 1e-15);
-  EXPECT_DOUBLE_EQ(0.0, command.linear.y);
+  EXPECT_DOUBLE_EQ(0.5, command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.x);
 
-  ASSERT_TRUE(motionIntentCommand(2, -1, -1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(2, -1, 0, -1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(-1.0, command.linear.x);
   EXPECT_NEAR(-1.0471975511965976, command.angular.z, 1e-15);
 
-  ASSERT_TRUE(motionIntentCommand(3, 1, 1, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(3, 1, 0, 1, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(kMecanumMaximumLinearVelocityMetersPerSecond,
                    command.linear.x);
   EXPECT_DOUBLE_EQ(kMecanumMaximumAngularVelocityRadiansPerSecond,
                    command.angular.z);
 
-  ASSERT_TRUE(motionIntentCommand(3, 0, 0, &command, &error)) << error;
+  ASSERT_TRUE(motionIntentCommand(3, 0, 0, 0, &command, &error)) << error;
   EXPECT_DOUBLE_EQ(0.0, command.linear.x);
   EXPECT_DOUBLE_EQ(0.0, command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.z);
@@ -102,11 +102,12 @@ TEST(MotionIntent, MapsThreeGearsToTheDeployedSssLimits) {
 TEST(MotionIntent, RejectsValuesOutsideTheClosedExistingContract) {
   geometry_msgs::Twist command;
   std::string error;
-  EXPECT_FALSE(motionIntentCommand(0, 0, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(4, 0, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, -2, 0, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, 0, 2, &command, &error));
-  EXPECT_FALSE(motionIntentCommand(1, 0, 0, nullptr, &error));
+  EXPECT_FALSE(motionIntentCommand(0, 0, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(4, 0, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, -2, 0, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 2, 0, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 0, 2, &command, &error));
+  EXPECT_FALSE(motionIntentCommand(1, 0, 0, 0, nullptr, &error));
 }
 
 TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
@@ -120,7 +121,7 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_TRUE(published.empty());
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(2, 1, -1, &error)) << error;
+  ASSERT_TRUE(publisher.SetIntent(2, 1, 0, -1, &error)) << error;
   ASSERT_EQ(1u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
   EXPECT_NEAR(-1.0471975511965976, published.back().angular.z, 1e-15);
@@ -135,7 +136,7 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
   EXPECT_EQ(3u, published.size());
-  EXPECT_FALSE(publisher.SetIntent(1, 1, 0, &error));
+  EXPECT_FALSE(publisher.SetIntent(1, 1, 0, 0, &error));
 }
 
 TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
@@ -148,8 +149,8 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
       });
 
   std::string error;
-  ASSERT_TRUE(publisher.SetIntent(1, 1, 0, &error)) << error;
-  ASSERT_FALSE(publisher.SetIntent(3, 1, 0, &error));
+  ASSERT_TRUE(publisher.SetIntent(1, 1, 0, 0, &error)) << error;
+  ASSERT_FALSE(publisher.SetIntent(3, 1, 0, 0, &error));
   EXPECT_NE(std::string::npos, error.find("injected publication failure"));
 
   publisher.PublishPeriodic();
@@ -193,13 +194,13 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoSignedBodyXAxis) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v2", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v3", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
   ASSERT_NE(nullptr, channels);
-  ASSERT_EQ(6u, channel_count);
+  ASSERT_EQ(7u, channel_count);
 
   const std::vector<std::string> streams{
       "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",
@@ -243,7 +244,7 @@ TEST(InstalledProfile, KeepsTheExistingLongitudinalYawOperation) {
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId,
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
-  EXPECT_EQ(3204u, motion.input_message_id);
+  EXPECT_EQ(3205u, motion.input_message_id);
   EXPECT_EQ(1u, motion.output_message_id);
   EXPECT_EQ("mecanum-ugv.set-motion-intent", std::string(motion.processor));
   const auto *output = contract::channelEndpoint(

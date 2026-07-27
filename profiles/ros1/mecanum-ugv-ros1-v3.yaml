@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: mecanum-ugv.ros1.v2
-profile_version: 2
+profile_id: mecanum-ugv.ros1.v3
+profile_version: 3
 native_protocol: ros1
 robot_kind: mecanum_ugv
 description: Mecanum UGV VRPN pose, raw velocity, signed body-X speed, on-board IMU, command observation, and motion control. Online follows the on-board IMU; VRPN localization gates operational readiness.
@@ -97,7 +97,7 @@ channels:
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent
-    input_message_id: 3204
+    input_message_id: 3205
     output_message_id: 1
     processor: mecanum-ugv.set-motion-intent
     operation_contract:

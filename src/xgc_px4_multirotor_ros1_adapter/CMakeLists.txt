@@ -17,7 +17,7 @@ xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support)
 
 set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
-  "${PROFILE_ROOT}/ros1/px4-multirotor-ros1-v6.yaml")
+  "${PROFILE_ROOT}/ros1/px4-multirotor-ros1-v7.yaml")
 set(PROFILE_SCHEMA
   "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-px4-multirotor-ros1-adapter")
@@ -66,6 +66,7 @@ include_directories(
 
 add_library(${PROJECT_NAME}_operations STATIC
   src/px4_operations.cpp
+  src/remote_control.cpp
 )
 add_dependencies(${PROJECT_NAME}_operations
   ${catkin_EXPORTED_TARGETS}
@@ -122,6 +123,7 @@ if(CATKIN_ENABLE_TESTING)
   endif()
   catkin_add_gtest(${PROJECT_NAME}_operations_test
     test/px4_operations_test.cpp
+    test/remote_control_test.cpp
   )
   if(TARGET ${PROJECT_NAME}_operations_test)
     add_dependencies(${PROJECT_NAME}_operations_test

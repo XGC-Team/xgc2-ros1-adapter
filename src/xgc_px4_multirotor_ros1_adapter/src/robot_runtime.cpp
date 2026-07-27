@@ -258,7 +258,7 @@ struct NativeChannelBinding {
   bool observes;
 };
 
-const std::array<NativeChannelBinding, 18u> kNativeBindings{{
+const std::array<NativeChannelBinding, 19u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
     {"state.mocap.pose", "px4.mocap-vision-relay",
@@ -305,6 +305,8 @@ const std::array<NativeChannelBinding, 18u> kNativeBindings{{
      "xgc.v1.Empty", 1u, 2u, false},
     {"operation.autopilot-reboot", "px4.autopilot-reboot",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 8u, false},
+    {"operation.motion-intent", "px4.set-motion-intent",
+     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 5u, false},
 }};
 
 bool resolveEndpointTemplate(const contract::EndpointMetadata &endpoint,
@@ -383,6 +385,14 @@ std::string topicName(const std::string &robot_namespace,
     return "/" + clean_name;
   }
   return "/" + clean_namespace + "/" + clean_name;
+}
+
+bool resolveRemoteControlTopic(
+    const xgc2_ros1_robot_adapter::RobotConfig &config, std::string *topic,
+    std::string *error) {
+  return resolveEndpoint(config, "operation.motion-intent",
+                         contract::EndpointKind::kOutput, "output",
+                         "mavros_msgs/PositionTarget", topic, error);
 }
 
 bool validRobotNamespace(const std::string &value, std::string *error) {
@@ -627,7 +637,9 @@ bool BuildNativeProfileConfig(
                        error) ||
       !resolveEndpoint(config, "operation.autopilot-reboot", service, "service",
                        "mavros_msgs/CommandLong",
-                       &candidate.reboot_service_endpoint, error)) {
+                       &candidate.reboot_service_endpoint, error) ||
+      !resolveRemoteControlTopic(config, &candidate.remote_control_endpoint,
+                                 error)) {
     return false;
   }
   if (flight_state_endpoint != candidate.state_endpoint ||
@@ -645,6 +657,7 @@ bool BuildNativeProfileConfig(
   contract::ChannelMetadata arm{};
   contract::ChannelMetadata mode{};
   contract::ChannelMetadata reboot{};
+  contract::ChannelMetadata remote{};
   contract::channelMetadata(config.profile_id, "state.mocap.pose", &mocap);
   contract::channelMetadata(config.profile_id, "diagnostic.offboard-input",
                             &offboard);
@@ -652,6 +665,8 @@ bool BuildNativeProfileConfig(
   contract::channelMetadata(config.profile_id, "operation.mode", &mode);
   contract::channelMetadata(config.profile_id, "operation.autopilot-reboot",
                             &reboot);
+  contract::channelMetadata(config.profile_id, "operation.motion-intent",
+                            &remote);
   std::int64_t vision_rate = 0;
   std::int64_t mocap_timeout = 0;
   const char *coordinate_transform = nullptr;
@@ -671,6 +686,11 @@ bool BuildNativeProfileConfig(
   bool require_fresh = false;
   bool require_connected = false;
   bool require_disarmed = false;
+  double remote_altitude = 0.0;
+  double remote_linear = 0.0;
+  double remote_yaw = 0.0;
+  std::int64_t remote_publish_rate = 0;
+  std::int64_t remote_timeout = 0;
   if (!contract::channelPolicyInteger(mocap, "vision_publish_rate_hz",
                                       &vision_rate) ||
       !contract::channelPolicyInteger(mocap, "source_timeout_ms",
@@ -707,8 +727,19 @@ bool BuildNativeProfileConfig(
                                       &require_connected) ||
       !contract::channelPolicyBoolean(reboot, "require_disarmed",
                                       &require_disarmed) ||
+      !contract::channelPolicyNumber(remote, "altitude_meters",
+                                     &remote_altitude) ||
+      !contract::channelPolicyNumber(remote, "maximum_linear_velocity_mps",
+                                     &remote_linear) ||
+      !contract::channelPolicyNumber(remote, "maximum_yaw_rate_rps",
+                                     &remote_yaw) ||
+      !contract::channelPolicyInteger(remote, "publish_rate_hz",
+                                      &remote_publish_rate) ||
+      !contract::channelPolicyInteger(remote, "timeout_ms", &remote_timeout) ||
       mav_command != 246 || reboot_param != 1 || !require_known ||
-      !require_fresh || !require_connected || !require_disarmed) {
+      !require_fresh || !require_connected || !require_disarmed ||
+      remote_altitude != 1.0 || remote_linear <= 0.0 || remote_yaw <= 0.0 ||
+      remote_publish_rate != 10 || remote_timeout != 1000) {
     return fail(error, "PX4 native policy binding is incomplete or unsafe");
   }
   candidate.vision_minimum_period_seconds =
@@ -720,11 +751,15 @@ bool BuildNativeProfileConfig(
   candidate.reboot_state_timeout_seconds =
       static_cast<double>(state_timeout) / 1000.0;
   const std::int64_t maximum_timeout =
-      std::max(arm_timeout, std::max(mode_timeout, reboot_timeout));
+      std::max(std::max(arm_timeout, mode_timeout),
+               std::max(reboot_timeout, remote_timeout));
   if (maximum_timeout <= 0 || maximum_timeout > 5000)
     return fail(error, "PX4 operation timeout exceeds the native limit");
   candidate.maximum_operation_timeout_seconds =
       static_cast<double>(maximum_timeout) / 1000.0;
+  candidate.remote_control_altitude_meters = remote_altitude;
+  candidate.remote_control_maximum_linear_velocity_mps = remote_linear;
+  candidate.remote_control_maximum_yaw_rate_rps = remote_yaw;
   candidate.allowed_modes.reserve(allowed_mode_count);
   std::set<std::string> unique_modes;
   for (std::size_t index = 0u; index < allowed_mode_count; ++index) {

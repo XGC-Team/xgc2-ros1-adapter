@@ -40,7 +40,7 @@ OPERATION_INPUT_TYPES = {
     "arm": "xgc.semantic.aerial.v1.ArmRequest",
     "set-flight-mode": "xgc.semantic.aerial.v1.ModeRequest",
     "reboot-autopilot": "xgc.semantic.aerial.v1.AutopilotRebootRequest",
-    "set-motion-intent": "xgc.semantic.ground.v1.MotionIntentRequest",
+    "set-motion-intent": "xgc.semantic.common.v1.RemoteControlIntentRequest",
 }
 
 KIND_ENUM = {
@@ -252,6 +252,7 @@ def operation_parameter_schema(profile_path, channel, messages):
                 "minimum": -1,
                 "maximum": 1,
             },
+            "lateral": {"type": "integer", "minimum": -1, "maximum": 1},
             "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
         }
     else:
