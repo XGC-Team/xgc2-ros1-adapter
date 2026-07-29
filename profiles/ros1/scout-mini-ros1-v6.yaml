@@ -24,7 +24,9 @@ semantic_traits:
     vrpn.speed: 1000
     state.imu: 1000
     state.power: 1000
-    state.health: 1000
+    # 2s: health is ~5 Hz; 1s left too little margin after sourceAge + SSE lag and
+    # the UI painted brief unavailable (yellow) flashes during healthy simulation.
+    state.health: 2000
     state.chassis: 1000
   # Online and localized are separate facts, and a robot is ready only when both
   # hold. Online is the vehicle's own liveness: its IMU keeps arriving, which is
