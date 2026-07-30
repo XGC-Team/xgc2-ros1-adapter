@@ -169,10 +169,12 @@ TEST(Freshness, AppliesTheScoutStatusBoundary) {
       contract::channelMetadata(contract::kProfileId, "state.health", &health));
   const double stale_after_seconds =
       static_cast<double>(health.stale_after_millis) / 1000.0;
+  const ros::WallTime freshness_boundary =
+      now - ros::WallDuration(stale_after_seconds);
   EXPECT_FALSE(sourceIsFresh(ros::WallTime(), now, stale_after_seconds));
-  EXPECT_TRUE(sourceIsFresh(ros::WallTime(9, 0), now, stale_after_seconds));
-  EXPECT_FALSE(
-      sourceIsFresh(ros::WallTime(8, 999999999), now, stale_after_seconds));
+  EXPECT_TRUE(sourceIsFresh(freshness_boundary, now, stale_after_seconds));
+  EXPECT_FALSE(sourceIsFresh(freshness_boundary - ros::WallDuration(0, 1), now,
+                             stale_after_seconds));
 }
 
 TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
@@ -183,21 +185,19 @@ TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
 TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
   const double half_sqrt_two = std::sqrt(0.5);
   EXPECT_DOUBLE_EQ(
-      3.0, vrpnForwardSpeedMetersPerSecond(3.0, 4.0, 12.0,
-                                           0.0, 0.0, 0.0, 1.0));
-  EXPECT_NEAR(
-      4.0, vrpnForwardSpeedMetersPerSecond(0.0, 4.0, 2.0, 0.0, 0.0,
-                                           half_sqrt_two, half_sqrt_two),
-      1e-12);
-  EXPECT_NEAR(
-      0.0, vrpnForwardSpeedMetersPerSecond(-5.0, 0.0, 0.0, 0.0, 0.0,
-                                           half_sqrt_two, half_sqrt_two),
-      1e-12);
-  EXPECT_DOUBLE_EQ(
-      -3.0, vrpnForwardSpeedMetersPerSecond(-3.0, 4.0, 0.0,
-                                            0.0, 0.0, 0.0, 2.0));
-  EXPECT_TRUE(std::isnan(vrpnForwardSpeedMetersPerSecond(
-      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
+      3.0, vrpnForwardSpeedMetersPerSecond(3.0, 4.0, 12.0, 0.0, 0.0, 0.0, 1.0));
+  EXPECT_NEAR(4.0,
+              vrpnForwardSpeedMetersPerSecond(0.0, 4.0, 2.0, 0.0, 0.0,
+                                              half_sqrt_two, half_sqrt_two),
+              1e-12);
+  EXPECT_NEAR(0.0,
+              vrpnForwardSpeedMetersPerSecond(-5.0, 0.0, 0.0, 0.0, 0.0,
+                                              half_sqrt_two, half_sqrt_two),
+              1e-12);
+  EXPECT_DOUBLE_EQ(-3.0, vrpnForwardSpeedMetersPerSecond(-3.0, 4.0, 0.0, 0.0,
+                                                         0.0, 0.0, 2.0));
+  EXPECT_TRUE(std::isnan(
+      vrpnForwardSpeedMetersPerSecond(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
 TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
@@ -224,12 +224,12 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
-  ASSERT_TRUE(
-      contract::channelMetadata("scout-mini.ros1.v6", "vrpn.position", &position));
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6", "vrpn.position",
+                                        &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6", "state.pose",
-                                         &position));
+  EXPECT_FALSE(
+      contract::channelMetadata("scout-mini.ros1.v6", "state.pose", &position));
 
   contract::ChannelMetadata vrpn_velocity;
   ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6", "vrpn.velocity",
@@ -243,8 +243,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   contract::ChannelMetadata command_velocity;
   ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6",
-                                        "command.velocity",
-                                        &command_velocity));
+                                        "command.velocity", &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
@@ -265,8 +264,8 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ("geometry_msgs/Twist", std::string(output->ros_type));
 
   std::size_t operation_count = 0u;
-  const auto *operations = contract::profileOperations(
-      "scout-mini.ros1.v6", &operation_count);
+  const auto *operations =
+      contract::profileOperations("scout-mini.ros1.v6", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));
