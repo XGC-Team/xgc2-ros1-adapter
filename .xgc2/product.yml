@@ -52,11 +52,11 @@ usage:
 
     test -x /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
 
-    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v6.yaml
+    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v7.yaml
 
-    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v4.yaml
+    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v6.yaml
 
-    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v1.yaml
+    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v3.yaml
 
     test -f /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
 
