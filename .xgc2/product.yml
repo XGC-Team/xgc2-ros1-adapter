@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-9
+version: 0.5.0-10
 kind: ros1-apt
 summary: Robot-owned PX4 multirotor, Scout Mini, and Mecanum UGV ROS1 semantic adapters.
 groups:
@@ -113,4 +113,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-9
+    focal: 0.5.0-10

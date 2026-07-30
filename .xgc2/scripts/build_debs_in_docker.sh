@@ -72,8 +72,8 @@ case "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" in
     ;;
 esac
 if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
-  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-1~focal}"
-  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-3~focal}"
+  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-6~focal}"
+  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-8~focal}"
 fi
 
 expected_deb_arch=""
@@ -120,9 +120,9 @@ docker_env_args=(
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
   -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
-  -e "XGC2_PROTOBUF_GIT_TAG=${XGC2_PROTOBUF_GIT_TAG:-v0.5.0-3}"
+  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF:-53e92dfeb2398080a450c96f339d50122f1659c5}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-runtime-client-cpp.git}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG:-v0.6.0-1}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-b9bb72903f8739415023950444ffbb5252b77e51}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -259,11 +259,12 @@ docker exec "${container_name}" bash -lc '
       rm -rf /tmp/xgc2-common-bootstrap
       mkdir -p /tmp/xgc2-common-bootstrap/debs
 
-      git clone --depth 1 --branch "${XGC2_PROTOBUF_GIT_TAG}" \
-        "${XGC2_PROTOBUF_GIT_URL}" \
-        /tmp/xgc2-common-bootstrap/protobuf
-      test "$(git -C /tmp/xgc2-common-bootstrap/protobuf describe --tags --exact-match)" = \
-        "${XGC2_PROTOBUF_GIT_TAG}"
+      git init -q /tmp/xgc2-common-bootstrap/protobuf
+      git -C /tmp/xgc2-common-bootstrap/protobuf remote add origin "${XGC2_PROTOBUF_GIT_URL}"
+      git -C /tmp/xgc2-common-bootstrap/protobuf fetch --depth 1 origin "${XGC2_PROTOBUF_GIT_REF}"
+      git -C /tmp/xgc2-common-bootstrap/protobuf checkout -q --detach FETCH_HEAD
+      test "$(git -C /tmp/xgc2-common-bootstrap/protobuf rev-parse HEAD)" = \
+        "${XGC2_PROTOBUF_GIT_REF}"
       PACKAGE_DISTRIBUTION=focal \
       PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
       XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
@@ -271,11 +272,14 @@ docker exec "${container_name}" bash -lc '
       apt_install -y \
         /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
 
-      git clone --depth 1 --branch "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG}" \
-        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL}" \
-        /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp
-      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp describe --tags --exact-match)" = \
-        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_TAG}"
+      git init -q /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp
+      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp remote add origin \
+        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL}"
+      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp fetch --depth 1 origin \
+        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
+      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp checkout -q --detach FETCH_HEAD
+      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp rev-parse HEAD)" = \
+        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
       PACKAGE_DISTRIBUTION=focal \
       PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \

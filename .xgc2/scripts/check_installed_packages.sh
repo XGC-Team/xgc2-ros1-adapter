@@ -9,7 +9,7 @@ SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
 MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-1~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-6~focal}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
