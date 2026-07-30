@@ -257,16 +257,16 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
 }
 
 TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
-  EXPECT_EQ(4949253110972053013ULL, contract::kRegistryFingerprint);
+  EXPECT_EQ(16066965206685023017ULL, contract::kRegistryFingerprint);
 
   contract::MessageMetadata metadata;
   ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));
-  EXPECT_EQ(2u, metadata.version);
-  EXPECT_EQ(1932893837531035663ULL, metadata.fingerprint);
+  EXPECT_EQ(3u, metadata.version);
+  EXPECT_EQ(2292867660820935957ULL, metadata.fingerprint);
 
   ASSERT_TRUE(contract::messageMetadata(4002u, &metadata));
   EXPECT_EQ(1u, metadata.version);
-  EXPECT_EQ(17079265246794908236ULL, metadata.fingerprint);
+  EXPECT_EQ(17732826818852005547ULL, metadata.fingerprint);
 }
 
 } // namespace

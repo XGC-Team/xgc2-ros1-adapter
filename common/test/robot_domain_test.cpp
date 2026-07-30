@@ -14,11 +14,11 @@ constexpr const char *kProfileDigest =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 constexpr const char *kSpecDigest =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-constexpr const char *kAssetDigest =
+constexpr const char *kRobotSelectionDigest =
     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 constexpr std::uint32_t kRobotAdapterSpecMessageId = 4001u;
 constexpr std::uint64_t kRobotAdapterSpecFingerprint =
-    1932893837531035663ULL;
+    2292867660820935957ULL;
 
 MessageSchema robotConfigSchema() {
   MessageSchema schema;
@@ -32,7 +32,7 @@ MessageSchema robotConfigSchema() {
 
 xgc::adapter::v1::AdapterInstanceSpec makeValidInstanceSpec() {
   xgc::robot::v1::RobotAdapterSpec robot_spec;
-  robot_spec.set_asset_digest(kAssetDigest);
+  robot_spec.set_robot_selection_digest(kRobotSelectionDigest);
   auto *robot = robot_spec.add_robots();
   robot->set_robot_id("px4-01");
   robot->set_profile_id("px4.multirotor.ros1.v7");
@@ -138,7 +138,7 @@ TEST(RobotAdapterConfigDecoder, ProjectsTypedSpecAndFence) {
   EXPECT_EQ(kSpecDigest, decoded.scope_key);
   EXPECT_EQ("local", decoded.scope_attributes.at("target-id"));
   EXPECT_EQ("run-123", decoded.scope_attributes.at("run-id"));
-  EXPECT_EQ(kAssetDigest, decoded.asset_digest);
+  EXPECT_EQ(kRobotSelectionDigest, decoded.robot_selection_digest);
   ASSERT_EQ(1u, decoded.robots.size());
   EXPECT_EQ("px4-01", decoded.robots[0].robot_id);
   EXPECT_EQ("/uav1", decoded.robots[0].parameters.at("namespace"));
@@ -177,6 +177,12 @@ TEST(RobotAdapterConfigDecoder, RejectsWrongSchemaEncodingAndMalformedPayload) {
   EXPECT_NE(std::string::npos, error.find("registry entry"));
 
   instance = makeValidInstanceSpec();
+  instance.mutable_configuration()->mutable_schema()->set_schema_version(2u);
+  EXPECT_FALSE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                        &error));
+  EXPECT_NE(std::string::npos, error.find("registry entry"));
+
+  instance = makeValidInstanceSpec();
   instance.mutable_configuration()->set_encoding(xgc::v1::PAYLOAD_ENCODING_JSON);
   EXPECT_FALSE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
                                         &error));
@@ -187,6 +193,23 @@ TEST(RobotAdapterConfigDecoder, RejectsWrongSchemaEncodingAndMalformedPayload) {
   EXPECT_FALSE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
                                         &error));
   EXPECT_NE(std::string::npos, error.find("malformed"));
+}
+
+TEST(RobotAdapterConfigDecoder, EnforcesCanonicalRobotSelectionDigest) {
+  auto instance = makeValidInstanceSpec();
+  auto robot_spec = robotSpecFrom(instance);
+  robot_spec.clear_robot_selection_digest();
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("robot_selection_digest"));
+
+  instance = makeValidInstanceSpec();
+  robot_spec = robotSpecFrom(instance);
+  robot_spec.set_robot_selection_digest(
+      "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
+  ASSERT_TRUE(replaceRobotSpec(robot_spec, &instance));
+  EXPECT_NE(std::string::npos,
+            decodeFailure(instance).find("robot_selection_digest"));
 }
 
 TEST(RobotAdapterConfigDecoder, RejectsDuplicateRobotsAndChannels) {
@@ -313,14 +336,14 @@ TEST(RobotAdapterConfigDecoder, EnforcesRobotParameterMapBounds) {
 
 TEST(RobotAdapterConfigDecoder, FailureDoesNotReplacePreviousConfig) {
   RobotAdapterConfig decoded;
-  decoded.asset_digest = "preserve-me";
+  decoded.robot_selection_digest = "preserve-me";
   auto invalid = makeValidInstanceSpec();
   invalid.set_revision(0u);
   std::string error;
 
   EXPECT_FALSE(DecodeRobotAdapterConfig(invalid, robotConfigSchema(), &decoded,
                                         &error));
-  EXPECT_EQ("preserve-me", decoded.asset_digest);
+  EXPECT_EQ("preserve-me", decoded.robot_selection_digest);
 }
 
 TEST(RobotMessageBuilder, BuildsSchemaAwareRoutedProtobufMessage) {

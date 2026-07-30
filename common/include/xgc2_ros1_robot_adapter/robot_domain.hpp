@@ -13,7 +13,7 @@
 
 namespace xgc2_ros1_robot_adapter {
 
-constexpr std::uint32_t kRobotAdapterSpecSchemaVersion = 2u;
+constexpr std::uint32_t kRobotAdapterSpecSchemaVersion = 3u;
 
 struct InstanceSpecFence {
   std::string instance_id;
@@ -42,7 +42,7 @@ struct RobotAdapterConfig {
   std::string scope_kind;
   std::string scope_key;
   std::map<std::string, std::string> scope_attributes;
-  std::string asset_digest;
+  std::string robot_selection_digest;
   std::vector<RobotConfig> robots;
 };
 

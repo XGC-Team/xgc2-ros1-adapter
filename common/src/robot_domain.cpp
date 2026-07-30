@@ -201,9 +201,10 @@ bool DecodeRobotAdapterConfig(
   xgc::robot::v1::RobotAdapterSpec robot_spec;
   if (!robot_spec.ParseFromString(configuration.value()))
     return fail(error, "RobotAdapterSpec protobuf payload is malformed");
-  if (!validRawSha256(robot_spec.asset_digest())) {
+  if (!validRawSha256(robot_spec.robot_selection_digest())) {
     return fail(error,
-                "RobotAdapterSpec asset_digest must be raw lowercase SHA-256");
+                "RobotAdapterSpec robot_selection_digest must be raw "
+                "lowercase SHA-256");
   }
   if (robot_spec.robots().empty())
     return fail(error, "RobotAdapterSpec must contain at least one robot");
@@ -217,7 +218,7 @@ bool DecodeRobotAdapterConfig(
   candidate.scope_key = instance_spec.scope().key();
   candidate.scope_attributes.insert(instance_spec.scope().attributes().begin(),
                                     instance_spec.scope().attributes().end());
-  candidate.asset_digest = robot_spec.asset_digest();
+  candidate.robot_selection_digest = robot_spec.robot_selection_digest();
   candidate.robots.reserve(static_cast<std::size_t>(robot_spec.robots_size()));
 
   std::set<std::string> robot_ids;
