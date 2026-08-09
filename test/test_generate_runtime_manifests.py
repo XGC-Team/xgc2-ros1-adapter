@@ -702,6 +702,14 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn("third-party/zenoh-c/LICENSE", package_script)
         self.assertIn("third-party/zenoh-c/NOTICE.md", package_script)
         self.assertIn("/etc/dpkg/dpkg.cfg.d/excludes", docker_build)
+        self.assertIn(
+            "XGC2_APT_OVERLAY_URL requires XGC2_DEPENDENCY_SET_DIGEST",
+            docker_build,
+        )
+        self.assertIn(
+            '"${XGC2_DEPENDENCY_SET_DIGEST}" != "${EMPTY_DEPENDENCY_SET_DIGEST}"',
+            docker_build,
+        )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
         self.assertIn("third-party/zenoh-c/NOTICE.md", installed_gate)
         for mapping in (

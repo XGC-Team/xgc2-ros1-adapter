@@ -15,6 +15,8 @@ ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-}"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-}"
 XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
 XGC2_PROTOBUF_SOURCE_ROOT="${XGC2_PROTOBUF_SOURCE_ROOT:-}"
+XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
+EMPTY_DEPENDENCY_SET_DIGEST="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +57,15 @@ done
 
 if [[ -n "${BUILD_JOBS}" && ! "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "--jobs must be a positive integer" >&2
+  exit 1
+fi
+if [[ -n "${XGC2_DEPENDENCY_SET_DIGEST}" &&
+      ! "${XGC2_DEPENDENCY_SET_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "XGC2_DEPENDENCY_SET_DIGEST must be empty or 64 lowercase hex characters" >&2
+  exit 1
+fi
+if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && -z "${XGC2_DEPENDENCY_SET_DIGEST}" ]]; then
+  echo "XGC2_APT_OVERLAY_URL requires XGC2_DEPENDENCY_SET_DIGEST" >&2
   exit 1
 fi
 
@@ -116,6 +127,8 @@ fi
 
 docker_env_args=(
   -e "XGC2_APT_OVERLAY_URL=${XGC2_APT_OVERLAY_URL:-}"
+  -e "XGC2_DEPENDENCY_SET_DIGEST=${XGC2_DEPENDENCY_SET_DIGEST}"
+  -e "EMPTY_DEPENDENCY_SET_DIGEST=${EMPTY_DEPENDENCY_SET_DIGEST}"
   -e "BUILD_JOBS=${BUILD_JOBS}"
   -e "DEBIAN_FRONTEND=noninteractive"
   -e "EXPECTED_DEB_ARCH=${expected_deb_arch}"
@@ -217,7 +230,8 @@ docker exec "${container_name}" bash -lc '
       -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
     echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] https://xgc2.apt.xiaokang.ink focal main" \
       > /etc/apt/sources.list.d/xgc2.list
-    if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
+    if [[ -n "${XGC2_APT_OVERLAY_URL:-}" &&
+          "${XGC2_DEPENDENCY_SET_DIGEST}" != "${EMPTY_DEPENDENCY_SET_DIGEST}" ]]; then
       echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] ${XGC2_APT_OVERLAY_URL%/} focal main" \
         > /etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
