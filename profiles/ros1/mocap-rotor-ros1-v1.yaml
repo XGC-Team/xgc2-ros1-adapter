@@ -1,0 +1,146 @@
+schema: xgc.robot.adapter-profile/v4
+profile_id: px4.mocap-rotor.ros1.v1
+profile_version: 1
+native_protocol: ros1
+robot_kind: px4_multirotor
+description: Read-only Mocap Rotor telemetry projected from its dedicated onboard Zenoh link.
+parameters:
+  namespace:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^/[A-Za-z_][A-Za-z0-9_]*$
+    description: Frozen Experiment slot namespace for recovered ROS topics and TF frames.
+  robot_id:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^[a-z][a-z0-9-]+$
+    description: Wire key identity; must equal the Adapter Runtime robot id.
+  wire_transport:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^zenoh$
+    description: Exact data-plane transport; this profile has no fallback backend.
+  zenoh_listen:
+    type: string
+    required: true
+    delivery: target_binding
+    description: Dedicated ground Zenoh endpoint for the Mocap Rotor onboard client.
+semantic_traits:
+  default_stale_after_ms: 3000
+  channel_stale_after_ms:
+    state.pose: 1000
+    state.velocity: 1000
+    state.speed: 1000
+    state.imu: 1000
+    state.power: 3000
+    state.health: 3000
+    state.flight: 3000
+    diagnostic.link: 3000
+    diagnostic.stream-health: 3000
+  online_conditions:
+    - channel_id: state.flight
+      maximum_age_ms: 3000
+      predicate: xgc.semantic.aerial.flight.connected
+  operational_ready_conditions:
+    - channel_id: state.pose
+      maximum_age_ms: 1000
+    - channel_id: diagnostic.link
+      maximum_age_ms: 3000
+channels:
+  - id: state.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: mocap-rotor.local-pose
+    output_rate_hz: 15
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/local_pose
+        type: xgc2_mocap_rotor_link/PoseV1
+        scope: global
+
+  - id: state.velocity
+    kind: stream_out
+    output_message_id: 2002
+    processor: mocap-rotor.local-velocity
+    output_rate_hz: 15
+    inputs: &velocity_input
+      wire:
+        name: xgc2/{robot_id}/up/local_velocity
+        type: xgc2_mocap_rotor_link/TwistV1
+        scope: global
+
+  - id: state.speed
+    kind: stream_out
+    output_message_id: 2006
+    processor: mocap-rotor.local-speed
+    output_rate_hz: 15
+    inputs: *velocity_input
+
+  - id: state.imu
+    kind: stream_out
+    output_message_id: 2003
+    processor: mocap-rotor.imu
+    output_rate_hz: 10
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/imu
+        type: xgc2_mocap_rotor_link/ImuV1
+        scope: global
+
+  - id: state.power
+    kind: stream_out
+    output_message_id: 2004
+    processor: mocap-rotor.power
+    output_rate_hz: 2
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/power
+        type: xgc2_mocap_rotor_link/PowerV1
+        scope: global
+
+  - id: state.health
+    kind: stream_out
+    output_message_id: 2005
+    processor: mocap-rotor.vehicle-health
+    output_rate_hz: 2
+    inputs: &flight_state_input
+      wire:
+        name: xgc2/{robot_id}/up/flight_state
+        type: xgc2_mocap_rotor_link/FlightStateV1
+        scope: global
+
+  - id: state.flight
+    kind: stream_out
+    output_message_id: 3001
+    processor: mocap-rotor.flight-state
+    output_rate_hz: 2
+    inputs: *flight_state_input
+
+  - id: diagnostic.link
+    kind: stream_out
+    output_message_id: 2010
+    processor: mocap-rotor.forwarder-link
+    output_rate_hz: 1
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/forwarder_hb
+        type: xgc2_mocap_rotor_link/ForwarderHeartbeatV1
+        scope: global
+
+  - id: diagnostic.stream-health
+    kind: stream_out
+    output_message_id: 2011
+    processor: mocap-rotor.stream-health
+    output_rate_hz: 1
+    observes:
+      - state.pose
+      - state.velocity
+      - state.speed
+      - state.imu
+      - state.power
+      - state.health
+      - state.flight
+      - diagnostic.link

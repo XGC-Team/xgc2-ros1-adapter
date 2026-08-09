@@ -1,0 +1,9 @@
+<launch>
+  <arg name="adapter_bootstrap_file" />
+  <node pkg="xgc_mocap_rotor_ros1_adapter"
+        type="xgc_mocap_rotor_ros1_adapter_node"
+        name="$(anon xgc_mocap_rotor_ros1_adapter)"
+        output="screen"
+        required="true"
+        args="--adapter-bootstrap-file $(arg adapter_bootstrap_file)" />
+</launch>

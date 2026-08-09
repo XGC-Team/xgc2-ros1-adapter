@@ -1,9 +1,11 @@
 # XGC2 ROS1 Robot Adapters
 
-This Catkin workspace contains four robot-domain Adapter Runtime applications.
-An Adapter is a general capability plugin for Core or Agent; these applications
-specialize that abstraction for PX4 multirotors, Scout Mini robots, Mecanum
-UGVs, and the read-only Unitree B2 data plane.
+This Catkin workspace contains five robot-domain Adapter Runtime applications
+and one separately deployable onboard Forwarder. An Adapter is a general
+capability plugin for Core or Agent; these applications specialize that
+abstraction for PX4 multirotors, Scout Mini robots, Mecanum UGVs, the read-only
+Unitree B2 data plane, and Mocap Rotor telemetry. The Forwarder is not an
+Adapter Runtime application and is installed only on the Mocap Rotor Orin NX.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
@@ -11,6 +13,8 @@ UGVs, and the read-only Unitree B2 data plane.
 | `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v6` |
 | `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v3` |
 | `xgc_unitree_b2_ros1_adapter` | `ros-noetic-xgc2-unitree-b2-adapter` | `xgc2-unitree-b2-ros1-adapter` | `unitree.b2.v1` |
+| `xgc_mocap_rotor_ros1_adapter` | `ros-noetic-xgc2-mocap-rotor-adapter` | `xgc2-mocap-rotor-ros1-adapter` | `px4.mocap-rotor.ros1.v1` |
+| `xgc_mocap_rotor_zenoh_forwarder` | `ros-noetic-xgc2-mocap-rotor-forwarder` | `xgc2-mocap-rotor-link` | onboard process only |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -24,7 +28,7 @@ provider instance uses a `robot-group` scope containing `target-id`, `run-id`,
 and `provider`; each invocation and telemetry source uses a separate
 `robot-resource` subject containing `target-id`, `run-id`, and `robot-id`.
 
-All four applications expose:
+All five Adapter Runtime applications expose:
 
 - `xgc.robot.telemetry@1`: `telemetry` source of serialized
   `xgc.robot.v1.RobotMessage`
@@ -106,6 +110,23 @@ deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
 publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz and
 sends a final zero on shutdown.
 
+The Mocap Rotor uses two computers and two independent ROS1 lifecycles. Its
+existing MAVROS and ROS master remain on the Orin NX; neither the ground Core
+nor the ground Adapter starts them. The separately installed onboard Forwarder
+subscribes only to six deployment-supplied absolute topics: local pose, local
+velocity, IMU, battery, MAVROS state, and MAVROS extended state. Those message
+types follow the `external/dev/xgc1` Mocap Rotor reference, but their production
+names have no defaults and must come from an actual onboard graph snapshot.
+
+One static Zenoh client session emits only
+`xgc2/{robot_id}/up/{local_pose,local_velocity,imu,power,flight_state,forwarder_hb}`.
+Each channel has a hard rate and payload bound. GPS, commands, setpoints,
+downlink keys, ROS graph bridging, and FS150 process/port reuse are absent. The
+ground `xgc_mocap_rotor_ros1_adapter` owns the peer listener, wire validation,
+freshness, semantic telemetry, and namespaced ROS1 recovery; it has no MAVROS
+message dependency. Unknown battery measurements are represented explicitly
+rather than replaced with plausible numbers.
+
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
 
@@ -138,7 +159,7 @@ Session owns Adapter, descriptions, RSP and Foxglove lifecycles together.
 
 ## Trust and installation metadata
 
-Each Debian package owns three generated, immutable installation contracts:
+Each Adapter Debian owns three generated, immutable installation contracts:
 
 - `/usr/share/xgc2/adapter-definitions/<provider>.json`
 - `/usr/share/xgc2/process-definitions/<provider>.json`
@@ -150,6 +171,13 @@ against `xgc2-protobuf`. The process definition
 accepts only the supervisor-owned `adapterBootstrapFile` parameter and invokes
 the executable directly with `--adapter-bootstrap-file` and the complete ROS
 Noetic runtime environment. It never relies on a shell or a sourced setup file.
+
+The onboard Forwarder Debian is deliberately different: it owns only
+`/usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json`. That closed
+definition requires the onboard ROS master URI/IP, ground Zenoh endpoint, all
+six source-topic mappings, and the pose child frame. Its executable is a stable
+`/opt/ros/noetic/lib/...` path and it does not depend on the ground Adapter
+Runtime ABI.
 
 Package-local C++ headers are implementation details used only while building
 each executable. The Debian packages intentionally export no Catkin header or
@@ -183,7 +211,8 @@ catkin_make run_tests
 catkin_test_results --verbose build/test_results
 ```
 
-The release path builds and install-checks all four independent Debian packages:
+The release path builds and install-checks five independent Adapter Debian
+packages plus the independently installable onboard Forwarder package:
 
 ```bash
 .xgc2/scripts/build_debs_in_docker.sh --output-dir "$PWD/debs"
@@ -215,6 +244,8 @@ The Process Supervisor starts the fixed installed executable directly:
 /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_unitree_b2_ros1_adapter/xgc_unitree_b2_ros1_adapter_node
+/opt/ros/noetic/lib/xgc_mocap_rotor_ros1_adapter/xgc_mocap_rotor_ros1_adapter_node
+/opt/ros/noetic/lib/xgc_mocap_rotor_zenoh_forwarder/xgc_mocap_rotor_zenoh_forwarder_node
 ```
 
 For a diagnostic manual launch, pass a real supervisor-generated bootstrap:

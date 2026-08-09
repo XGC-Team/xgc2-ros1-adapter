@@ -15,6 +15,11 @@ MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
 B2_PACKAGE="ros-${ROS_DISTRO}-xgc2-unitree-b2-adapter"
 B2_ROS_PACKAGE="xgc_unitree_b2_ros1_adapter"
+MOCAP_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-adapter"
+MOCAP_ROS_PACKAGE="xgc_mocap_rotor_ros1_adapter"
+MOCAP_FORWARDER_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-forwarder"
+MOCAP_FORWARDER_ROS_PACKAGE="xgc_mocap_rotor_zenoh_forwarder"
+ZENOHC_LICENSE_DIR="${ZENOHC_LICENSE_DIR:-}"
 
 product_version() {
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
@@ -65,7 +70,9 @@ rm -f \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${B2_PACKAGE}_"*.deb
+  "${OUTPUT_DIR}/${B2_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${MOCAP_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${MOCAP_FORWARDER_PACKAGE}_"*.deb
 
 mkdir -p "${BUILD_DIR}/debian"
 cat > "${BUILD_DIR}/debian/control" <<EOF
@@ -85,9 +92,15 @@ Architecture: any
 
 Package: ${B2_PACKAGE}
 Architecture: any
+
+Package: ${MOCAP_PACKAGE}
+Architecture: any
+
+Package: ${MOCAP_FORWARDER_PACKAGE}
+Architecture: any
 EOF
 
-shlibs_dependencies() {
+binary_dependencies() {
   local -a binaries=("$@")
   local -a options=()
   local binary
@@ -102,14 +115,20 @@ shlibs_dependencies() {
     echo "dpkg-shlibdeps did not produce executable dependencies" >&2
     exit 1
   fi
-  if ! grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" \
-      <<<"${dependencies}"; then
-    echo "shlibs dependencies do not include ${ADAPTER_RUNTIME_ABI_PACKAGE}" >&2
-    exit 1
-  fi
   if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${dependencies}"; then
     echo "shlibs dependencies leaked a build-only XGC2 package" >&2
+    exit 1
+  fi
+  printf '%s\n' "${dependencies}"
+}
+
+shlibs_dependencies() {
+  local dependencies
+  dependencies="$(binary_dependencies "$@")"
+  if ! grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" \
+      <<<"${dependencies}"; then
+    echo "shlibs dependencies do not include ${ADAPTER_RUNTIME_ABI_PACKAGE}" >&2
     exit 1
   fi
   printf '%s\n' "${dependencies}"
@@ -134,6 +153,7 @@ package_adapter() {
   local definition_id="$7"
   local profile_schema_file="$8"
   local helper_name="${9:-}"
+  local third_party_license_dir="${10:-}"
   local pkg_root="${BUILD_DIR}/${package}"
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
   local helper_executable=""
@@ -195,6 +215,18 @@ Description: ${summary}
 EOF
   cp "${REPO_ROOT}/README.md" "${pkg_root}/usr/share/doc/${package}/README.md"
   cp "${REPO_ROOT}/LICENSE" "${pkg_root}/usr/share/doc/${package}/copyright"
+  if [[ -n "${third_party_license_dir}" ]]; then
+    if [[ ! -f "${third_party_license_dir}/LICENSE" ||
+          ! -f "${third_party_license_dir}/NOTICE.md" ]]; then
+      echo "missing third-party license material: ${third_party_license_dir}" >&2
+      exit 1
+    fi
+    mkdir -p "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c"
+    cp "${third_party_license_dir}/LICENSE" \
+      "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c/LICENSE"
+    cp "${third_party_license_dir}/NOTICE.md" \
+      "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c/NOTICE.md"
+  fi
 
   find "${pkg_root}" -type d -exec chmod 0755 {} +
   find "${pkg_root}" -type f -exec chmod 0644 {} +
@@ -204,6 +236,69 @@ EOF
     chmod 0755 "${pkg_root}${helper_executable}"
   fi
 
+  fakeroot dpkg-deb --build "${pkg_root}" \
+    "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
+}
+
+package_forwarder() {
+  local package="$1"
+  local ros_package="$2"
+  local extra_depends="$3"
+  local third_party_license_dir="$4"
+  local pkg_root="${BUILD_DIR}/${package}"
+  local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
+  local process_definition="/usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json"
+
+  mkdir -p "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/share/${ros_package}" "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/lib/${ros_package}" "${pkg_root}"
+  copy_path "${INSTALL_ROOT}${process_definition}" "${pkg_root}"
+  if [[ ! -x "${pkg_root}${executable}" ]]; then
+    echo "missing installed Mocap Rotor Forwarder executable" >&2
+    exit 1
+  fi
+  if [[ ! -f "${pkg_root}${process_definition}" ]]; then
+    echo "missing installed Mocap Rotor Forwarder process definition" >&2
+    exit 1
+  fi
+  local shlibs_depends
+  shlibs_depends="$(binary_dependencies "${pkg_root}${executable}")"
+  if grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" \
+      <<<"${shlibs_depends}"; then
+    echo "onboard Forwarder must not depend on the ground Adapter Runtime ABI" >&2
+    exit 1
+  fi
+
+  mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
+  cat > "${pkg_root}/DEBIAN/control" <<EOF
+Package: ${package}
+Version: ${VERSION}
+Section: misc
+Priority: optional
+Architecture: ${ARCH}
+Maintainer: XGC2 <apt@example.com>
+Depends: ${shlibs_depends}, ${extra_depends}
+Description: XGC2 Mocap Rotor onboard read-only Zenoh forwarder
+ Subscribes only to explicit telemetry topics on the Mocap Rotor onboard ROS1
+ graph and publishes the bounded robot-keyed uplink. It does not own MAVROS,
+ GPS, commands, the ground Adapter, or any FS150 lifecycle.
+EOF
+  cp "${REPO_ROOT}/README.md" "${pkg_root}/usr/share/doc/${package}/README.md"
+  cp "${REPO_ROOT}/LICENSE" "${pkg_root}/usr/share/doc/${package}/copyright"
+  if [[ ! -f "${third_party_license_dir}/LICENSE" ||
+        ! -f "${third_party_license_dir}/NOTICE.md" ]]; then
+    echo "missing third-party license material: ${third_party_license_dir}" >&2
+    exit 1
+  fi
+  mkdir -p "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c"
+  cp "${third_party_license_dir}/LICENSE" \
+    "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c/LICENSE"
+  cp "${third_party_license_dir}/NOTICE.md" \
+    "${pkg_root}/usr/share/doc/${package}/third-party/zenoh-c/NOTICE.md"
+
+  find "${pkg_root}" -type d -exec chmod 0755 {} +
+  find "${pkg_root}" -type f -exec chmod 0644 {} +
+  chmod 0755 "${pkg_root}/DEBIAN" "${pkg_root}${executable}"
   fakeroot dpkg-deb --build "${pkg_root}" \
     "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
 }
@@ -249,7 +344,31 @@ package_adapter \
   "xgc2-unitree-b2-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 
+if [[ -z "${ZENOHC_LICENSE_DIR}" ]]; then
+  echo "ZENOHC_LICENSE_DIR is required for the statically linked Mocap Rotor package" >&2
+  exit 1
+fi
+package_adapter \
+  "${MOCAP_PACKAGE}" \
+  "${MOCAP_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2-ros" \
+  "XGC2 Mocap Rotor ROS1 read-only Zenoh adapter" \
+  "Consumes one robot-keyed Zenoh uplink and projects bounded telemetry into Adapter Runtime and namespaced ROS1/TF without owning MAVROS or commands." \
+  "mocap-rotor-ros1-v1.yaml" \
+  "xgc2-mocap-rotor-ros1-adapter" \
+  "robot-adapter-profile-v4.schema.json" \
+  "" \
+  "${ZENOHC_LICENSE_DIR}"
+
+package_forwarder \
+  "${MOCAP_FORWARDER_PACKAGE}" \
+  "${MOCAP_FORWARDER_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
+  "${ZENOHC_LICENSE_DIR}"
+
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \
-    -o -name "${MECANUM_PACKAGE}_*.deb" -o -name "${B2_PACKAGE}_*.deb" \) \
+    -o -name "${MECANUM_PACKAGE}_*.deb" -o -name "${B2_PACKAGE}_*.deb" \
+    -o -name "${MOCAP_PACKAGE}_*.deb" \
+    -o -name "${MOCAP_FORWARDER_PACKAGE}_*.deb" \) \
   -print | sort

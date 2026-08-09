@@ -1,0 +1,76 @@
+{
+  "apiVersion": "xgc.execution.process/v1",
+  "definitions": [
+    {
+      "id": "xgc2-mocap-rotor-link",
+      "version": "0.5.0",
+      "label": "Mocap Rotor onboard read-only link",
+      "description": "Runs only on the Mocap Rotor Orin NX. It subscribes to explicitly mapped topics from that computer's existing ROS1/MAVROS graph and sends bounded telemetry to the ground Zenoh Adapter. It owns neither MAVROS nor the ROS master and has no command or GPS path.",
+      "drivers": ["host"],
+      "parameters": {
+        "properties": {
+          "robotId": {"type": "string", "description": "Robot-key identity used only under xgc2/{robotId}/up/*."},
+          "zenohConnect": {"type": "string", "description": "One explicit ground Adapter endpoint in tcp/host:port form."},
+          "rosMasterUri": {"type": "string", "description": "URI of this Mocap Rotor computer's existing ROS1 master."},
+          "rosIp": {"type": "string", "description": "Reachable address advertised by this onboard ROS1 subscriber."},
+          "localPoseTopic": {"type": "string", "description": "Absolute onboard geometry_msgs/PoseStamped topic."},
+          "localVelocityTopic": {"type": "string", "description": "Absolute onboard geometry_msgs/TwistStamped topic."},
+          "imuTopic": {"type": "string", "description": "Absolute onboard sensor_msgs/Imu topic."},
+          "powerTopic": {"type": "string", "description": "Absolute onboard sensor_msgs/BatteryState topic."},
+          "flightStateTopic": {"type": "string", "description": "Absolute onboard mavros_msgs/State topic."},
+          "extendedStateTopic": {"type": "string", "description": "Absolute onboard mavros_msgs/ExtendedState topic."},
+          "poseChildFrameId": {"type": "string", "description": "Verified child frame paired with the local pose source."}
+        },
+        "required": [
+          "robotId", "zenohConnect", "rosMasterUri", "rosIp",
+          "localPoseTopic", "localVelocityTopic", "imuTopic", "powerTopic",
+          "flightStateTopic", "extendedStateTopic", "poseChildFrameId"
+        ],
+        "additionalProperties": false
+      },
+      "resourceClaims": [
+        {
+          "bindingKey": "robot",
+          "kind": "custom",
+          "namespace": "xgc2-mocap-rotor-onboard-link",
+          "identityParts": [{"parameter": "robotId"}]
+        }
+      ],
+      "command": {
+        "executable": "/opt/ros/noetic/lib/xgc_mocap_rotor_zenoh_forwarder/xgc_mocap_rotor_zenoh_forwarder_node",
+        "args": [
+          "_robot_id:=${robotId}",
+          "_zenoh_connect:=${zenohConnect}",
+          "_local_pose_topic:=${localPoseTopic}",
+          "_local_velocity_topic:=${localVelocityTopic}",
+          "_imu_topic:=${imuTopic}",
+          "_power_topic:=${powerTopic}",
+          "_flight_state_topic:=${flightStateTopic}",
+          "_extended_state_topic:=${extendedStateTopic}",
+          "_pose_child_frame_id:=${poseChildFrameId}"
+        ],
+        "env": {
+          "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
+          "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/aarch64-linux-gnu:/opt/ros/noetic/lib/x86_64-linux-gnu",
+          "PATH": "/opt/ros/noetic/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "PKG_CONFIG_PATH": "/opt/ros/noetic/lib/pkgconfig",
+          "PYTHONPATH": "/opt/ros/noetic/lib/python3/dist-packages",
+          "ROS_DISTRO": "noetic",
+          "ROS_ETC_DIR": "/opt/ros/noetic/etc/ros",
+          "ROS_IP": "${rosIp}",
+          "ROS_MASTER_URI": "${rosMasterUri}",
+          "ROS_PACKAGE_PATH": "/opt/ros/noetic/share",
+          "ROS_PYTHON_VERSION": "3",
+          "ROS_ROOT": "/opt/ros/noetic/share/ros",
+          "ROS_VERSION": "1"
+        }
+      },
+      "readiness": {"kind": "process", "interval": 500000000, "timeout": 1000000000, "successThreshold": 1, "failureThreshold": 20},
+      "liveness": {"kind": "process", "interval": 2000000000, "timeout": 1000000000, "successThreshold": 1, "failureThreshold": 3},
+      "stop": {"gracePeriod": 10000000000},
+      "restart": {"mode": "on-failure", "maxRestarts": 3, "backoff": 1000000000},
+      "digest": "",
+      "internal": true
+    }
+  ]
+}

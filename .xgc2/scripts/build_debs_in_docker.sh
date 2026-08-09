@@ -99,7 +99,9 @@ if [[ "${COPY_OUTPUT}" == "true" ]]; then
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-unitree-b2-adapter_"*.deb
+    "${OUTPUT_DIR}/ros-noetic-xgc2-unitree-b2-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-mocap-rotor-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-mocap-rotor-forwarder_"*.deb
 fi
 
 docker_network_args=()
@@ -231,12 +233,14 @@ docker exec "${container_name}" bash -lc '
       nlohmann-json3-dev \
       libprotobuf-dev \
       libre2-dev \
+      patch \
       pkg-config \
       protobuf-compiler \
       protobuf-compiler-grpc \
       python3-jsonschema \
       python3-protobuf \
       python3-yaml \
+      ripgrep \
       rsync \
       ros-noetic-geometry-msgs \
       ros-noetic-diagnostic-msgs \
@@ -246,6 +250,7 @@ docker exec "${container_name}" bash -lc '
       ros-noetic-roslaunch \
       ros-noetic-rosmsg \
       ros-noetic-rospack \
+      ros-noetic-rostest \
       ros-noetic-scout-msgs \
       ros-noetic-sensor-msgs \
       ros-noetic-std-msgs \
@@ -335,12 +340,21 @@ docker exec "${container_name}" bash -lc '
 
     cd /tmp/work
     python3 -m unittest discover -v -s test -p "test_*.py"
+    zenoh_build_args=(
+      --prefix /tmp/xgc2-zenohc-prefix
+      --work-root /tmp/xgc2-zenohc-build
+    )
+    if [[ -n "${BUILD_JOBS:-}" ]]; then
+      zenoh_build_args+=(--jobs "${BUILD_JOBS}")
+    fi
+    /tmp/work/.xgc2/scripts/prepare_zenohc_focal.sh "${zenoh_build_args[@]}"
     set +u
     source /opt/ros/noetic/setup.bash
     set -u
     parallel_jobs="${BUILD_JOBS:-$(nproc)}"
     DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
+      -DCMAKE_PREFIX_PATH="/tmp/xgc2-zenohc-prefix;/opt/ros/noetic" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
@@ -348,17 +362,29 @@ docker exec "${container_name}" bash -lc '
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 
-    /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
+    ZENOHC_LICENSE_DIR=/tmp/xgc2-zenohc-prefix/share/licenses/zenoh-c \
+      /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
       --output-dir /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
+      # The official ROS Docker image excludes /usr/share/doc to reduce image
+      # size. Restore normal dpkg extraction for our disposable install gate so
+      # the packaged third-party licenses are verified as installed artifacts.
+      if [[ -f /etc/dpkg/dpkg.cfg.d/excludes ]]; then
+        mv /etc/dpkg/dpkg.cfg.d/excludes /tmp/xgc2-docker-dpkg-excludes
+      fi
       apt_install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb
-      /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
+        /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-mocap-rotor-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-mocap-rotor-forwarder_*.deb
+      if ! /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh; then
+        echo "Installed-package gate failed; replaying it with command tracing" >&2
+        bash -x /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
+      fi
     fi
   '
 

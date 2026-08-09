@@ -26,8 +26,12 @@ MECANUM_PROFILE_PATH = (
     REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v3.yaml"
 )
 B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
+MOCAP_ROTOR_PROFILE_PATH = (
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mocap-rotor-ros1-v1.yaml"
+)
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 MECANUM_DEFINITION_ID = "xgc2-mecanum-ugv-ros1-adapter"
+MOCAP_ROTOR_DEFINITION_ID = "xgc2-mocap-rotor-ros1-adapter"
 
 SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PATH)
 GENERATOR = importlib.util.module_from_spec(SPEC)
@@ -114,6 +118,81 @@ class ContractGeneratorTest(unittest.TestCase):
         path = self.temp / "profile.yaml"
         path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         return path
+
+    def test_mocap_rotor_profile_is_a_dedicated_read_only_zenoh_projection(self):
+        profiles = GENERATOR.load_profile(
+            MOCAP_ROTOR_PROFILE_PATH, SCHEMA_PATH, self.messages
+        )
+        profile = profiles["px4.mocap-rotor.ros1.v1"]
+        channels = {channel["id"]: channel for channel in profile["channels"]}
+
+        self.assertEqual(profile["robot_kind"], "px4_multirotor")
+        self.assertEqual(
+            set(profile["parameters"]),
+            {"namespace", "robot_id", "wire_transport", "zenoh_listen"},
+        )
+        self.assertEqual(
+            profile["parameters"]["wire_transport"]["pattern"], "^zenoh$"
+        )
+        self.assertEqual(
+            set(channels),
+            {
+                "state.pose",
+                "state.velocity",
+                "state.speed",
+                "state.imu",
+                "state.power",
+                "state.health",
+                "state.flight",
+                "diagnostic.link",
+                "diagnostic.stream-health",
+            },
+        )
+        self.assertFalse(
+            any(channel["kind"] == "operation" for channel in channels.values())
+        )
+        self.assertEqual(
+            channels["state.pose"]["endpoints"][0]["name_template"],
+            "xgc2/{robot_id}/up/local_pose",
+        )
+        self.assertEqual(
+            channels["diagnostic.link"]["endpoints"][0]["name_template"],
+            "xgc2/{robot_id}/up/forwarder_hb",
+        )
+        self.assertEqual(
+            {
+                endpoint["name_template"]
+                for channel in channels.values()
+                for endpoint in channel["endpoints"]
+            },
+            {
+                "xgc2/{robot_id}/up/local_pose",
+                "xgc2/{robot_id}/up/local_velocity",
+                "xgc2/{robot_id}/up/imu",
+                "xgc2/{robot_id}/up/power",
+                "xgc2/{robot_id}/up/flight_state",
+                "xgc2/{robot_id}/up/forwarder_hb",
+            },
+        )
+
+        serialized = MOCAP_ROTOR_PROFILE_PATH.read_text(encoding="utf-8").lower()
+        for forbidden in ("mavros/", "gps", "navsatfix", "setpoint", "operation."):
+            self.assertNotIn(forbidden, serialized)
+
+        body = GENERATOR.catalog_profile_body(
+            profile, self.messages, MOCAP_ROTOR_DEFINITION_ID
+        )
+        self.assertEqual(
+            body["providerDefinitionId"], MOCAP_ROTOR_DEFINITION_ID
+        )
+        self.assertEqual(body["semantics"]["operations"], [])
+        self.assertEqual(
+            body["semantics"]["operationalReadyConditions"],
+            [
+                {"channelId": "diagnostic.link", "maximumAgeMillis": 3000},
+                {"channelId": "state.pose", "maximumAgeMillis": 1000},
+            ],
+        )
 
     def test_local_profiles_are_source_of_complete_generated_metadata(self):
         px4_profiles = GENERATOR.load_profile(
@@ -1116,7 +1195,12 @@ int main() {
                 self.assertNotIn("px4.multirotor.ros1.v7", source)
                 self.assertNotIn("scout-mini.ros1.v6", source)
 
-        for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
+        # Adapter Runtime applications consume a supervisor bootstrap. The
+        # separately packaged onboard Mocap Rotor Forwarder is intentionally
+        # not an Adapter Runtime application and owns explicit ROS parameters.
+        for launch_file in REPOSITORY_ROOT.glob(
+            "src/*_ros1_adapter/launch/*.launch"
+        ):
             launch = launch_file.read_text(encoding="utf-8")
             with self.subTest(launch=launch_file.name):
                 self.assertIn("--adapter-bootstrap-file", launch)

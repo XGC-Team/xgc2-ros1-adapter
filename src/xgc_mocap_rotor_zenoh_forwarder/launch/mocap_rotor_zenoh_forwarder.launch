@@ -1,0 +1,29 @@
+<launch>
+  <!-- Every value is deployment-owned. This launch never guesses XGC1 topic
+       names and never starts MAVROS or a ROS master. -->
+  <arg name="robot_id" />
+  <arg name="zenoh_connect" />
+  <arg name="local_pose_topic" />
+  <arg name="local_velocity_topic" />
+  <arg name="imu_topic" />
+  <arg name="power_topic" />
+  <arg name="flight_state_topic" />
+  <arg name="extended_state_topic" />
+  <arg name="pose_child_frame_id" />
+
+  <node pkg="xgc_mocap_rotor_zenoh_forwarder"
+        type="xgc_mocap_rotor_zenoh_forwarder_node"
+        name="xgc_mocap_rotor_zenoh_forwarder"
+        output="screen"
+        required="true">
+    <param name="robot_id" value="$(arg robot_id)" />
+    <param name="zenoh_connect" value="$(arg zenoh_connect)" />
+    <param name="local_pose_topic" value="$(arg local_pose_topic)" />
+    <param name="local_velocity_topic" value="$(arg local_velocity_topic)" />
+    <param name="imu_topic" value="$(arg imu_topic)" />
+    <param name="power_topic" value="$(arg power_topic)" />
+    <param name="flight_state_topic" value="$(arg flight_state_topic)" />
+    <param name="extended_state_topic" value="$(arg extended_state_topic)" />
+    <param name="pose_child_frame_id" value="$(arg pose_child_frame_id)" />
+  </node>
+</launch>

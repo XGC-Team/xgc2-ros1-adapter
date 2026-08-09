@@ -1,0 +1,9 @@
+<launch>
+  <!-- RobotRuntime advertises the recovered ROS graph, so exercise it with a
+       real, rostest-owned master instead of silently depending on a developer
+       machine's ROS_MASTER_URI. -->
+  <test test-name="mocap_rotor_runtime"
+        pkg="xgc_mocap_rotor_ros1_adapter"
+        type="xgc_mocap_rotor_ros1_adapter_runtime_test"
+        time-limit="60.0" />
+</launch>

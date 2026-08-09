@@ -34,6 +34,7 @@ PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v7.yaml"
 SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v6.yaml"
 MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v3.yaml"
 B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
+MOCAP_ROTOR_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mocap-rotor-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -331,6 +332,29 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             }],
         )
 
+        _, _, mocap_catalog = GENERATOR.build_documents(
+            self.arguments(MOCAP_ROTOR_PROFILE)
+        )
+        mocap = mocap_catalog["profiles"][0]
+        self.assertEqual(mocap["profileId"], "px4.mocap-rotor.ros1.v1")
+        self.assertEqual(mocap["robotKind"], "px4_multirotor")
+        self.assertEqual(mocap["semantics"]["operations"], [])
+        self.assertEqual(
+            mocap["semantics"]["onlineConditions"],
+            [{
+                "channelId": "state.flight",
+                "maximumAgeMillis": 3000,
+                "predicate": "xgc.semantic.aerial.flight.connected",
+            }],
+        )
+        self.assertEqual(
+            mocap["semantics"]["operationalReadyConditions"],
+            [
+                {"channelId": "diagnostic.link", "maximumAgeMillis": 3000},
+                {"channelId": "state.pose", "maximumAgeMillis": 1000},
+            ],
+        )
+
     def test_profile_v4_contract_and_legacy_schema_are_explicit(self):
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
@@ -568,12 +592,130 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn(".worktrees", script)
         self.assertNotIn("--with-commands", script)
 
+    def test_mocap_rotor_package_is_ground_only_and_focal_static(self):
+        product = yaml.safe_load(
+            (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "ros-noetic-xgc2-mocap-rotor-adapter", product["apt"]["packages"]
+        )
+        cmake = (
+            REPOSITORY_ROOT
+            / "src/xgc_mocap_rotor_ros1_adapter/CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        package_xml = (
+            REPOSITORY_ROOT
+            / "src/xgc_mocap_rotor_ros1_adapter/package.xml"
+        ).read_text(encoding="utf-8")
+        node = (
+            REPOSITORY_ROOT
+            / "src/xgc_mocap_rotor_ros1_adapter/src/mocap_rotor_ros1_adapter_node.cpp"
+        ).read_text(encoding="utf-8").lower()
+        build = (
+            REPOSITORY_ROOT / ".xgc2/scripts/prepare_zenohc_focal.sh"
+        ).read_text(encoding="utf-8")
+        lock_file = (
+            REPOSITORY_ROOT / ".xgc2/vendor/zenoh-c-1.9.0.Cargo.lock"
+        )
+        revision_patch = (
+            REPOSITORY_ROOT
+            / ".xgc2/patches/zenoh-c-1.9.0-pin-revisions.patch"
+        ).read_text(encoding="utf-8")
+        installed_gate = (
+            REPOSITORY_ROOT / ".xgc2/scripts/check_installed_packages.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("zenohc::static", cmake)
+        self.assertNotIn("<exec_depend>libzenohc</exec_depend>", package_xml)
+        self.assertNotIn("mavros", node)
+        self.assertIn('ZENOHC_VERSION="1.9.0"', build)
+        self.assertIn('RUST_VERSION="1.93.0"', build)
+        self.assertIn("ZENOHC_ARCHIVE_SHA256", build)
+        self.assertIn("ZENOHC_COPY_SOURCE_CARGO_LOCK=FALSE", build)
+        self.assertIn("ZENOHC_CARGO_FLAGS=--locked", build)
+        self.assertEqual(
+            hashlib.sha256(lock_file.read_bytes()).hexdigest(),
+            "152fa7f09f683690b78dadd14e3065f2bae3ce84243b5f09e7edd646d0fde44d",
+        )
+        self.assertIn("build-resources/opaque-types/Cargo.toml", revision_patch)
+        self.assertGreaterEqual(
+            revision_patch.count("81c6c933b6e41d72a05f04c4442ef57717ddc72b"),
+            12,
+        )
+        self.assertIn("fs150", product["usage"]["notes"].lower())
+        self.assertIn("must carry its Focal-built Zenoh C dependency statically", installed_gate)
+
+    def test_mocap_rotor_forwarder_is_a_separate_onboard_only_package(self):
+        product = yaml.safe_load(
+            (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
+        )
+        package = "ros-noetic-xgc2-mocap-rotor-forwarder"
+        self.assertIn(package, product["apt"]["packages"])
+        self.assertNotIn(package, product["apt"]["install"])
+        root = REPOSITORY_ROOT / "src/xgc_mocap_rotor_zenoh_forwarder"
+        cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+        package_xml = (root / "package.xml").read_text(encoding="utf-8")
+        node = (root / "src/mocap_rotor_zenoh_forwarder_node.cpp").read_text(
+            encoding="utf-8"
+        )
+        launch = (root / "launch/mocap_rotor_zenoh_forwarder.launch").read_text(
+            encoding="utf-8"
+        )
+        package_script = (
+            REPOSITORY_ROOT / ".xgc2/scripts/package_debs.sh"
+        ).read_text(encoding="utf-8")
+        docker_build = (
+            REPOSITORY_ROOT / ".xgc2/scripts/build_debs_in_docker.sh"
+        ).read_text(encoding="utf-8")
+        installed_gate = (
+            REPOSITORY_ROOT / ".xgc2/scripts/check_installed_packages.sh"
+        ).read_text(encoding="utf-8")
+        process = json.loads(
+            (root / "process/xgc2-mocap-rotor-link.json").read_text(
+                encoding="utf-8"
+            )
+        )["definitions"][0]
+
+        self.assertIn("zenohc::static", cmake)
+        self.assertIn("<build_depend>mavros_msgs</build_depend>", package_xml)
+        self.assertNotIn("adapter-runtime", package_xml)
+        self.assertNotIn("<exec_depend>libzenohc</exec_depend>", package_xml)
+        self.assertIn("xgc2-mocap-rotor-link", process["id"])
+        self.assertTrue(process["internal"])
+        self.assertEqual(
+            set(process["parameters"]["required"]),
+            {
+                "robotId", "zenohConnect", "rosMasterUri", "rosIp",
+                "localPoseTopic", "localVelocityTopic", "imuTopic",
+                "powerTopic", "flightStateTopic", "extendedStateTopic",
+                "poseChildFrameId",
+            },
+        )
+        command = json.dumps(process["command"]).lower()
+        self.assertNotIn("mavros_node", command)
+        self.assertNotIn("fs150", command)
+        self.assertNotIn("gps", command)
+        self.assertNotIn("advertise<", node)
+        self.assertNotIn("navsatfix", node.lower())
+        self.assertNotIn("--adapter-bootstrap-file", launch)
+        self.assertNotIn("<include", launch)
+        self.assertIn("third-party/zenoh-c/LICENSE", package_script)
+        self.assertIn("third-party/zenoh-c/NOTICE.md", package_script)
+        self.assertIn("/etc/dpkg/dpkg.cfg.d/excludes", docker_build)
+        self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
+        self.assertIn("third-party/zenoh-c/NOTICE.md", installed_gate)
+        for mapping in (
+            "local_pose_topic", "local_velocity_topic", "imu_topic",
+            "power_topic", "flight_state_topic", "extended_state_topic",
+        ):
+            self.assertIn('<arg name="{}" />'.format(mapping), launch)
+
     def test_b2_release_metadata_and_public_apt_gate_are_frozen(self):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-16")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-16")
+        self.assertEqual(product["version"], "0.5.0-17")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-17")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
@@ -584,7 +726,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("https://xgc2.apt.xiaokang.ink", public_gate)
         self.assertIn('PACKAGE_NAME="ros-noetic-xgc2-unitree-b2-adapter"', public_gate)
-        self.assertIn('PACKAGE_VERSION}" != "0.5.0-16"', public_gate)
+        self.assertIn('PACKAGE_VERSION}" != "0.5.0-17"', public_gate)
         self.assertIn("apt-cache madison", public_gate)
         self.assertIn("check_installed_b2_package.sh", public_gate)
 

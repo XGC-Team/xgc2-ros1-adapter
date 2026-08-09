@@ -1,0 +1,79 @@
+diff --git a/Cargo.toml.in b/Cargo.toml.in
+index 4231670..f6aecb1 100644
+--- a/Cargo.toml.in
++++ b/Cargo.toml.in
+@@ -78,18 +78,18 @@
+ unwrap-infallible = "0.1.5"
+ const_format = "0.2.32"
+ flume = "*"
+-zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = ["internal"] }
+-zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features=["internal"] }
+-zenoh-runtime = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0" }
+-zenoh-util = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0" }
+-@COMMENT_PINNED_DEPS@zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "main" }
++zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = ["internal"] }
++zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features=["internal"] }
++zenoh-runtime = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b" }
++zenoh-util = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b" }
++@COMMENT_PINNED_DEPS@zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "91c230a8eef604c642bd4285c4374786000aa6a8" }
+ 
+ [target.'cfg(unix)'.dependencies]
+ ctor = "0.4.1"
+ 
+ [build-dependencies]
+-zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = ["internal"] }
+-@COMMENT_PINNED_DEPS@zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "main" }
++zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = ["internal"] }
++@COMMENT_PINNED_DEPS@zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "91c230a8eef604c642bd4285c4374786000aa6a8" }
+ cbindgen = "0.29.0"
+ fs2 = "0.4.3"
+ regex = "1.11.1"
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -78,18 +78,18 @@
+ unwrap-infallible = "0.1.5"
+ const_format = "0.2.32"
+ flume = "*"
+-zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = ["internal"] }
+-zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features=["internal"] }
+-zenoh-runtime = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0" }
+-zenoh-util = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0" }
+-# zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "main" }
++zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = ["internal"] }
++zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features=["internal"] }
++zenoh-runtime = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b" }
++zenoh-util = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b" }
++# zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "91c230a8eef604c642bd4285c4374786000aa6a8" }
+ 
+ [target.'cfg(unix)'.dependencies]
+ ctor = "0.4.1"
+ 
+ [build-dependencies]
+-zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = ["internal"] }
+-# zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "main" }
++zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = ["internal"] }
++# zenoh-pinned-deps-1-75 = { version = "1.8.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "91c230a8eef604c642bd4285c4374786000aa6a8" }
+ cbindgen = "0.29.0"
+ fs2 = "0.4.3"
+ regex = "1.11.1"
+diff --git a/build-resources/opaque-types/Cargo.toml b/build-resources/opaque-types/Cargo.toml
+--- a/build-resources/opaque-types/Cargo.toml
++++ b/build-resources/opaque-types/Cargo.toml
+@@ -29,13 +29,13 @@
+ default = ["zenoh/default"]
+ 
+ [dependencies]
+-zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = [
++zenoh = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = [
+     "internal",
+ ] }
+-zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0", default-features = false, features = [
++zenoh-ext = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b", default-features = false, features = [
+     "internal",
+ ] }
+-zenoh-protocol = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.9.0" }
++zenoh-protocol = { version = "1.9.0", git = "https://github.com/eclipse-zenoh/zenoh.git", rev = "81c6c933b6e41d72a05f04c4442ef57717ddc72b" }
+ const_format = "0.2.32"
+ flume = "*"
+ tokio = "*"
