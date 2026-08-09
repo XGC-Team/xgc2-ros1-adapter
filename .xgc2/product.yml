@@ -56,9 +56,6 @@ usage:
       ros-noetic-xgc2-mecanum-ugv-adapter \
       ros-noetic-xgc2-unitree-b2-adapter \
       ros-noetic-xgc2-mocap-rotor-adapter
-  onboard_install: |
-    # Run only on the Mocap Rotor Orin NX, never on the FS150 or ground Core.
-    sudo apt install ros-noetic-xgc2-mocap-rotor-forwarder
   smoke_test: |
     rospack find xgc_px4_multirotor_ros1_adapter
     rospack find xgc_scout_mini_ros1_adapter
@@ -90,6 +87,8 @@ usage:
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-mocap-rotor-ros1-adapter.json
     test -f /usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json
   notes: |
+    Install ros-noetic-xgc2-mocap-rotor-forwarder only on the Mocap Rotor
+    Orin NX, never on FS150 or the ground Core.
     Each robot Adapter is a domain-specific Adapter Runtime application. Core
     resolves its provider definition from the installed robot profile catalog.
     Unitree B2 and Mocap Rotor providers are telemetry-only and directly own
