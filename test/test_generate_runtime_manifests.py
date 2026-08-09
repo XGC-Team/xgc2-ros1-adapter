@@ -710,6 +710,14 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             '"${XGC2_DEPENDENCY_SET_DIGEST}" != "${EMPTY_DEPENDENCY_SET_DIGEST}"',
             docker_build,
         )
+        self.assertIn(
+            "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency",
+            docker_build,
+        )
+        self.assertNotIn(
+            'XGC2_PROTOBUF_DEB_VERSION="$(apt_candidate_version xgc2-protobuf-dev)"',
+            docker_build,
+        )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
         self.assertIn("third-party/zenoh-c/NOTICE.md", installed_gate)
         for mapping in (

@@ -286,7 +286,17 @@ docker exec "${container_name}" bash -lc '
       )"
     fi
     if [[ -z "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
-      XGC2_PROTOBUF_DEB_VERSION="$(apt_candidate_version xgc2-protobuf-dev)"
+      XGC2_PROTOBUF_DEB_VERSION="$(
+        apt-cache show \
+          "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" |
+          sed -nE \
+            "s/^Depends:.*xgc2-protobuf-dev \\(= ([^)]+)\\).*/\\1/p" |
+          head -n 1
+      )"
+      if [[ -z "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+        echo "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency" >&2
+        exit 1
+      fi
     fi
 
     if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
