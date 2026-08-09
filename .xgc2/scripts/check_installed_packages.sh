@@ -101,7 +101,8 @@ check_ros_package() {
   test -f "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"
   python3 "$(dirname "$0")/../../tools/verify_runtime_manifests.py" \
     --executable "${executable}" \
-    --artifact-path "${executable}" \
+    --ros-package "${ros_package}" \
+    --ros-executable "${ros_package}_node" \
     --definition-id "${definition_id}" \
     --registry "${PROTOBUF_REGISTRY}" \
     --profile-file "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" \

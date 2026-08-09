@@ -46,7 +46,8 @@ fi
 
 python3 "${REPO_ROOT}/tools/verify_runtime_manifests.py" \
   --executable "${EXECUTABLE}" \
-  --artifact-path "${EXECUTABLE}" \
+  --ros-package "${ROS_PACKAGE}" \
+  --ros-executable "${ROS_PACKAGE}_node" \
   --definition-id "${DEFINITION_ID}" \
   --registry "${REGISTRY}" \
   --profile-file "${PROFILE}" \

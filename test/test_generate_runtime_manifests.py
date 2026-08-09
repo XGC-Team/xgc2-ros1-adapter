@@ -561,6 +561,9 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             REPOSITORY_ROOT / ".xgc2/scripts/check_installed_packages.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("--profile-schema", script)
+        self.assertIn("--ros-package", script)
+        self.assertIn("--ros-executable", script)
+        self.assertNotIn("--artifact-path", script)
         self.assertIn("EXPECTED_PRODUCT_VERSION", script)
         self.assertIn(".worktrees", script)
         self.assertNotIn("--with-commands", script)
