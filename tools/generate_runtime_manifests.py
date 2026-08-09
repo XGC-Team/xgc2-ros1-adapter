@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ ROS_NOETIC_ENVIRONMENT = {
     "ROS_ROOT": "/opt/ros/noetic/share/ros",
     "ROS_VERSION": "1",
 }
+ROS_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -185,6 +187,10 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
     executable = Path(args.executable)
     if not executable.is_file():
         raise ValueError("Adapter executable does not exist: {}".format(executable))
+    if not ROS_NAME_PATTERN.fullmatch(args.ros_package):
+        raise ValueError("invalid ROS package name: {}".format(args.ros_package))
+    if not ROS_NAME_PATTERN.fullmatch(args.ros_executable):
+        raise ValueError("invalid ROS executable name: {}".format(args.ros_executable))
 
     registry_fingerprint, messages = load_registry(Path(args.registry))
     del registry_fingerprint
@@ -296,9 +302,13 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
                     "additionalProperties": False,
                 },
                 "command": {
-                    "executable": args.artifact_path,
-                    "args": ["--adapter-bootstrap-file", "${adapterBootstrapFile}"],
-                    "directExecutable": True,
+                    "executable": "rosrun",
+                    "args": [
+                        args.ros_package,
+                        args.ros_executable,
+                        "--adapter-bootstrap-file",
+                        "${adapterBootstrapFile}",
+                    ],
                     "env": dict(ROS_NOETIC_ENVIRONMENT),
                 },
                 "readiness": {"kind": "process"},
@@ -333,7 +343,8 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", required=True)
-    parser.add_argument("--artifact-path", required=True)
+    parser.add_argument("--ros-package", required=True)
+    parser.add_argument("--ros-executable", required=True)
     parser.add_argument("--registry", required=True)
     parser.add_argument("--profile-file", required=True)
     parser.add_argument("--profile-schema", required=True)

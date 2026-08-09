@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ ROS_NOETIC_ENVIRONMENT = {
     "ROS_ROOT": "/opt/ros/noetic/share/ros",
     "ROS_VERSION": "1",
 }
+ROS_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def canonical(value: Any) -> bytes:
@@ -148,7 +150,8 @@ def require(condition: bool, message: str) -> None:
 def verify(args: argparse.Namespace) -> None:
     executable = Path(args.executable)
     require(executable.is_file(), "Adapter executable does not exist")
-    require(Path(args.artifact_path).is_absolute(), "Adapter artifact path must be absolute")
+    require(ROS_NAME_PATTERN.fullmatch(args.ros_package) is not None, "invalid ROS package name")
+    require(ROS_NAME_PATTERN.fullmatch(args.ros_executable) is not None, "invalid ROS executable name")
     _, messages = load_registry(Path(args.registry))
     profiles = load_profile(
         Path(args.profile_file), Path(args.profile_schema), messages
@@ -240,9 +243,13 @@ def verify(args: argparse.Namespace) -> None:
     require(
         process_definition["command"]
         == {
-            "executable": args.artifact_path,
-            "args": ["--adapter-bootstrap-file", "${adapterBootstrapFile}"],
-            "directExecutable": True,
+            "executable": "rosrun",
+            "args": [
+                args.ros_package,
+                args.ros_executable,
+                "--adapter-bootstrap-file",
+                "${adapterBootstrapFile}",
+            ],
             "env": ROS_NOETIC_ENVIRONMENT,
         },
         "Adapter process command mismatch",
@@ -294,7 +301,8 @@ def verify(args: argparse.Namespace) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", required=True)
-    parser.add_argument("--artifact-path", required=True)
+    parser.add_argument("--ros-package", required=True)
+    parser.add_argument("--ros-executable", required=True)
     parser.add_argument("--definition-id", required=True)
     parser.add_argument("--registry", required=True)
     parser.add_argument("--profile-file", required=True)

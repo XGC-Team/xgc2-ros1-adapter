@@ -78,13 +78,12 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
     "${output_root}/process-definitions/${definition_id}.json")
   set(profile_catalog
     "${output_root}/robot-adapter-profiles/${definition_id}.json")
-  set(installed_executable
-    "${CMAKE_INSTALL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION}/${target_name}")
   add_custom_command(
     OUTPUT "${adapter_manifest}" "${process_manifest}" "${profile_catalog}"
     COMMAND "${PYTHON_EXECUTABLE}" "${generator}"
             --executable "$<TARGET_FILE:${target_name}>"
-            --artifact-path "$<TARGET_FILE:${target_name}>"
+            --ros-package "${PROJECT_NAME}"
+            --ros-executable "${target_name}"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
             --profile-file "${profile_file}"
             --profile-schema "${profile_schema}"
@@ -97,7 +96,8 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
             --profile-output "${profile_catalog}"
     COMMAND "${PYTHON_EXECUTABLE}" "${verifier}"
             --executable "$<TARGET_FILE:${target_name}>"
-            --artifact-path "$<TARGET_FILE:${target_name}>"
+            --ros-package "${PROJECT_NAME}"
+            --ros-executable "${target_name}"
             --definition-id "${definition_id}"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
             --profile-file "${profile_file}"
@@ -119,7 +119,10 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
   add_custom_target(${target_name}_runtime_manifests ALL
     DEPENDS "${adapter_manifest}" "${process_manifest}" "${profile_catalog}")
 
-  set(XGC2_INSTALLED_EXECUTABLE "${installed_executable}")
+  set(XGC2_INSTALLED_EXECUTABLE
+    "${CMAKE_INSTALL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION}/${target_name}")
+  set(XGC2_ROS_PACKAGE "${PROJECT_NAME}")
+  set(XGC2_ROS_EXECUTABLE "${target_name}")
   set(XGC2_ADAPTER_DEFINITION_ID "${definition_id}")
   set(XGC2_ADAPTER_VERSION "${version}")
   set(XGC2_ADAPTER_LABEL "${label}")

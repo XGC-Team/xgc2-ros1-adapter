@@ -125,7 +125,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
     def arguments(self, profile_file):
         return SimpleNamespace(
             executable="/bin/true",
-            artifact_path="/usr/bin/fixture-adapter",
+            ros_package="fixture_robot_adapter",
+            ros_executable="fixture_robot_adapter_node",
             registry=str(self.registry),
             profile_file=str(profile_file),
             profile_schema=str(SCHEMA),
@@ -472,12 +473,13 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(
             command,
             {
-                "executable": "/usr/bin/fixture-adapter",
+                "executable": "rosrun",
                 "args": [
+                    "fixture_robot_adapter",
+                    "fixture_robot_adapter_node",
                     "--adapter-bootstrap-file",
                     "${adapterBootstrapFile}",
                 ],
-                "directExecutable": True,
                 "env": ROS_NOETIC_ENVIRONMENT,
             },
         )
@@ -567,8 +569,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-15")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-15")
+        self.assertEqual(product["version"], "0.5.0-16")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-16")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
@@ -579,7 +581,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("https://xgc2.apt.xiaokang.ink", public_gate)
         self.assertIn('PACKAGE_NAME="ros-noetic-xgc2-unitree-b2-adapter"', public_gate)
-        self.assertIn('PACKAGE_VERSION}" != "0.5.0-15"', public_gate)
+        self.assertIn('PACKAGE_VERSION}" != "0.5.0-16"', public_gate)
         self.assertIn("apt-cache madison", public_gate)
         self.assertIn("check_installed_b2_package.sh", public_gate)
 
@@ -652,7 +654,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         profile_path.write_text(json.dumps(catalog), encoding="utf-8")
         arguments = SimpleNamespace(
             executable="/bin/true",
-            artifact_path="/usr/bin/fixture-adapter",
+            ros_package="fixture_robot_adapter",
+            ros_executable="fixture_robot_adapter_node",
             definition_id="fixture-robot-adapter",
             registry=str(self.registry),
             profile_file=str(PX4_PROFILE),
@@ -812,8 +815,10 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 str(TOOLS / "verify_runtime_manifests.py"),
                 "--executable",
                 "/bin/true",
-                "--artifact-path",
-                "/usr/bin/fixture-adapter",
+                "--ros-package",
+                "fixture_robot_adapter",
+                "--ros-executable",
+                "fixture_robot_adapter_node",
                 "--definition-id",
                 "fixture-robot-adapter",
                 "--registry",

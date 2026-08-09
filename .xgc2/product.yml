@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-15
+version: 0.5.0-16
 kind: ros1-apt
 summary: Robot-owned PX4, Scout, Mecanum, and read-only Unitree B2 ROS1 semantic adapters.
 groups:
@@ -109,4 +109,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-15
+    focal: 0.5.0-16
