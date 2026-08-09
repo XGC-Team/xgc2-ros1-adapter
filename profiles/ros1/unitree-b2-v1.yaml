@@ -1,0 +1,147 @@
+schema: xgc.robot.adapter-profile/v4
+profile_id: unitree.b2.v1
+profile_version: 1
+native_protocol: ros1
+robot_kind: unitree_b2
+description: Read-only Unitree B2 wire telemetry projected to Core and recovered as local ROS1 geometry.
+parameters:
+  robot_id:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^[a-z][a-z0-9-]+$
+    description: Wire key identity; must equal the Adapter Runtime robot id.
+  wire_transport:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^[a-z]+$
+    description: Explicit G3/G4 data-plane transport; no automatic fallback.
+  wire_host:
+    type: string
+    required: true
+    delivery: target_binding
+    description: Ground-side listen address for the selected transport.
+  wire_port:
+    type: integer
+    required: true
+    delivery: target_binding
+    description: Ground-side listen port (7448 TCP or 7447 Zenoh by contract).
+semantic_traits:
+  default_stale_after_ms: 3000
+  channel_stale_after_ms:
+    state.pose: 1000
+    state.velocity: 1000
+    state.speed: 1000
+    state.power: 2000
+    state.health: 3000
+    state.locomotion: 3000
+    state.joints: 1000
+    state.arm-joints: 1000
+    diagnostic.link: 3000
+    diagnostic.stream-health: 3000
+  online_conditions:
+    - channel_id: state.health
+      maximum_age_ms: 3000
+      predicate: xgc.semantic.common.vehicle-health.online
+  operational_ready_conditions:
+    - channel_id: state.pose
+      maximum_age_ms: 1000
+channels:
+  - id: state.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: unitree-b2.odom-pose
+    output_rate_hz: 15
+    inputs: &odom_input
+      wire:
+        name: xgc2/{robot_id}/up/odom
+        type: xgc2_b2_link/OdomV1
+        scope: global
+  - id: state.velocity
+    kind: stream_out
+    output_message_id: 2002
+    processor: unitree-b2.odom-velocity
+    output_rate_hz: 15
+    inputs: *odom_input
+  - id: state.speed
+    kind: stream_out
+    output_message_id: 2006
+    processor: unitree-b2.odom-speed
+    output_rate_hz: 15
+    inputs: *odom_input
+  - id: state.power
+    kind: stream_out
+    output_message_id: 2004
+    processor: unitree-b2.power-summary
+    output_rate_hz: 2
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/power_summary
+        type: xgc2_b2_link/PowerSummaryV1
+        scope: global
+  - id: state.health
+    kind: stream_out
+    output_message_id: 2005
+    processor: unitree-b2.aggregate-health
+    output_rate_hz: 1
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/driver_status
+        type: xgc2_b2_link/DriverStatusV1
+        scope: global
+  - id: state.locomotion
+    kind: stream_out
+    output_message_id: 3103
+    processor: unitree-b2.locomotion-status
+    output_rate_hz: 1
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/driver_status
+        type: xgc2_b2_link/DriverStatusV1
+        scope: global
+  - id: state.joints
+    kind: stream_out
+    output_message_id: 3104
+    processor: unitree-b2.leg-joints
+    output_rate_hz: 15
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/joint_states
+        type: xgc2_b2_link/JointStatesV1
+        scope: global
+  - id: state.arm-joints
+    kind: stream_out
+    output_message_id: 3104
+    processor: unitree-b2.arm-joints
+    output_rate_hz: 15
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/arm_slave_status
+        type: xgc2_b2_link/ArmJointStatesV1
+        scope: global
+  - id: diagnostic.link
+    kind: stream_out
+    output_message_id: 2010
+    processor: unitree-b2.forwarder-link
+    output_rate_hz: 1
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/forwarder_hb
+        type: xgc2_b2_link/ForwarderHeartbeatV1
+        scope: global
+  - id: diagnostic.stream-health
+    kind: stream_out
+    output_message_id: 2011
+    processor: unitree-b2.stream-health
+    output_rate_hz: 1
+    observes:
+      - state.pose
+      - state.velocity
+      - state.speed
+      - state.power
+      - state.health
+      - state.locomotion
+      - state.joints
+      - state.arm-joints
+      - diagnostic.link

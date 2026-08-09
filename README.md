@@ -1,15 +1,16 @@
 # XGC2 ROS1 Robot Adapters
 
-This Catkin workspace contains three robot-domain Adapter Runtime applications.
+This Catkin workspace contains four robot-domain Adapter Runtime applications.
 An Adapter is a general capability plugin for Core or Agent; these applications
-specialize that abstraction for PX4 multirotors, Scout Mini robots, and Mecanum
-UGVs.
+specialize that abstraction for PX4 multirotors, Scout Mini robots, Mecanum
+UGVs, and the read-only Unitree B2 data plane.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
 | `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v7` |
 | `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v6` |
 | `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v3` |
+| `xgc_unitree_b2_ros1_adapter` | `ros-noetic-xgc2-unitree-b2-adapter` | `xgc2-unitree-b2-ros1-adapter` | `unitree.b2.v1` |
 
 The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
 session fencing, capability dispatch, flow control, reconnects, and terminal
@@ -23,7 +24,7 @@ provider instance uses a `robot-group` scope containing `target-id`, `run-id`,
 and `provider`; each invocation and telemetry source uses a separate
 `robot-resource` subject containing `target-id`, `run-id`, and `robot-id`.
 
-All three applications expose:
+All four applications expose:
 
 - `xgc.robot.telemetry@1`: `telemetry` source of serialized
   `xgc.robot.v1.RobotMessage`
@@ -108,6 +109,30 @@ sends a final zero on shutdown.
 High-bandwidth images, point clouds, and TF visualization remain on their
 native ROS visualization paths rather than the semantic telemetry source.
 
+The Unitree B2 Adapter is telemetry-only. It listens on the profile-bound TCP
+endpoint, accepts only `xgc2/{robot_id}/up/*` keys from the frozen G3 JSON
+contract, and has no command capability or `down/cmd` handler. One validated
+sample is used for both outputs: Adapter Runtime receives `state.pose`,
+`state.velocity`, `state.speed`, `state.power`, `state.health`,
+`state.locomotion`, bounded leg/arm joints, and link/stream diagnostics; local
+ROS receives `/remote/b2/odom`, dedicated leg/arm joints, merged
+`/joint_states`, `/remote/b2/path`, and `odom -> b2_description` TF.
+
+B2 online state uses ground receive monotonic time, not the onboard clock. The
+required windows are odom/joints 1 s, power 2 s, and driver/heartbeat 3 s. An
+absent Domain-17 arm never takes the Domain-0 B2 body offline. The current C++
+build implements the explicit LAB TCP backend; selecting `zenoh` fails closed
+until a supported C/C++ Zenoh client is linked.
+
+The same Debian package also ships
+`unitree_b2_visualization_runtime.launch`. A Session-supervised process may
+start it after the frozen Run roster selects B2; it loads the separately
+packaged `b2arx_description` URDF into `/robot_description` and runs the
+standard ROS1 `robot_state_publisher` against the Adapter's `/joint_states`.
+It does not open the wire transport or decode a second copy of B2 data. Opening
+Lichtblick never starts this process: G1's Session workflow owns its lifecycle
+alongside the Adapter and Foxglove Bridge.
+
 ## Trust and installation metadata
 
 Each Debian package owns three generated, immutable installation contracts:
@@ -141,6 +166,9 @@ sudo apt install \
   ros-noetic-geometry-msgs \
   ros-noetic-mavros-msgs \
   ros-noetic-scout-msgs \
+  ros-noetic-nav-msgs \
+  ros-noetic-tf2-ros \
+  nlohmann-json3-dev \
   python3-jsonschema \
   python3-yaml
 
@@ -152,10 +180,18 @@ catkin_make run_tests
 catkin_test_results --verbose build/test_results
 ```
 
-The release path builds and install-checks all three independent Debian packages:
+The release path builds and install-checks all four independent Debian packages:
 
 ```bash
 .xgc2/scripts/build_debs_in_docker.sh --output-dir "$PWD/debs"
+```
+
+After publishing, the public Focal APT gate installs the exact frozen B2
+version in a clean ROS Noetic container and rejects source-tree paths in every
+installed runtime manifest:
+
+```bash
+.xgc2/scripts/check_public_apt_install.sh
 ```
 
 All adapters are compiled against the exact
@@ -175,6 +211,7 @@ The Process Supervisor starts the fixed installed executable directly:
 /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
 /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
+/opt/ros/noetic/lib/xgc_unitree_b2_ros1_adapter/xgc_unitree_b2_ros1_adapter_node
 ```
 
 For a diagnostic manual launch, pass a real supervisor-generated bootstrap:

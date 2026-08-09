@@ -14,6 +14,7 @@ BUILD_JOBS="${BUILD_JOBS:-}"
 ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-}"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-}"
 XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
+XGC2_PROTOBUF_SOURCE_ROOT="${XGC2_PROTOBUF_SOURCE_ROOT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -97,7 +98,8 @@ if [[ "${COPY_OUTPUT}" == "true" ]]; then
   rm -f \
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb
+    "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-unitree-b2-adapter_"*.deb
 fi
 
 docker_network_args=()
@@ -120,7 +122,7 @@ docker_env_args=(
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
   -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/lxk36/xgc2-protobuf.git}"
-  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF:-d982a96ce5141ba0f55d8d4922d7ab8e1bf48d41}"
+  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF:-46e6b318720564ca6bf48de77562d455d7c165f9}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/lxk36/xgc2-adapter-runtime-client-cpp.git}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-805814559502ac6d0a336173401c75dd9c9e3cc4}"
 )
@@ -156,6 +158,14 @@ flock -u "${docker_pull_lock_fd}"
 docker start "${container_name}" >/dev/null
 docker exec "${container_name}" mkdir -p /tmp/ros1-adapter /tmp/work /tmp/out
 docker cp "${REPO_ROOT}/." "${container_name}:/tmp/ros1-adapter/"
+if [[ -n "${XGC2_PROTOBUF_SOURCE_ROOT}" ]]; then
+  [[ -f "${XGC2_PROTOBUF_SOURCE_ROOT}/.xgc2/scripts/build_deb.sh" ]] || {
+    echo "XGC2_PROTOBUF_SOURCE_ROOT is not an xgc2-protobuf source tree" >&2
+    exit 1
+  }
+  docker exec "${container_name}" mkdir -p /tmp/xgc2-protobuf-source
+  docker cp "${XGC2_PROTOBUF_SOURCE_ROOT}/." "${container_name}:/tmp/xgc2-protobuf-source/"
+fi
 # The quoted payload is parsed by the inner Bash process; its continuations are
 # intentionally literal to this outer shell.
 # shellcheck disable=SC1004
@@ -218,6 +228,7 @@ docker exec "${container_name}" bash -lc '
       fakeroot \
       git \
       libgrpc++-dev \
+      nlohmann-json3-dev \
       libprotobuf-dev \
       libre2-dev \
       pkg-config \
@@ -228,13 +239,17 @@ docker exec "${container_name}" bash -lc '
       python3-yaml \
       rsync \
       ros-noetic-geometry-msgs \
+      ros-noetic-diagnostic-msgs \
       ros-noetic-mavros-msgs \
+      ros-noetic-nav-msgs \
       ros-noetic-roscpp \
       ros-noetic-roslaunch \
       ros-noetic-rosmsg \
       ros-noetic-rospack \
       ros-noetic-scout-msgs \
-      ros-noetic-sensor-msgs
+      ros-noetic-sensor-msgs \
+      ros-noetic-std-msgs \
+      ros-noetic-tf2-ros
 
     apt_candidate_version() {
       local package="$1"
@@ -259,12 +274,16 @@ docker exec "${container_name}" bash -lc '
       rm -rf /tmp/xgc2-common-bootstrap
       mkdir -p /tmp/xgc2-common-bootstrap/debs
 
-      git init -q /tmp/xgc2-common-bootstrap/protobuf
-      git -C /tmp/xgc2-common-bootstrap/protobuf remote add origin "${XGC2_PROTOBUF_GIT_URL}"
-      git -C /tmp/xgc2-common-bootstrap/protobuf fetch --depth 1 origin "${XGC2_PROTOBUF_GIT_REF}"
-      git -C /tmp/xgc2-common-bootstrap/protobuf checkout -q --detach FETCH_HEAD
-      test "$(git -C /tmp/xgc2-common-bootstrap/protobuf rev-parse HEAD)" = \
-        "${XGC2_PROTOBUF_GIT_REF}"
+      if [[ -d /tmp/xgc2-protobuf-source ]]; then
+        cp -a /tmp/xgc2-protobuf-source /tmp/xgc2-common-bootstrap/protobuf
+      else
+        git init -q /tmp/xgc2-common-bootstrap/protobuf
+        git -C /tmp/xgc2-common-bootstrap/protobuf remote add origin "${XGC2_PROTOBUF_GIT_URL}"
+        git -C /tmp/xgc2-common-bootstrap/protobuf fetch --depth 1 origin "${XGC2_PROTOBUF_GIT_REF}"
+        git -C /tmp/xgc2-common-bootstrap/protobuf checkout -q --detach FETCH_HEAD
+        test "$(git -C /tmp/xgc2-common-bootstrap/protobuf rev-parse HEAD)" = \
+          "${XGC2_PROTOBUF_GIT_REF}"
+      fi
       PACKAGE_DISTRIBUTION=focal \
       PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
       XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
@@ -337,7 +356,8 @@ docker exec "${container_name}" bash -lc '
       apt_install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb
+        /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb
       /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
     fi
   '

@@ -9,12 +9,21 @@ SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
 MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
+B2_PACKAGE="ros-${ROS_DISTRO}-xgc2-unitree-b2-adapter"
+B2_ROS_PACKAGE="xgc_unitree_b2_ros1_adapter"
 ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-7~focal}"
+EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
+  awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
+    "$(dirname "$0")/../product.yml"
+)}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
 dpkg -s "${MECANUM_PACKAGE}" >/dev/null
+dpkg -s "${B2_PACKAGE}" >/dev/null
+test "$(dpkg-query -W -f='${Version}' "${B2_PACKAGE}")" = \
+  "${EXPECTED_PRODUCT_VERSION}"
 dpkg -s libxgc2-adapter-runtime-client2 >/dev/null
 test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client2)" = \
   "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
@@ -27,7 +36,8 @@ fi
 px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 scout_depends="$(dpkg-query -W -f='${Depends}' "${SCOUT_PACKAGE}")"
 mecanum_depends="$(dpkg-query -W -f='${Depends}' "${MECANUM_PACKAGE}")"
-for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
+b2_depends="$(dpkg-query -W -f='${Depends}' "${B2_PACKAGE}")"
+for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}" "${b2_depends}"; do
   grep -Eq '(^|, )libxgc2-adapter-runtime-client2( |[(])' <<<"${depends}"
   if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${depends}"; then
@@ -49,6 +59,13 @@ if grep -Eq 'mavros-msgs|scout-msgs|sensor-msgs' <<<"${mecanum_depends}"; then
   echo "Mecanum adapter package leaked unrelated robot message dependencies" >&2
   exit 1
 fi
+if grep -Eq 'mavros-msgs|scout-msgs' <<<"${b2_depends}"; then
+  echo "Unitree B2 adapter leaked unrelated robot message dependencies" >&2
+  exit 1
+fi
+for dependency in diagnostic-msgs nav-msgs robot-state-publisher sensor-msgs std-msgs tf2-ros xgc2-b2arx-description; do
+  grep -q "ros-${ROS_DISTRO}-${dependency}" <<<"${b2_depends}"
+done
 
 set +u
 # shellcheck disable=SC1090
@@ -111,6 +128,21 @@ check_ros_package \
   "mecanum-ugv-ros1-v3.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-mecanum-ugv-ros1-adapter"
+check_ros_package \
+  "${B2_ROS_PACKAGE}" \
+  "unitree_b2_ros1_adapter.launch" \
+  "unitree-b2-v1.yaml" \
+  "robot-adapter-profile-v4.schema.json" \
+  "xgc2-unitree-b2-ros1-adapter"
+test -f "${PREFIX}/share/${B2_ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
+test -f "${PREFIX}/share/b2arx_description/urdf/b2arx_visual.urdf"
+if grep -n -E '/tmp/|/home/|\.worktrees/' \
+  /usr/share/xgc2/adapter-definitions/xgc2-unitree-b2-ros1-adapter.json \
+  /usr/share/xgc2/process-definitions/xgc2-unitree-b2-ros1-adapter.json \
+  /usr/share/xgc2/robot-adapter-profiles/xgc2-unitree-b2-ros1-adapter.json; then
+  echo "installed Unitree B2 manifests contain a source-development path" >&2
+  exit 1
+fi
 
 test ! -e "${PREFIX}/share/xgc_ros1_adapter"
 test ! -e "${PREFIX}/lib/xgc_ros1_adapter/xgc_ros1_adapter_node"

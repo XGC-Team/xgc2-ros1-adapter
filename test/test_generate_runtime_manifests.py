@@ -33,6 +33,7 @@ SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v7.yaml"
 SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v6.yaml"
 MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v3.yaml"
+B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
     "CMAKE_PREFIX_PATH": "/opt/ros/noetic",
     "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
@@ -64,6 +65,8 @@ MESSAGE_ROLES = {
     3004: "diagnostic",
     3005: "diagnostic",
     3102: "telemetry",
+    3103: "telemetry",
+    3104: "telemetry",
     3201: "request",
     3202: "request",
     3203: "request",
@@ -79,6 +82,8 @@ TYPE_NAMES = {
     2007: "xgc.semantic.common.v1.DistanceEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
+    3103: "xgc.semantic.ground.v1.LocomotionStatus",
+    3104: "xgc.semantic.ground.v1.JointStateSet",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
@@ -311,6 +316,20 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ],
         )
 
+        _, _, b2_catalog = GENERATOR.build_documents(self.arguments(B2_PROFILE))
+        b2 = b2_catalog["profiles"][0]
+        self.assertEqual(b2["profileId"], "unitree.b2.v1")
+        self.assertEqual(b2["robotKind"], "unitree_b2")
+        self.assertEqual(b2["semantics"]["operations"], [])
+        self.assertEqual(
+            b2["semantics"]["onlineConditions"],
+            [{
+                "channelId": "state.health",
+                "maximumAgeMillis": 3000,
+                "predicate": "xgc.semantic.common.vehicle-health.online",
+            }],
+        )
+
     def test_profile_v4_contract_and_legacy_schema_are_explicit(self):
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
@@ -540,7 +559,36 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             REPOSITORY_ROOT / ".xgc2/scripts/check_installed_packages.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("--profile-schema", script)
+        self.assertIn("EXPECTED_PRODUCT_VERSION", script)
+        self.assertIn(".worktrees", script)
         self.assertNotIn("--with-commands", script)
+
+    def test_b2_release_metadata_and_public_apt_gate_are_frozen(self):
+        product = yaml.safe_load(
+            (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(product["version"], "0.5.0-14")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-14")
+        self.assertEqual(
+            product["release"]["dependency_policy"]["xgc2-b2arx-description"],
+            "order",
+        )
+
+        public_gate = (
+            REPOSITORY_ROOT / ".xgc2/scripts/check_public_apt_install.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("https://xgc2.apt.xiaokang.ink", public_gate)
+        self.assertIn('PACKAGE_NAME="ros-noetic-xgc2-unitree-b2-adapter"', public_gate)
+        self.assertIn('PACKAGE_VERSION}" != "0.5.0-14"', public_gate)
+        self.assertIn("apt-cache madison", public_gate)
+        self.assertIn("check_installed_b2_package.sh", public_gate)
+
+        installed_gate = (
+            REPOSITORY_ROOT / ".xgc2/scripts/check_installed_b2_package.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('PREFIX="/opt/ros/${ROS_DISTRO}"', installed_gate)
+        self.assertIn("/usr/share/xgc2/process-definitions/", installed_gate)
+        self.assertIn(".worktrees", installed_gate)
 
     def test_ground_adapters_stop_motion_before_ros_transport_shutdown(self):
         for package, node_source in (

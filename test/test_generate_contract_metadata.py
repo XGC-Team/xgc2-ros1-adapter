@@ -25,6 +25,7 @@ SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v6
 MECANUM_PROFILE_PATH = (
     REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v3.yaml"
 )
+B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
 PX4_DEFINITION_ID = "xgc2-px4-multirotor-ros1-adapter"
 MECANUM_DEFINITION_ID = "xgc2-mecanum-ugv-ros1-adapter"
 
@@ -50,6 +51,8 @@ MESSAGE_ROLES = {
     3004: "diagnostic",
     3005: "diagnostic",
     3102: "telemetry",
+    3103: "telemetry",
+    3104: "telemetry",
     3201: "request",
     3202: "request",
     3203: "request",
@@ -65,6 +68,8 @@ TYPE_NAMES = {
     2007: "xgc.semantic.common.v1.DistanceEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
+    3103: "xgc.semantic.ground.v1.LocomotionStatus",
+    3104: "xgc.semantic.ground.v1.JointStateSet",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
@@ -119,6 +124,9 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         mecanum_profiles = GENERATOR.load_profile(
             MECANUM_PROFILE_PATH, SCHEMA_PATH, self.messages
+        )
+        b2_profiles = GENERATOR.load_profile(
+            B2_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
         px4 = px4_profiles["px4.multirotor.ros1.v7"]
@@ -348,6 +356,17 @@ class ContractGeneratorTest(unittest.TestCase):
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
+        b2 = b2_profiles["unitree.b2.v1"]
+        b2_channels = {channel["id"]: channel for channel in b2["channels"]}
+        self.assertEqual(len(b2_channels), 10)
+        self.assertEqual(b2_channels["state.locomotion"]["output_message_id"], 3103)
+        self.assertEqual(b2_channels["state.joints"]["output_message_id"], 3104)
+        self.assertEqual(b2_channels["state.arm-joints"]["output_message_id"], 3104)
+        self.assertFalse(any(channel["kind"] == "operation" for channel in b2_channels.values()))
+        self.assertEqual(
+            b2_channels["state.pose"]["endpoints"][0]["name_template"],
+            "xgc2/{robot_id}/up/odom",
+        )
         self.assertEqual(
             set(mecanum_channels),
             {
@@ -1090,9 +1109,17 @@ int main() {
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
             with self.subTest(launch=launch_file.name):
-                self.assertNotIn("<param", launch)
-                self.assertNotIn("<rosparam", launch)
-                self.assertIn("--adapter-bootstrap-file", launch)
+                if "--adapter-bootstrap-file" in launch:
+                    self.assertNotIn("<param", launch)
+                    self.assertNotIn("<rosparam", launch)
+                    continue
+                self.assertEqual(
+                    launch_file.name, "unitree_b2_visualization_runtime.launch"
+                )
+                self.assertIn('name="robot_description"', launch)
+                self.assertIn('pkg="robot_state_publisher"', launch)
+                self.assertIn('name="xgc2_b2_robot_state_publisher"', launch)
+                self.assertNotIn("xgc_unitree_b2_ros1_adapter_node", launch)
 
     def test_every_channel_message_must_exist_with_a_compatible_role(self):
         missing_reboot = dict(self.messages)

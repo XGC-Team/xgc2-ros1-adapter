@@ -18,6 +18,7 @@ function(xgc2_add_ros1_robot_common target_name)
     xgc/semantic/common/v1/types.proto
     xgc/semantic/ground/v1/chassis.proto
     xgc/semantic/ground/v1/control.proto
+    xgc/semantic/ground/v1/locomotion.proto
   )
   set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_generated")
   set(protocol_inputs)

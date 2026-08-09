@@ -1,0 +1,8 @@
+<launch>
+  <arg name="bootstrap_file" />
+  <node pkg="xgc_unitree_b2_ros1_adapter"
+        type="xgc_unitree_b2_ros1_adapter_node"
+        name="xgc_unitree_b2_ros1_adapter"
+        output="screen"
+        args="--adapter-bootstrap-file $(arg bootstrap_file)" />
+</launch>

@@ -13,6 +13,8 @@ SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
 MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
+B2_PACKAGE="ros-${ROS_DISTRO}-xgc2-unitree-b2-adapter"
+B2_ROS_PACKAGE="xgc_unitree_b2_ros1_adapter"
 
 product_version() {
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
@@ -62,7 +64,8 @@ mkdir -p "${OUTPUT_DIR}"
 rm -f \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb
+  "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${B2_PACKAGE}_"*.deb
 
 mkdir -p "${BUILD_DIR}/debian"
 cat > "${BUILD_DIR}/debian/control" <<EOF
@@ -78,6 +81,9 @@ Package: ${SCOUT_PACKAGE}
 Architecture: any
 
 Package: ${MECANUM_PACKAGE}
+Architecture: any
+
+Package: ${B2_PACKAGE}
 Architecture: any
 EOF
 
@@ -233,6 +239,17 @@ package_adapter \
   "xgc2-mecanum-ugv-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 
+package_adapter \
+  "${B2_PACKAGE}" \
+  "${B2_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-diagnostic-msgs, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-robot-state-publisher, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-xgc2-b2arx-description" \
+  "XGC2 Unitree B2 ROS1 read-only semantic adapter" \
+  "Provides bounded B2 wire decode, semantic projection, freshness, and ROS1/TF recovery without motion commands." \
+  "unitree-b2-v1.yaml" \
+  "xgc2-unitree-b2-ros1-adapter" \
+  "robot-adapter-profile-v4.schema.json"
+
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
-  \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" -o -name "${MECANUM_PACKAGE}_*.deb" \) \
+  \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \
+    -o -name "${MECANUM_PACKAGE}_*.deb" -o -name "${B2_PACKAGE}_*.deb" \) \
   -print | sort
