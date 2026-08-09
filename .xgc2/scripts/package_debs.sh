@@ -242,7 +242,7 @@ package_adapter \
 package_adapter \
   "${B2_PACKAGE}" \
   "${B2_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-diagnostic-msgs, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-robot-state-publisher, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-xgc2-b2arx-description" \
+  "ros-${ROS_DISTRO}-diagnostic-msgs, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-nav-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2-ros" \
   "XGC2 Unitree B2 ROS1 read-only semantic adapter" \
   "Provides bounded B2 wire decode, semantic projection, freshness, and ROS1/TF recovery without motion commands." \
   "unitree-b2-v1.yaml" \

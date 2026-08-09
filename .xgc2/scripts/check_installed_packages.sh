@@ -63,9 +63,13 @@ if grep -Eq 'mavros-msgs|scout-msgs' <<<"${b2_depends}"; then
   echo "Unitree B2 adapter leaked unrelated robot message dependencies" >&2
   exit 1
 fi
-for dependency in diagnostic-msgs nav-msgs robot-state-publisher sensor-msgs std-msgs tf2-ros xgc2-b2arx-description; do
+for dependency in diagnostic-msgs nav-msgs sensor-msgs std-msgs tf2-ros; do
   grep -q "ros-${ROS_DISTRO}-${dependency}" <<<"${b2_depends}"
 done
+if grep -Eq 'robot-state-publisher|xgc2-b2arx-description' <<<"${b2_depends}"; then
+  echo "Unitree B2 Adapter must not own the generic description/RSP runtime" >&2
+  exit 1
+fi
 
 set +u
 # shellcheck disable=SC1090
@@ -134,8 +138,7 @@ check_ros_package \
   "unitree-b2-v1.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-unitree-b2-ros1-adapter"
-test -f "${PREFIX}/share/${B2_ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
-test -f "${PREFIX}/share/b2arx_description/urdf/b2arx_visual.urdf"
+test ! -e "${PREFIX}/share/${B2_ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
 if grep -n -E '/tmp/|/home/|\.worktrees/' \
   /usr/share/xgc2/adapter-definitions/xgc2-unitree-b2-ros1-adapter.json \
   /usr/share/xgc2/process-definitions/xgc2-unitree-b2-ros1-adapter.json \

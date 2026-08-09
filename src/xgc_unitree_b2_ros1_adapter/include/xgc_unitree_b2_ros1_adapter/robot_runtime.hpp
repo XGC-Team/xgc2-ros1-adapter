@@ -25,6 +25,7 @@
 namespace xgc_unitree_b2_ros1_adapter {
 
 bool validWireHost(const std::string &value, std::string *error);
+bool validRobotNamespace(const std::string &value, std::string *error);
 bool parseWirePort(const std::string &value, std::uint16_t *port,
                    std::string *error);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
@@ -59,7 +60,8 @@ class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
   };
 
   RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
-               std::string profile_id, std::uint64_t spec_revision,
+               std::string profile_id, std::string robot_namespace,
+               std::uint64_t spec_revision,
                std::set<std::string> enabled_channels,
                std::string wire_host, std::uint16_t wire_port,
                EnvelopeEmitter emitter);
@@ -93,6 +95,9 @@ class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
   const std::string profile_id_;
+  const std::string robot_namespace_;
+  const std::string frame_prefix_;
+  const std::string base_frame_;
   const std::uint64_t spec_revision_;
   const std::set<std::string> enabled_channels_;
   const std::string wire_host_;

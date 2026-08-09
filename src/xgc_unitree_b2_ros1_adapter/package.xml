@@ -20,11 +20,9 @@
   <build_depend>xgc2-protobuf-dev</build_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>b2arx_description</exec_depend>
   <exec_depend>libxgc2-adapter-runtime-client2</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>roscpp</exec_depend>
-  <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>

@@ -5,6 +5,12 @@ native_protocol: ros1
 robot_kind: unitree_b2
 description: Read-only Unitree B2 wire telemetry projected to Core and recovered as local ROS1 geometry.
 parameters:
+  namespace:
+    type: string
+    required: true
+    delivery: target_binding
+    pattern: ^/[A-Za-z_][A-Za-z0-9_]*$
+    description: Frozen Experiment slot namespace for all recovered ROS topics and TF frames.
   robot_id:
     type: string
     required: true

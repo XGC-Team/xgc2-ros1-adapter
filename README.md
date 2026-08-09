@@ -115,8 +115,10 @@ contract, and has no command capability or `down/cmd` handler. One validated
 sample is used for both outputs: Adapter Runtime receives `state.pose`,
 `state.velocity`, `state.speed`, `state.power`, `state.health`,
 `state.locomotion`, bounded leg/arm joints, and link/stream diagnostics; local
-ROS receives `/remote/b2/odom`, dedicated leg/arm joints, merged
-`/joint_states`, `/remote/b2/path`, and `odom -> b2_description` TF.
+ROS receives `/<slot>/odom`, namespaced dedicated leg/arm joints, merged
+`/<slot>/joint_states`, `/<slot>/path`, and
+`world -> <slot>/b2_description` TF. The immutable Experiment namespace is
+delivered through the same Adapter Profile contract as the wire endpoint.
 
 B2 online state uses ground receive monotonic time, not the onboard clock. The
 required windows are odom/joints 1 s, power 2 s, and driver/heartbeat 3 s. An
@@ -124,14 +126,15 @@ absent Domain-17 arm never takes the Domain-0 B2 body offline. The current C++
 build implements the explicit LAB TCP backend; selecting `zenoh` fails closed
 until a supported C/C++ Zenoh client is linked.
 
-The same Debian package also ships
-`unitree_b2_visualization_runtime.launch`. A Session-supervised process may
-start it after the frozen Run roster selects B2; it loads the separately
-packaged `b2arx_description` URDF into `/robot_description` and runs the
-standard ROS1 `robot_state_publisher` against the Adapter's `/joint_states`.
-It does not open the wire transport or decode a second copy of B2 data. Opening
-Lichtblick never starts this process: G1's Session workflow owns its lifecycle
-alongside the Adapter and Foxglove Bridge.
+The Adapter Debian deliberately does not ship a B2-only description launch or
+depend on `robot_state_publisher`/`b2arx_description`. After the frozen Run
+roster selects any Robot, the separate generic `xgc2_robot_visualization`
+runtime resolves that contribution's installed description, publishes
+`/<slot>/visual_robot_description` plus the namespaced state-publisher
+parameter, and supervises the standard ROS1
+`robot_state_publisher`. It does not open the wire transport or decode a second
+copy of B2 data. Opening Lichtblick never starts either process: the Experiment
+Session owns Adapter, descriptions, RSP and Foxglove lifecycles together.
 
 ## Trust and installation metadata
 

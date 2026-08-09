@@ -30,10 +30,9 @@ fi
 test -x "${EXECUTABLE}"
 ldd "${EXECUTABLE}" | grep -q 'libxgc2_adapter_runtime_client'
 test -f "${PREFIX}/share/${ROS_PACKAGE}/launch/unitree_b2_ros1_adapter.launch"
-test -f "${PREFIX}/share/${ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
+test ! -e "${PREFIX}/share/${ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
 test -f "${PROFILE}"
 test -f "${PROFILE_SCHEMA}"
-test -f "${PREFIX}/share/b2arx_description/urdf/b2arx_visual.urdf"
 test -f "${REGISTRY}"
 test -f "${ADAPTER_MANIFEST}"
 test -f "${PROCESS_MANIFEST}"

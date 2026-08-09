@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-14
+version: 0.5.0-15
 kind: ros1-apt
 summary: Robot-owned PX4, Scout, Mecanum, and read-only Unitree B2 ROS1 semantic adapters.
 groups:
@@ -38,12 +38,10 @@ apt:
   - python3-yaml
   - ros-noetic-roscpp
   - ros-noetic-nav-msgs
-  - ros-noetic-robot-state-publisher
   - ros-noetic-scout-msgs
   - ros-noetic-sensor-msgs
   - ros-noetic-std-msgs
   - ros-noetic-tf2-ros
-  - ros-noetic-xgc2-b2arx-description
 usage:
   install: |
     sudo apt update
@@ -62,7 +60,6 @@ usage:
     test -x /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_unitree_b2_ros1_adapter/xgc_unitree_b2_ros1_adapter_node
-    test -f /opt/ros/noetic/share/xgc_unitree_b2_ros1_adapter/launch/unitree_b2_visualization_runtime.launch
     test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v7.yaml
     test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v6.yaml
     test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v3.yaml
@@ -109,8 +106,7 @@ release:
   - xgc2-protobuf
   dependency_policy:
     libxgc2-adapter-runtime-client-dev: rebuild
-    xgc2-b2arx-description: order
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-14
+    focal: 0.5.0-15

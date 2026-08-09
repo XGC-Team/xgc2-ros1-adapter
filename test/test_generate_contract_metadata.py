@@ -1096,6 +1096,16 @@ int main() {
             / "xgc_mecanum_ugv_ros1_adapter"
             / "src"
             / "robot_runtime.cpp",
+            REPOSITORY_ROOT
+            / "src"
+            / "xgc_unitree_b2_ros1_adapter"
+            / "src"
+            / "unitree_b2_ros1_adapter_node.cpp",
+            REPOSITORY_ROOT
+            / "src"
+            / "xgc_unitree_b2_ros1_adapter"
+            / "src"
+            / "robot_runtime.cpp",
         )
         for implementation in implementations:
             source = implementation.read_text(encoding="utf-8")
@@ -1109,17 +1119,10 @@ int main() {
         for launch_file in REPOSITORY_ROOT.glob("src/*/launch/*.launch"):
             launch = launch_file.read_text(encoding="utf-8")
             with self.subTest(launch=launch_file.name):
-                if "--adapter-bootstrap-file" in launch:
-                    self.assertNotIn("<param", launch)
-                    self.assertNotIn("<rosparam", launch)
-                    continue
-                self.assertEqual(
-                    launch_file.name, "unitree_b2_visualization_runtime.launch"
-                )
-                self.assertIn('name="robot_description"', launch)
-                self.assertIn('pkg="robot_state_publisher"', launch)
-                self.assertIn('name="xgc2_b2_robot_state_publisher"', launch)
-                self.assertNotIn("xgc_unitree_b2_ros1_adapter_node", launch)
+                self.assertIn("--adapter-bootstrap-file", launch)
+                self.assertNotIn("<param", launch)
+                self.assertNotIn("<rosparam", launch)
+                self.assertNotIn("robot_state_publisher", launch)
 
     def test_every_channel_message_must_exist_with_a_compatible_role(self):
         missing_reboot = dict(self.messages)

@@ -20,6 +20,8 @@ namespace xgc_unitree_b2_ros1_adapter {
 namespace {
 using Json = nlohmann::json;
 constexpr std::size_t kMaximumJoints = 64u;
+constexpr const char *kWorldFrame = "world";
+constexpr const char *kB2RootLink = "b2_description";
 const std::array<const char *, 5u> kBaseSources{{
     "odom", "joint_states", "power_summary", "driver_status", "forwarder_hb"}};
 const std::array<const char *, 12u> kDriverLegNames{{
@@ -98,6 +100,13 @@ bool validWireHost(const std::string &value, std::string *error) {
   return true;
 }
 
+bool validRobotNamespace(const std::string &value, std::string *error) {
+  static const std::regex pattern("^/[A-Za-z_][A-Za-z0-9_]*$");
+  if (!std::regex_match(value, pattern))
+    return fail(error, "namespace must be one absolute Experiment slot name");
+  return true;
+}
+
 bool parseWirePort(const std::string &value, std::uint16_t *port,
                    std::string *error) {
   if (!port) return fail(error, "wire port output is required");
@@ -120,8 +129,8 @@ bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
 bool validateNativeProfileContract(std::string *error) {
   std::size_t parameter_count = 0;
   const auto *parameters = contract::profileParameters(contract::kProfileId, &parameter_count);
-  if (!parameters || parameter_count != 4u)
-    return fail(error, "B2 profile must expose robot_id and three wire parameters");
+  if (!parameters || parameter_count != 5u)
+    return fail(error, "B2 profile must expose namespace, robot_id and three wire parameters");
   std::size_t channel_count = 0;
   const auto *channels = contract::profileChannels(contract::kProfileId, &channel_count);
   if (!channels || channel_count != 10u)
@@ -147,20 +156,23 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   if (!validateNativeProfileContract(error)) return nullptr;
   if (config.profile_id != contract::kProfileId)
     return fail(error, "unsupported B2 profile: " + config.profile_id), nullptr;
+  const auto robot_namespace = config.parameters.find("namespace");
   const auto robot_id = config.parameters.find("robot_id");
   const auto transport = config.parameters.find("wire_transport");
   const auto host = config.parameters.find("wire_host");
   const auto port_text = config.parameters.find("wire_port");
-  if (config.parameters.size() != 4u || robot_id == config.parameters.end() ||
+  if (config.parameters.size() != 5u || robot_namespace == config.parameters.end() ||
+      robot_id == config.parameters.end() ||
       transport == config.parameters.end() || host == config.parameters.end() ||
       port_text == config.parameters.end())
-    return fail(error, "B2 requires exactly robot_id, wire_transport, wire_host, wire_port"), nullptr;
+    return fail(error, "B2 requires exactly namespace, robot_id, wire_transport, wire_host, wire_port"), nullptr;
   if (robot_id->second != config.robot_id)
     return fail(error, "wire robot_id must equal Adapter Runtime robot id"), nullptr;
   if (transport->second != "tcp")
     return fail(error, "Zenoh backend is not compiled; explicit TCP is required"), nullptr;
   std::uint16_t port = 0;
-  if (!validWireHost(host->second, error) || !parseWirePort(port_text->second, &port, error))
+  if (!validRobotNamespace(robot_namespace->second, error) ||
+      !validWireHost(host->second, error) || !parseWirePort(port_text->second, &port, error))
     return nullptr;
   std::set<std::string> enabled;
   for (const auto &channel : config.channels) {
@@ -170,19 +182,24 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     if (channel.enabled) enabled.insert(channel.channel_id);
   }
   auto runtime = std::shared_ptr<RobotRuntime>(new RobotRuntime(
-      std::move(node_handle), config.robot_id, config.profile_id, spec_revision,
+      std::move(node_handle), config.robot_id, config.profile_id,
+      robot_namespace->second, spec_revision,
       std::move(enabled), host->second, port, std::move(emitter)));
   if (!runtime->install(error)) { runtime->Stop(); return nullptr; }
   return runtime;
 }
 
 RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
-                           std::string profile_id, std::uint64_t spec_revision,
+                           std::string profile_id, std::string robot_namespace,
+                           std::uint64_t spec_revision,
                            std::set<std::string> enabled_channels,
                            std::string wire_host, std::uint16_t wire_port,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
-      profile_id_(std::move(profile_id)), spec_revision_(spec_revision),
+      profile_id_(std::move(profile_id)),
+      robot_namespace_(std::move(robot_namespace)),
+      frame_prefix_(robot_namespace_.substr(1) + "/"),
+      base_frame_(frame_prefix_ + kB2RootLink), spec_revision_(spec_revision),
       enabled_channels_(std::move(enabled_channels)), wire_host_(std::move(wire_host)),
       wire_port_(wire_port), emitter_(std::move(emitter)) {
   sources_["odom"].stale_after_seconds = staleSeconds(profile_id_, "state.pose");
@@ -192,26 +209,28 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
   sources_["forwarder_hb"].stale_after_seconds = staleSeconds(profile_id_, "diagnostic.link");
   sources_["arm_slave_status"].stale_after_seconds = staleSeconds(profile_id_, "state.arm-joints");
   sources_["arm_forwarder_hb"].stale_after_seconds = staleSeconds(profile_id_, "diagnostic.link");
-  path_.header.frame_id = "odom";
+  path_.header.frame_id = kWorldFrame;
 }
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
 bool RobotRuntime::install(std::string *error) {
-  odom_publisher_ = node_handle_.advertise<nav_msgs::Odometry>("/remote/b2/odom", 20);
-  leg_publisher_ = node_handle_.advertise<sensor_msgs::JointState>("/remote/b2/joint_states", 20);
-  arm_publisher_ = node_handle_.advertise<sensor_msgs::JointState>("/remote/arm/slave_joint_states", 20);
-  combined_joint_publisher_ = node_handle_.advertise<sensor_msgs::JointState>("/joint_states", 20);
-  path_publisher_ = node_handle_.advertise<nav_msgs::Path>("/remote/b2/path", 5, true);
-  power_publisher_ = node_handle_.advertise<std_msgs::String>("/remote/b2/power_summary", 10);
-  driver_publisher_ = node_handle_.advertise<std_msgs::String>("/remote/b2/driver_status_json", 10);
+  ros::NodeHandle robot_node(robot_namespace_);
+  odom_publisher_ = robot_node.advertise<nav_msgs::Odometry>("odom", 20);
+  leg_publisher_ = robot_node.advertise<sensor_msgs::JointState>("leg_joint_states", 20);
+  arm_publisher_ = robot_node.advertise<sensor_msgs::JointState>("arm_joint_states", 20);
+  combined_joint_publisher_ = robot_node.advertise<sensor_msgs::JointState>("joint_states", 20);
+  path_publisher_ = robot_node.advertise<nav_msgs::Path>("path", 5, true);
+  power_publisher_ = robot_node.advertise<std_msgs::String>("power_summary", 10);
+  driver_publisher_ = robot_node.advertise<std_msgs::String>("driver_status_json", 10);
   const std::weak_ptr<RobotRuntime> weak = shared_from_this();
   wire_.reset(new WireTcpServer(wire_host_, wire_port_,
       [weak](const std::string &key, const std::string &payload) {
         if (const auto self = weak.lock()) self->onWireFrame(key, payload);
       }));
   if (!wire_->Start(error)) return false;
-  ROS_INFO_STREAM("XGC Unitree B2 Adapter robot=" << robot_id_ << " TCP="
+  ROS_INFO_STREAM("XGC Unitree B2 Adapter robot=" << robot_id_
+                  << " namespace=" << robot_namespace_ << " TCP="
                   << wire_host_ << ':' << wire_port_ << " revision=" << spec_revision_);
   return true;
 }
@@ -258,13 +277,17 @@ void RobotRuntime::handleOdom(const ros::WallTime &received,
   const Json body = Json::parse(payload_text);
   if (required<int>(body, "v") != 1) throw std::runtime_error("unsupported odom version");
   const auto source_ms = sourceTimeMillis(body);
-  const auto frame = required<std::string>(body, "frame_id");
-  const auto child = required<std::string>(body, "child_frame_id");
+  const auto source_frame = required<std::string>(body, "frame_id");
+  const auto source_child = required<std::string>(body, "child_frame_id");
+  if (source_frame.empty() || source_child.empty())
+    throw std::runtime_error("odom frame identities are empty");
   const auto &position = body.at("position"); const auto &orientation = body.at("orientation");
   const auto &linear = body.at("linear"); const auto &angular = body.at("angular");
   std::vector<xgc::robot::v1::RobotMessage> output;
   nav_msgs::Odometry odom;
-  odom.header.stamp = rosStamp(source_ms); odom.header.frame_id = frame; odom.child_frame_id = child;
+  odom.header.stamp = rosStamp(source_ms);
+  odom.header.frame_id = kWorldFrame;
+  odom.child_frame_id = base_frame_;
   odom.pose.pose.position.x = position.at("x").get<double>();
   odom.pose.pose.position.y = position.at("y").get<double>();
   odom.pose.pose.position.z = position.at("z").get<double>();
@@ -282,17 +305,18 @@ void RobotRuntime::handleOdom(const ros::WallTime &received,
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("odom", received);
     if (channelEnabled("state.pose") && shouldEmitLocked("state.pose", received)) {
-      xgc::semantic::common::v1::PoseEstimate value; value.set_frame_id(frame); value.set_child_frame_id(child);
+      xgc::semantic::common::v1::PoseEstimate value;
+      value.set_frame_id(kWorldFrame); value.set_child_frame_id(base_frame_);
       copyVector(position, value.mutable_position()); copyQuaternion(orientation, value.mutable_orientation());
       output.push_back(makeEnvelopeLocked("state.pose", source_ms, value));
     }
     if (channelEnabled("state.velocity") && shouldEmitLocked("state.velocity", received)) {
-      xgc::semantic::common::v1::VelocityEstimate value; value.set_frame_id(child);
+      xgc::semantic::common::v1::VelocityEstimate value; value.set_frame_id(base_frame_);
       copyVector(linear, value.mutable_linear()); copyVector(angular, value.mutable_angular());
       output.push_back(makeEnvelopeLocked("state.velocity", source_ms, value));
     }
     if (channelEnabled("state.speed") && shouldEmitLocked("state.speed", received)) {
-      xgc::semantic::common::v1::SpeedEstimate value; value.set_frame_id(child);
+      xgc::semantic::common::v1::SpeedEstimate value; value.set_frame_id(base_frame_);
       value.set_meters_per_second(std::hypot(linear.at("x").get<double>(), linear.at("y").get<double>()));
       output.push_back(makeEnvelopeLocked("state.speed", source_ms, value));
     }
@@ -308,7 +332,7 @@ void RobotRuntime::handleOdom(const ros::WallTime &received,
   }
   odom_publisher_.publish(odom); path_publisher_.publish(path_snapshot);
   geometry_msgs::TransformStamped transform;
-  transform.header = odom.header; transform.child_frame_id = child;
+  transform.header = odom.header; transform.child_frame_id = base_frame_;
   transform.transform.translation.x = odom.pose.pose.position.x;
   transform.transform.translation.y = odom.pose.pose.position.y;
   transform.transform.translation.z = odom.pose.pose.position.z;
@@ -322,7 +346,8 @@ void RobotRuntime::handleJoints(const ros::WallTime &received,
   const Json body = Json::parse(payload_text);
   if (required<int>(body, "v") != 1) throw std::runtime_error("unsupported joint version");
   const auto source_ms = sourceTimeMillis(body);
-  const auto frame = required<std::string>(body, "frame_id");
+  const auto source_frame = required<std::string>(body, "frame_id");
+  if (source_frame.empty()) throw std::runtime_error("joint frame identity is empty");
   const auto names = required<std::vector<std::string>>(body, "names");
   const auto position = required<std::vector<double>>(body, "positions");
   const auto velocity = required<std::vector<double>>(body, "velocities");
@@ -331,8 +356,8 @@ void RobotRuntime::handleJoints(const ros::WallTime &received,
       velocity.size() != names.size() || effort.size() != names.size())
     throw std::runtime_error("joint arrays are empty, oversized, or unequal");
   sensor_msgs::JointState ros_message; ros_message.header.stamp = rosStamp(source_ms);
-  ros_message.header.frame_id = frame; ros_message.velocity = velocity; ros_message.effort = effort;
-  xgc::semantic::ground::v1::JointStateSet semantic; semantic.set_frame_id(frame);
+  ros_message.header.frame_id = base_frame_; ros_message.velocity = velocity; ros_message.effort = effort;
+  xgc::semantic::ground::v1::JointStateSet semantic; semantic.set_frame_id(base_frame_);
   for (std::size_t i = 0; i < names.size(); ++i) {
     auto *joint = semantic.add_joints(); joint->set_name(names[i]);
     joint->set_position(position[i]); joint->set_velocity(velocity[i]); joint->set_effort(effort[i]);
@@ -586,6 +611,7 @@ std::uint64_t RobotRuntime::sourceAgeMillisLocked(const std::string &source,
 
 void RobotRuntime::publishCombinedJoints(std::int64_t source_time_millis) {
   sensor_msgs::JointState combined; combined.header.stamp = rosStamp(source_time_millis);
+  combined.header.frame_id = base_frame_;
   for (const char *name : kUrdfLegNames) {
     const auto found = leg_positions_.find(name);
     if (found != leg_positions_.end()) { combined.name.push_back(name); combined.position.push_back(found->second); }

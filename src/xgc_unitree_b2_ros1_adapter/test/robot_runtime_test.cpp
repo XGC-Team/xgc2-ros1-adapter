@@ -26,6 +26,9 @@ TEST(WireContract, AcceptsOnlyReadOnlyKeysForExactRobot) {
 TEST(WireContract, ValidatesListenPortAndHost) {
   std::string error;
   std::uint16_t port = 0;
+  EXPECT_TRUE(validRobotNamespace("/b21", &error));
+  EXPECT_FALSE(validRobotNamespace("/remote/b2", &error));
+  EXPECT_FALSE(validRobotNamespace("b21", &error));
   EXPECT_TRUE(validWireHost("0.0.0.0", &error));
   EXPECT_FALSE(validWireHost("core", &error));
   EXPECT_TRUE(parseWirePort("7448", &port, &error));

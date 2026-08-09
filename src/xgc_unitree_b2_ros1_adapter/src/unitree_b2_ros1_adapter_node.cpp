@@ -220,13 +220,14 @@ private:
       *error = "profile digest mismatch for robot " + robot.robot_id;
       return false;
     }
-    if (robot.parameters.size() != 4 ||
+    if (robot.parameters.size() != 5 ||
+        robot.parameters.find("namespace") == robot.parameters.end() ||
         robot.parameters.find("robot_id") == robot.parameters.end() ||
         robot.parameters.find("wire_transport") == robot.parameters.end() ||
         robot.parameters.find("wire_host") == robot.parameters.end() ||
         robot.parameters.find("wire_port") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly robot_id and three wire parameters";
+               " must contain exactly namespace, robot_id and three wire parameters";
       return false;
     }
     std::string native_error;
@@ -239,7 +240,8 @@ private:
       *error = "Zenoh backend is not compiled; explicit TCP is required";
       return false;
     }
-    if (!validWireHost(robot.parameters.at("wire_host"), &native_error) ||
+    if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error) ||
+        !validWireHost(robot.parameters.at("wire_host"), &native_error) ||
         !parseWirePort(robot.parameters.at("wire_port"), &wire_port,
                        &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +

@@ -12,8 +12,8 @@ PROTOBUF_PACKAGE_VERSION="${PROTOBUF_PACKAGE_VERSION:-0.5.0-11~focal}"
 APT_BASE_URL="${XGC2_APT_BASE_URL:-https://xgc2.apt.xiaokang.ink}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
 
-if [[ "${PACKAGE_VERSION}" != "0.5.0-14" ]]; then
-  echo "public B2 APT gate is frozen to 0.5.0-14, got ${PACKAGE_VERSION}" >&2
+if [[ "${PACKAGE_VERSION}" != "0.5.0-15" ]]; then
+  echo "public B2 APT gate is frozen to 0.5.0-15, got ${PACKAGE_VERSION}" >&2
   exit 1
 fi
 
