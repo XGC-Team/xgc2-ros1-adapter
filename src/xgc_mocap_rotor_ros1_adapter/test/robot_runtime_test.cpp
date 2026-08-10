@@ -1,13 +1,22 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
 #include <ros/ros.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc_mocap_rotor_ros1_adapter/generated_contract.hpp"
 #include "xgc_mocap_rotor_ros1_adapter/robot_runtime.hpp"
 
@@ -52,6 +61,185 @@ std::vector<std::string> channelIds(const std::vector<std::string> &items) {
     channels.push_back(message.channel_id());
   }
   return channels;
+}
+
+bool latestPoseEstimate(const std::vector<std::string> &items,
+                        xgc::semantic::common::v1::PoseEstimate *pose) {
+  if (pose == nullptr)
+    return false;
+  for (auto item = items.rbegin(); item != items.rend(); ++item) {
+    xgc::robot::v1::RobotMessage message;
+    if (!message.ParseFromString(*item) || message.channel_id() != "state.pose")
+      continue;
+    return pose->ParseFromString(message.message().payload().value());
+  }
+  return false;
+}
+
+struct PoseSurfaces {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool have_pose = false;
+  bool have_odometry = false;
+  bool have_path = false;
+  geometry_msgs::PoseStamped pose;
+  nav_msgs::Odometry odometry;
+  nav_msgs::Path path;
+};
+
+bool waitForPublishers(const ros::Subscriber &pose,
+                       const ros::Subscriber &odometry,
+                       const ros::Subscriber &path) {
+  const ros::WallTime deadline = ros::WallTime::now() + ros::WallDuration(2.0);
+  while (ros::ok() && ros::WallTime::now() < deadline) {
+    if (pose.getNumPublishers() == 1u && odometry.getNumPublishers() == 1u &&
+        path.getNumPublishers() == 1u) {
+      return true;
+    }
+    ros::WallDuration(0.01).sleep();
+  }
+  return false;
+}
+
+bool waitForPoseSurfaces(PoseSurfaces *surfaces) {
+  if (surfaces == nullptr)
+    return false;
+  std::unique_lock<std::mutex> lock(surfaces->mutex);
+  return surfaces->changed.wait_for(lock, std::chrono::seconds(2), [surfaces] {
+    return surfaces->have_pose && surfaces->have_odometry &&
+           surfaces->have_path;
+  });
+}
+
+std::shared_ptr<RobotRuntime> createRuntime(std::vector<std::string> *emitted,
+                                            std::string *error) {
+  return RobotRuntime::Create(
+      ros::NodeHandle(), robotConfig(), 7u,
+      [emitted](std::string item) {
+        if (emitted != nullptr)
+          emitted->push_back(std::move(item));
+      },
+      error);
+}
+
+std::string poseWireFrame(std::uint64_t sequence, const std::string &parent,
+                          const std::string &child) {
+  return std::string(R"({
+    "v":1,"sequence":)") +
+         std::to_string(sequence) + R"(,"t_ms":1700000000000,
+    "frame_id":")" +
+         parent + R"(","child_frame_id":")" + child + R"(",
+    "position":{"x":1.0,"y":2.0,"z":3.0},
+    "orientation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0}
+  })";
+}
+
+TEST(MocapRotorRuntime, NormalizesMavrosMapAcrossEveryGroundPoseSurface) {
+  ensureRosInitialized();
+  ros::AsyncSpinner spinner(2u);
+  spinner.start();
+
+  std::vector<std::string> emitted;
+  std::string error;
+  auto runtime = createRuntime(&emitted, &error);
+  ASSERT_TRUE(runtime) << error;
+
+  PoseSurfaces surfaces;
+  ros::NodeHandle node;
+  const auto pose_subscriber = node.subscribe<geometry_msgs::PoseStamped>(
+      "/mocap_rotor1/local_pose", 1,
+      [&surfaces](const geometry_msgs::PoseStamped::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(surfaces.mutex);
+        surfaces.pose = *message;
+        surfaces.have_pose = true;
+        surfaces.changed.notify_all();
+      });
+  const auto odometry_subscriber = node.subscribe<nav_msgs::Odometry>(
+      "/mocap_rotor1/odom", 1,
+      [&surfaces](const nav_msgs::Odometry::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(surfaces.mutex);
+        surfaces.odometry = *message;
+        surfaces.have_odometry = true;
+        surfaces.changed.notify_all();
+      });
+  const auto path_subscriber = node.subscribe<nav_msgs::Path>(
+      "/mocap_rotor1/path", 1,
+      [&surfaces](const nav_msgs::Path::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(surfaces.mutex);
+        surfaces.path = *message;
+        surfaces.have_path = true;
+        surfaces.changed.notify_all();
+      });
+  tf2_ros::Buffer tf_buffer;
+  tf2_ros::TransformListener tf_listener(tf_buffer);
+
+  ASSERT_TRUE(
+      waitForPublishers(pose_subscriber, odometry_subscriber, path_subscriber));
+  ASSERT_TRUE(runtime->HandleWireFrame(
+      WireChannel::kLocalPose, poseWireFrame(1u, "map", "base_link"), &error))
+      << error;
+  ASSERT_TRUE(waitForPoseSurfaces(&surfaces));
+
+  xgc::semantic::common::v1::PoseEstimate semantic;
+  ASSERT_TRUE(latestPoseEstimate(emitted, &semantic));
+  EXPECT_EQ(semantic.frame_id(), "world");
+  EXPECT_EQ(semantic.child_frame_id(), "mocap_rotor1/base_link");
+
+  {
+    std::lock_guard<std::mutex> lock(surfaces.mutex);
+    EXPECT_EQ(surfaces.pose.header.frame_id, "world");
+    EXPECT_EQ(surfaces.odometry.header.frame_id, "world");
+    EXPECT_EQ(surfaces.odometry.child_frame_id, "mocap_rotor1/base_link");
+    ASSERT_EQ(surfaces.path.header.frame_id, "world");
+    ASSERT_EQ(surfaces.path.poses.size(), 1u);
+    EXPECT_EQ(surfaces.path.poses.front().header.frame_id, "world");
+  }
+
+  ASSERT_TRUE(tf_buffer.canTransform("world", "mocap_rotor1/base_link",
+                                     ros::Time(0), ros::Duration(2.0)));
+  const auto transform = tf_buffer.lookupTransform(
+      "world", "mocap_rotor1/base_link", ros::Time(0));
+  EXPECT_EQ(transform.header.frame_id, "world");
+  EXPECT_EQ(transform.child_frame_id, "mocap_rotor1/base_link");
+  runtime->Stop();
+  spinner.stop();
+}
+
+TEST(MocapRotorRuntime, PreservesWorldAndPrefixesFramesOnlyOnce) {
+  ensureRosInitialized();
+  std::vector<std::string> emitted;
+  std::string error;
+  auto runtime = createRuntime(&emitted, &error);
+  ASSERT_TRUE(runtime) << error;
+
+  ASSERT_TRUE(runtime->HandleWireFrame(
+      WireChannel::kLocalPose,
+      poseWireFrame(1u, "world", "mocap_rotor1/base_link"), &error))
+      << error;
+  xgc::semantic::common::v1::PoseEstimate semantic;
+  ASSERT_TRUE(latestPoseEstimate(emitted, &semantic));
+  EXPECT_EQ(semantic.frame_id(), "world");
+  EXPECT_EQ(semantic.child_frame_id(), "mocap_rotor1/base_link");
+  EXPECT_EQ(semantic.child_frame_id().find("mocap_rotor1/mocap_rotor1/"),
+            std::string::npos);
+  runtime->Stop();
+}
+
+TEST(MocapRotorRuntime, KeepsExistingQualificationForOtherParentFrames) {
+  ensureRosInitialized();
+  std::vector<std::string> emitted;
+  std::string error;
+  auto runtime = createRuntime(&emitted, &error);
+  ASSERT_TRUE(runtime) << error;
+
+  ASSERT_TRUE(runtime->HandleWireFrame(
+      WireChannel::kLocalPose, poseWireFrame(1u, "odom", "base_link"), &error))
+      << error;
+  xgc::semantic::common::v1::PoseEstimate semantic;
+  ASSERT_TRUE(latestPoseEstimate(emitted, &semantic));
+  EXPECT_EQ(semantic.frame_id(), "mocap_rotor1/odom");
+  EXPECT_EQ(semantic.child_frame_id(), "mocap_rotor1/base_link");
+  runtime->Stop();
 }
 
 TEST(MocapRotorRuntime, ProjectsBoundedReadOnlyWireWithoutMavros) {

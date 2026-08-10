@@ -20,6 +20,13 @@ EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
     "$(dirname "$0")/../product.yml"
 )}"
+EXPECTED_MOCAP_ADAPTER_VERSION="${EXPECTED_MOCAP_ADAPTER_VERSION:-${MOCAP_ADAPTER_PACKAGE_VERSION:-${EXPECTED_PRODUCT_VERSION}}}"
+EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST="${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST:-${MOCAP_ADAPTER_SOURCE_DIGEST:-}}"
+if [[ -n "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" &&
+      ! "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "expected Mocap Adapter source digest must be 64 lowercase hex characters" >&2
+  exit 1
+fi
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
@@ -28,10 +35,18 @@ dpkg -s "${MECANUM_PACKAGE}" >/dev/null
 dpkg -s "${B2_PACKAGE}" >/dev/null
 dpkg -s "${MOCAP_PACKAGE}" >/dev/null
 dpkg -s "${MOCAP_FORWARDER_PACKAGE}" >/dev/null
-test "$(dpkg-query -W -f='${Version}' "${B2_PACKAGE}")" = \
-  "${EXPECTED_PRODUCT_VERSION}"
-test "$(dpkg-query -W -f='${Version}' "${MOCAP_FORWARDER_PACKAGE}")" = \
-  "${EXPECTED_PRODUCT_VERSION}"
+for base_version_package in \
+  "${PX4_PACKAGE}" "${SCOUT_PACKAGE}" "${MECANUM_PACKAGE}" \
+  "${B2_PACKAGE}" "${MOCAP_FORWARDER_PACKAGE}"; do
+  test "$(dpkg-query -W -f='${Version}' "${base_version_package}")" = \
+    "${EXPECTED_PRODUCT_VERSION}"
+done
+test "$(dpkg-query -W -f='${Version}' "${MOCAP_PACKAGE}")" = \
+  "${EXPECTED_MOCAP_ADAPTER_VERSION}"
+if [[ -n "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" ]]; then
+  test "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" = \
+    "$(dpkg-query -W -f='${X-XGC2-Source-Digest}' "${MOCAP_PACKAGE}")"
+fi
 dpkg -s libxgc2-adapter-runtime-client2 >/dev/null
 test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client2)" = \
   "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"

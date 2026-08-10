@@ -702,6 +702,27 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn("third-party/zenoh-c/LICENSE", package_script)
         self.assertIn("third-party/zenoh-c/NOTICE.md", package_script)
         self.assertIn("/etc/dpkg/dpkg.cfg.d/excludes", docker_build)
+        self.assertIn('PACKAGE_VERSION="${PACKAGE_VERSION:-}"', docker_build)
+        self.assertIn('-e "PACKAGE_VERSION=${PACKAGE_VERSION}"', docker_build)
+        self.assertIn('XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"', docker_build)
+        self.assertIn('-e "XGC2_SOURCE_DIGEST=${XGC2_SOURCE_DIGEST}"', docker_build)
+        self.assertIn(
+            '-e "MOCAP_ADAPTER_PACKAGE_VERSION=${MOCAP_ADAPTER_PACKAGE_VERSION}"',
+            docker_build,
+        )
+        self.assertIn(
+            '-e "MOCAP_ADAPTER_SOURCE_DIGEST=${MOCAP_ADAPTER_SOURCE_DIGEST}"',
+            docker_build,
+        )
+        self.assertIn('package_version="${MOCAP_VERSION}"', package_script)
+        self.assertIn(
+            'package_source_digest="${MOCAP_ADAPTER_SOURCE_DIGEST:-${XGC2_SOURCE_DIGEST}}"',
+            package_script,
+        )
+        self.assertIn("X-XGC2-Source-Digest: %s", package_script)
+        self.assertIn("base_version_package", installed_gate)
+        self.assertIn("EXPECTED_MOCAP_ADAPTER_VERSION", installed_gate)
+        self.assertIn("EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST", installed_gate)
         self.assertIn(
             "XGC2_APT_OVERLAY_URL requires XGC2_DEPENDENCY_SET_DIGEST",
             docker_build,

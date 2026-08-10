@@ -163,7 +163,9 @@ std::string canonicalFrame(const std::string &value) {
 std::string qualifyFrame(const std::string &frame_prefix,
                          const std::string &source, bool child) {
   const std::string frame = canonicalFrame(source);
-  if (!child && (frame == "world" || frame == "map"))
+  if (!child && frame == "map")
+    return "world";
+  if (!child && frame == "world")
     return frame;
   if (frame.compare(0, frame_prefix.size(), frame_prefix) == 0)
     return frame;

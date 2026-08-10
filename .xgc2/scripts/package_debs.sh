@@ -20,6 +20,9 @@ MOCAP_ROS_PACKAGE="xgc_mocap_rotor_ros1_adapter"
 MOCAP_FORWARDER_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-forwarder"
 MOCAP_FORWARDER_ROS_PACKAGE="xgc_mocap_rotor_zenoh_forwarder"
 ZENOHC_LICENSE_DIR="${ZENOHC_LICENSE_DIR:-}"
+XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
+MOCAP_ADAPTER_PACKAGE_VERSION="${MOCAP_ADAPTER_PACKAGE_VERSION:-}"
+MOCAP_ADAPTER_SOURCE_DIGEST="${MOCAP_ADAPTER_SOURCE_DIGEST:-}"
 
 product_version() {
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
@@ -27,6 +30,7 @@ product_version() {
 }
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
+MOCAP_VERSION="${MOCAP_ADAPTER_PACKAGE_VERSION:-${VERSION}}"
 ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client2"
 
 while [[ $# -gt 0 ]]; do
@@ -54,6 +58,26 @@ if [[ -z "${VERSION}" ]]; then
   echo "package version is missing" >&2
   exit 1
 fi
+if [[ -n "${XGC2_SOURCE_DIGEST}" && ! "${XGC2_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "XGC2_SOURCE_DIGEST must be empty or 64 lowercase hex characters" >&2
+  exit 1
+fi
+if [[ -n "${MOCAP_ADAPTER_SOURCE_DIGEST}" && ! "${MOCAP_ADAPTER_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "MOCAP_ADAPTER_SOURCE_DIGEST must be empty or 64 lowercase hex characters" >&2
+  exit 1
+fi
+if [[ -n "${MOCAP_ADAPTER_PACKAGE_VERSION}" && -z "${MOCAP_ADAPTER_SOURCE_DIGEST}" ]] ||
+   [[ -z "${MOCAP_ADAPTER_PACKAGE_VERSION}" && -n "${MOCAP_ADAPTER_SOURCE_DIGEST}" ]]; then
+  echo "MOCAP_ADAPTER_PACKAGE_VERSION and MOCAP_ADAPTER_SOURCE_DIGEST must be set together" >&2
+  exit 1
+fi
+
+append_source_digest() {
+  local control_file="$1"
+  local source_digest="$2"
+  [[ -z "${source_digest}" ]] \
+    || printf 'X-XGC2-Source-Digest: %s\n' "${source_digest}" >>"${control_file}"
+}
 
 ARCH="$(dpkg --print-architecture)"
 PREFIX="/opt/ros/${ROS_DISTRO}"
@@ -154,6 +178,12 @@ package_adapter() {
   local profile_schema_file="$8"
   local helper_name="${9:-}"
   local third_party_license_dir="${10:-}"
+  local package_version="${VERSION}"
+  local package_source_digest="${XGC2_SOURCE_DIGEST}"
+  if [[ "${package}" == "${MOCAP_PACKAGE}" ]]; then
+    package_version="${MOCAP_VERSION}"
+    package_source_digest="${MOCAP_ADAPTER_SOURCE_DIGEST:-${XGC2_SOURCE_DIGEST}}"
+  fi
   local pkg_root="${BUILD_DIR}/${package}"
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
   local helper_executable=""
@@ -204,7 +234,7 @@ package_adapter() {
   mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
   cat > "${pkg_root}/DEBIAN/control" <<EOF
 Package: ${package}
-Version: ${VERSION}
+Version: ${package_version}
 Section: misc
 Priority: optional
 Architecture: ${ARCH}
@@ -213,6 +243,7 @@ Depends: ${shlibs_depends}, ${extra_depends}
 Description: ${summary}
  ${detail}
 EOF
+  append_source_digest "${pkg_root}/DEBIAN/control" "${package_source_digest}"
   cp "${REPO_ROOT}/README.md" "${pkg_root}/usr/share/doc/${package}/README.md"
   cp "${REPO_ROOT}/LICENSE" "${pkg_root}/usr/share/doc/${package}/copyright"
   if [[ -n "${third_party_license_dir}" ]]; then
@@ -237,7 +268,7 @@ EOF
   fi
 
   fakeroot dpkg-deb --build "${pkg_root}" \
-    "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
+    "${OUTPUT_DIR}/${package}_${package_version}_${ARCH}.deb" >/dev/null
 }
 
 package_forwarder() {
@@ -283,6 +314,7 @@ Description: XGC2 Mocap Rotor onboard read-only Zenoh forwarder
  graph and publishes the bounded robot-keyed uplink. It does not own MAVROS,
  GPS, commands, the ground Adapter, or any FS150 lifecycle.
 EOF
+  append_source_digest "${pkg_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
   cp "${REPO_ROOT}/README.md" "${pkg_root}/usr/share/doc/${package}/README.md"
   cp "${REPO_ROOT}/LICENSE" "${pkg_root}/usr/share/doc/${package}/copyright"
   if [[ ! -f "${third_party_license_dir}/LICENSE" ||
