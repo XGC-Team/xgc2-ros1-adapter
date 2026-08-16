@@ -13,7 +13,6 @@ ZENOHC_ARCHIVE_SHA256="768a87fc3e6752965e98e15d4669143254c38a41174dc18193ff95702
 ZENOHC_ARCHIVE_URL="https://codeload.github.com/eclipse-zenoh/zenoh-c/tar.gz/${ZENOHC_COMMIT}"
 ZENOH_CORE_COMMIT="81c6c933b6e41d72a05f04c4442ef57717ddc72b"
 RUST_VERSION="1.93.0"
-RUSTUP_VERSION="1.28.2"
 LOCK_SHA256="152fa7f09f683690b78dadd14e3065f2bae3ce84243b5f09e7edd646d0fde44d"
 REVISION_PATCH_SHA256="9408ff849a7ae7a52cb848e3e1a5ba43a482a1f07c3127673e5c60164eb376f4"
 LOCK_FILE="$METADATA_ROOT/vendor/zenoh-c-${ZENOHC_VERSION}.Cargo.lock"
@@ -110,31 +109,6 @@ elif [[ "$(<"$source_patch_stamp")" != "$REVISION_PATCH_SHA256" ]]; then
   exit 1
 fi
 
-case "$(dpkg --print-architecture)" in
-  amd64)
-    rust_arch="x86_64"
-    rustup_sha256="20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c"
-    ;;
-  arm64)
-    rust_arch="aarch64"
-    rustup_sha256="e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c"
-    ;;
-  *)
-    echo "Zenoh C Focal build supports only amd64 and arm64" >&2
-    exit 1
-    ;;
-esac
-rustup_init="$WORK_ROOT/rustup-init-${RUSTUP_VERSION}-${rust_arch}"
-if [[ ! -f "$rustup_init" ]]; then
-  curl --fail --location --show-error --silent \
-    "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rust_arch}-unknown-linux-gnu/rustup-init" \
-    --output "$rustup_init"
-fi
-printf '%s  %s\n' "$rustup_sha256" "$rustup_init" | sha256sum --check --strict
-chmod 0755 "$rustup_init"
-export RUSTUP_HOME="$WORK_ROOT/rustup-home"
-"$rustup_init" -y --no-modify-path --profile minimal \
-  --default-toolchain "$RUST_VERSION"
 export PATH="$RUST_CARGO_HOME/bin:$PATH"
 if [[ "$(cargo --version | awk '{print $2}')" != "$RUST_VERSION" ]]; then
   echo "pinned Cargo $RUST_VERSION is unavailable" >&2

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.0}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
@@ -226,17 +226,6 @@ docker exec "${container_name}" bash -lc '
         sleep "$((attempt * 5))"
       done
     }
-    apt_install() {
-      local attempt
-      for attempt in 1 2 3; do
-        if apt-get install "$@"; then
-          return 0
-        fi
-        [[ "${attempt}" -lt 3 ]] || return 1
-        sleep "$((attempt * 5))"
-        apt_update
-      done
-    }
     actual_deb_arch="$(dpkg --print-architecture)"
     if [[ -n "${EXPECTED_DEB_ARCH}" && "${actual_deb_arch}" != "${EXPECTED_DEB_ARCH}" ]]; then
       echo "container Debian architecture ${actual_deb_arch} does not match expected ${EXPECTED_DEB_ARCH}" >&2
@@ -244,8 +233,18 @@ docker exec "${container_name}" bash -lc '
     fi
     echo "Building Debian package for ${actual_deb_arch}"
 
-    apt_update
-    apt_install -y --no-install-recommends ca-certificates curl gnupg
+    missing_image_packages=()
+    for package in nlohmann-json3-dev patch; do
+      dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
+        | grep -Fxq "install ok installed" \
+        || missing_image_packages+=("${package}")
+    done
+    if [[ "${#missing_image_packages[@]}" -ne 0 ]]; then
+      printf "XGC2 build image is missing required package: %s\n" \
+        "${missing_image_packages[@]}" >&2
+      exit 1
+    fi
+
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
       -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
@@ -257,40 +256,7 @@ docker exec "${container_name}" bash -lc '
         > /etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
     apt_update
-    apt_install -y --no-install-recommends \
-      build-essential \
-      ca-certificates \
-      cmake \
-      dpkg-dev \
-      fakeroot \
-      git \
-      libgrpc++-dev \
-      nlohmann-json3-dev \
-      libprotobuf-dev \
-      libre2-dev \
-      patch \
-      pkg-config \
-      protobuf-compiler \
-      protobuf-compiler-grpc \
-      python3-jsonschema \
-      python3-protobuf \
-      python3-yaml \
-      ripgrep \
-      rsync \
-      ros-noetic-geometry-msgs \
-      ros-noetic-diagnostic-msgs \
-      ros-noetic-mavros-msgs \
-      ros-noetic-nav-msgs \
-      ros-noetic-roscpp \
-      ros-noetic-roslaunch \
-      ros-noetic-rosmsg \
-      ros-noetic-rospack \
-      ros-noetic-rostest \
-      ros-noetic-scout-msgs \
-      ros-noetic-sensor-msgs \
-      ros-noetic-std-msgs \
-      ros-noetic-tf2-ros
-
+    apt-get install -y --no-install-recommends ros-noetic-scout-msgs
     apt_candidate_version() {
       local package="$1"
       local candidate
@@ -338,7 +304,7 @@ docker exec "${container_name}" bash -lc '
       PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
       XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
         /tmp/xgc2-common-bootstrap/protobuf/.xgc2/scripts/build_deb.sh
-      apt_install -y \
+      apt-get install -y \
         /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
 
       git init -q /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp
@@ -353,11 +319,11 @@ docker exec "${container_name}" bash -lc '
       PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
         /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
-      apt_install -y \
+      apt-get install -y \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client2_*.deb \
         /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
     else
-      apt_install -y \
+      apt-get install -y \
         "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
         "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
     fi
@@ -419,7 +385,7 @@ docker exec "${container_name}" bash -lc '
       if [[ -f /etc/dpkg/dpkg.cfg.d/excludes ]]; then
         mv /etc/dpkg/dpkg.cfg.d/excludes /tmp/xgc2-docker-dpkg-excludes
       fi
-      apt_install -y \
+      apt-get install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
