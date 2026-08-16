@@ -14,8 +14,8 @@
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <ros/ros.h>
-#include <scout_msgs/ScoutStatus.h>
 #include <sensor_msgs/Imu.h>
+#include <std_msgs/String.h>
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
@@ -40,6 +40,17 @@ double vrpnForwardSpeedMetersPerSecond(
 double scoutBatteryPercentage(double voltage_v);
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
+
+struct ScoutStatusText {
+  unsigned control_mode = 0;
+  unsigned base_state = 0;
+  unsigned fault_code = 0;
+  double battery_voltage = 0.0;
+  unsigned light_mode = 0;
+  unsigned light_custom = 0;
+};
+
+bool parseScoutStatusText(const std::string &text, ScoutStatusText *out);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
@@ -122,7 +133,7 @@ private:
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
-  void statusCallback(const scout_msgs::ScoutStatus::ConstPtr &message);
+  void statusCallback(const std_msgs::String::ConstPtr &message);
   void emitHealthLocked(const ros::WallTime &now,
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitChannelHealthLocked(const ros::WallTime &now,
@@ -153,7 +164,8 @@ private:
   std::map<std::string, ros::WallTime> last_output_;
   std::map<std::string, std::uint64_t> sequences_;
 
-  scout_msgs::ScoutStatus scout_status_;
+  ScoutStatusText scout_status_;
+  ros::Time status_stamp_;
   bool has_status_ = false;
   geometry_msgs::Quaternion vrpn_orientation_;
   bool has_vrpn_orientation_ = false;

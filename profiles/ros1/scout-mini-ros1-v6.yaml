@@ -23,11 +23,11 @@ semantic_traits:
     vrpn.velocity: 1000
     vrpn.speed: 1000
     state.imu: 1000
-    state.power: 1000
-    # 2s: health is ~5 Hz; 1s left too little margin after sourceAge + SSE lag and
-    # the UI painted brief unavailable (yellow) flashes during healthy simulation.
+    # 2s: chassis text is 2 Hz; 1s left too little margin after sourceAge + SSE
+    # lag and the UI painted brief unavailable (yellow) flashes.
+    state.power: 2000
     state.health: 2000
-    state.chassis: 1000
+    state.chassis: 2000
   # Online and localized are separate facts, and a robot is ready only when both
   # hold. Online is the vehicle's own liveness: its IMU keeps arriving, which is
   # the one continuous on-board stream every XGC ground vehicle publishes. VRPN
@@ -122,8 +122,8 @@ channels:
     output_rate_hz: 2
     inputs:
       chassis_status:
-        name: scout_status
-        type: scout_msgs/ScoutStatus
+        name: scout/status_text
+        type: std_msgs/String
 
   - id: state.health
     kind: stream_out
@@ -132,8 +132,8 @@ channels:
     output_rate_hz: 2
     inputs:
       chassis_status:
-        name: scout_status
-        type: scout_msgs/ScoutStatus
+        name: scout/status_text
+        type: std_msgs/String
 
   - id: state.chassis
     kind: stream_out
@@ -142,8 +142,8 @@ channels:
     output_rate_hz: 2
     inputs:
       chassis_status:
-        name: scout_status
-        type: scout_msgs/ScoutStatus
+        name: scout/status_text
+        type: std_msgs/String
 
   - id: diagnostic.channel-health
     kind: stream_out

@@ -33,6 +33,8 @@ TEST(RosNames, BuildsNamespacedScoutTopics) {
             topicName("", "vrpn_client_node/Scout1/pose"));
   EXPECT_EQ("/fleet/scout2/scout_status",
             topicName("/fleet/scout2", "/scout_status"));
+  EXPECT_EQ("/fleet/scout2/scout/status_text",
+            topicName("/fleet/scout2", "scout/status_text"));
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
@@ -206,6 +208,24 @@ TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
   EXPECT_NEAR(0.95, scoutBatteryPercentage(28.765), 1e-12);
   EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(18.0));
   EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(32.0));
+}
+
+TEST(StatusText, ParsesTheOnboardRelayFormat) {
+  ScoutStatusText parsed;
+  ASSERT_TRUE(parseScoutStatusText(
+      "mode=1 base=0 fault=0 batt=28.77 light_mode=0 light=0", &parsed));
+  EXPECT_EQ(1u, parsed.control_mode);
+  EXPECT_EQ(0u, parsed.base_state);
+  EXPECT_EQ(0u, parsed.fault_code);
+  EXPECT_NEAR(28.77, parsed.battery_voltage, 1e-6);
+  EXPECT_EQ(0u, parsed.light_mode);
+  EXPECT_EQ(0u, parsed.light_custom);
+
+  EXPECT_FALSE(parseScoutStatusText("mode=1", &parsed));
+  EXPECT_FALSE(parseScoutStatusText("", &parsed));
+  EXPECT_FALSE(parseScoutStatusText("not a status", &parsed));
+  EXPECT_FALSE(parseScoutStatusText(
+      "mode=1 base=0 fault=0 batt=28.77 light_mode=0 light=0", nullptr));
 }
 
 TEST(ChassisProjection, MapsNativeScoutControlModes) {

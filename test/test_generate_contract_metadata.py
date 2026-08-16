@@ -367,6 +367,16 @@ class ContractGeneratorTest(unittest.TestCase):
             },
         )
         self.assertEqual(
+            scout_channels["state.power"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "chassis_status",
+                "name_template": "scout/status_text",
+                "ros_type": "std_msgs/String",
+                "scope": "robot_namespace",
+            },
+        )
+        self.assertEqual(
             scout_channels["vrpn.speed"]["output_message_id"], 2006
         )
         self.assertEqual(

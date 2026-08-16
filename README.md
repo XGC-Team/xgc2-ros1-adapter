@@ -61,7 +61,7 @@ vehicle state.
 
 Scout Mini telemetry consumes the global
 `/vrpn_client_node/{mocap_rigid_body}/pose` and `twist` streams plus `cmd_vel`,
-`imu/data_raw`, and `scout_status` under the configured namespace.
+`imu/data_raw`, and `scout/status_text` under the configured namespace.
 `vrpn.position` records position and orientation, while `vrpn.velocity`
 retains the raw linear and angular vectors. The Adapter combines both VRPN
 streams to project world-frame linear velocity onto the signed body X axis;

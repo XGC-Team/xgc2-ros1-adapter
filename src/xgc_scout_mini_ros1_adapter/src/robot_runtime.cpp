@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <regex>
 #include <stdexcept>
@@ -104,11 +105,11 @@ const std::array<NativeChannelBinding, 9u> kNativeBindings{{
     {"state.imu", "scout-mini.imu-estimate", "imu", "sensor_msgs/Imu",
      "xgc.semantic.common.v1.ImuEstimate", false},
     {"state.power", "scout-mini.power-status", "chassis_status",
-     "scout_msgs/ScoutStatus", "xgc.semantic.common.v1.PowerStatus", false},
+     "std_msgs/String", "xgc.semantic.common.v1.PowerStatus", false},
     {"state.health", "scout-mini.vehicle-health", "chassis_status",
-     "scout_msgs/ScoutStatus", "xgc.semantic.common.v1.VehicleHealth", false},
+     "std_msgs/String", "xgc.semantic.common.v1.VehicleHealth", false},
     {"state.chassis", "scout-mini.chassis-status", "chassis_status",
-     "scout_msgs/ScoutStatus", "xgc.semantic.ground.v1.ChassisStatus", false},
+     "std_msgs/String", "xgc.semantic.ground.v1.ChassisStatus", false},
     {"diagnostic.channel-health", "common.channel-health", nullptr, nullptr,
      "xgc.semantic.common.v1.ChannelHealth", true},
 }};
@@ -291,6 +292,29 @@ double scoutBatteryPercentage(double voltage_v) {
     return 0.0;
   return std::max(0.0, std::min(1.0, (voltage_v - kEmptyVoltage) /
                                          (kFullVoltage - kEmptyVoltage)));
+}
+
+bool parseScoutStatusText(const std::string &text, ScoutStatusText *out) {
+  if (out == nullptr)
+    return false;
+  unsigned mode = 0;
+  unsigned base = 0;
+  unsigned fault = 0;
+  unsigned light_mode = 0;
+  unsigned light = 0;
+  float batt = 0.0f;
+  if (std::sscanf(text.c_str(),
+                  "mode=%u base=%u fault=%u batt=%f light_mode=%u light=%u",
+                  &mode, &base, &fault, &batt, &light_mode, &light) != 6) {
+    return false;
+  }
+  out->control_mode = mode;
+  out->base_state = base;
+  out->fault_code = fault;
+  out->battery_voltage = static_cast<double>(batt);
+  out->light_mode = light_mode;
+  out->light_custom = light;
+  return true;
 }
 
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
@@ -732,9 +756,9 @@ bool RobotRuntime::install(std::string *error) {
         ensureSourceLocked(
             "state.chassis",
             channelStaleAfterSeconds(profile_id_, "state.chassis"));
-      status_subscriber_ = node_handle_.subscribe<scout_msgs::ScoutStatus>(
+      status_subscriber_ = node_handle_.subscribe<std_msgs::String>(
           status_endpoint_, 10,
-          [weak_self](const scout_msgs::ScoutStatus::ConstPtr &message) {
+          [weak_self](const std_msgs::String::ConstPtr &message) {
             if (const auto self = weak_self.lock()) {
               self->statusCallback(message);
             }
@@ -996,16 +1020,20 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
   emit(std::move(output));
 }
 
-void RobotRuntime::statusCallback(
-    const scout_msgs::ScoutStatus::ConstPtr &message) {
+void RobotRuntime::statusCallback(const std_msgs::String::ConstPtr &message) {
   CallbackGuard callback(this);
   if (!callback)
     return;
+  ScoutStatusText parsed;
+  if (!parseScoutStatusText(message->data, &parsed))
+    return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
+  const ros::Time stamp = ros::Time::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    scout_status_ = *message;
+    scout_status_ = parsed;
+    status_stamp_ = stamp;
     has_status_ = true;
     if (required_channels_.count("state.power") != 0u)
       recordSourceLocked("state.power", now);
@@ -1015,22 +1043,22 @@ void RobotRuntime::statusCallback(
       recordSourceLocked("state.chassis", now);
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
-      if (std::isfinite(message->battery_voltage)) {
-        payload.set_voltage_v(message->battery_voltage);
-        payload.set_percentage(scoutBatteryPercentage(message->battery_voltage));
+      if (std::isfinite(parsed.battery_voltage)) {
+        payload.set_voltage_v(parsed.battery_voltage);
+        payload.set_percentage(scoutBatteryPercentage(parsed.battery_voltage));
       }
-      output.push_back(makeEnvelopeLocked("state.power",
-                                          message->header.stamp, payload));
+      output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
       recordOutputLocked("state.power");
     } else if (channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
     }
     if (channelEnabled("state.chassis") && shouldEmitLocked("state.chassis", now)) {
       xgc::semantic::ground::v1::ChassisStatus payload;
-      payload.set_control_mode(scoutControlMode(message->control_mode));
-      payload.set_native_control_mode(message->control_mode);
-      output.push_back(makeEnvelopeLocked("state.chassis",
-                                          message->header.stamp, payload));
+      payload.set_control_mode(scoutControlMode(
+          static_cast<std::uint8_t>(parsed.control_mode)));
+      payload.set_native_control_mode(
+          static_cast<std::uint32_t>(parsed.control_mode));
+      output.push_back(makeEnvelopeLocked("state.chassis", stamp, payload));
       recordOutputLocked("state.chassis");
     } else if (channelEnabled("state.chassis")) {
       ++sources_["state.chassis"].dropped_samples;
@@ -1082,8 +1110,7 @@ void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
   } else {
     payload.set_summary("Scout chassis telemetry is incomplete or stale");
   }
-  const ros::Time stamp =
-      has_status_ ? scout_status_.header.stamp : ros::Time::now();
+  const ros::Time stamp = has_status_ ? status_stamp_ : ros::Time::now();
   messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
   recordOutputLocked("state.health");
 }
