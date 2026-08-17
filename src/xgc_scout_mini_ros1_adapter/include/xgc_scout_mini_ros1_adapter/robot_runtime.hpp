@@ -136,8 +136,8 @@ private:
   void statusCallback(const std_msgs::String::ConstPtr &message);
   void emitHealthLocked(const ros::WallTime &now,
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
-  void emitChannelHealthLocked(const ros::WallTime &now,
-                               std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void emitStreamHealthLocked(const ros::WallTime &now,
+                              std::vector<xgc::robot::v1::RobotMessage> *messages);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;

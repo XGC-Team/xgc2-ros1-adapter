@@ -116,8 +116,8 @@ private:
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
-  void emitChannelHealthLocked(const ros::WallTime &now,
-                               std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void emitStreamHealthLocked(const ros::WallTime &now,
+                              std::vector<xgc::robot::v1::RobotMessage> *messages);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;

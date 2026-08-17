@@ -145,10 +145,10 @@ channels:
         name: scout/status_text
         type: std_msgs/String
 
-  - id: diagnostic.channel-health
+  - id: diagnostic.stream-health
     kind: stream_out
-    output_message_id: 2010
-    processor: common.channel-health
+    output_message_id: 2011
+    processor: common.stream-health-report
     output_rate_hz: 1
     observes:
       - vrpn.position

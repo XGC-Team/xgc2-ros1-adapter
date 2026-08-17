@@ -267,6 +267,16 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
+  contract::ChannelMetadata diagnostics;
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6",
+                                        "diagnostic.stream-health",
+                                        &diagnostics));
+  EXPECT_EQ(2011u, diagnostics.output_message_id);
+  EXPECT_EQ("common.stream-health-report", std::string(diagnostics.processor));
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6",
+                                         "diagnostic.channel-health",
+                                         &diagnostics));
+
   contract::ChannelMetadata unknown;
   EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6", "operation.arm",
                                          &unknown));

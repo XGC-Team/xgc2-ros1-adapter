@@ -309,7 +309,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             [channel["id"] for channel in mecanum["channels"]],
             [
                 "command.velocity",
-                "diagnostic.channel-health",
+                "diagnostic.stream-health",
                 "operation.motion-intent",
                 "state.imu",
                 "vrpn.position",

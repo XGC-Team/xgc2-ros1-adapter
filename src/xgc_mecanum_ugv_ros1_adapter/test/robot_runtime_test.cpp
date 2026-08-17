@@ -204,7 +204,7 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
 
   const std::vector<std::string> streams{
       "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",
-      "diagnostic.channel-health"};
+      "diagnostic.stream-health"};
   for (const auto &channel_id : streams) {
     contract::ChannelMetadata channel{};
     ASSERT_TRUE(
@@ -229,6 +229,14 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   EXPECT_EQ(2002u, raw_velocity.output_message_id);
   EXPECT_EQ(2006u, speed.output_message_id);
   EXPECT_EQ(2002u, command.output_message_id);
+
+  contract::ChannelMetadata diagnostics{};
+  ASSERT_TRUE(contract::channelMetadata(
+      contract::kProfileId, "diagnostic.stream-health", &diagnostics));
+  EXPECT_EQ(2011u, diagnostics.output_message_id);
+  EXPECT_EQ("common.stream-health-report", std::string(diagnostics.processor));
+  EXPECT_FALSE(contract::channelMetadata(
+      contract::kProfileId, "diagnostic.channel-health", &diagnostics));
 
   contract::ChannelMetadata forbidden{};
   EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.odom",

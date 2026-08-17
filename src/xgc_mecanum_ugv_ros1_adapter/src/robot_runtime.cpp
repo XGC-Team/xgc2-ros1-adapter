@@ -96,8 +96,8 @@ const std::array<NativeChannelBinding, 6u> kNativeBindings{{
      "geometry_msgs/Twist", "xgc.semantic.common.v1.VelocityEstimate", false},
     {"state.imu", "mecanum-ugv.imu-estimate", "imu", "sensor_msgs/Imu",
      "xgc.semantic.common.v1.ImuEstimate", false},
-    {"diagnostic.channel-health", "common.channel-health", nullptr, nullptr,
-     "xgc.semantic.common.v1.ChannelHealth", true},
+    {"diagnostic.stream-health", "common.stream-health-report", nullptr,
+     nullptr, "xgc.semantic.common.v1.StreamHealthReport", true},
 }};
 
 bool resolveEndpointTemplate(
@@ -925,22 +925,23 @@ void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
   std::vector<xgc::robot::v1::RobotMessage> messages;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    emitChannelHealthLocked(now, &messages);
+    emitStreamHealthLocked(now, &messages);
   }
   emit(std::move(messages));
 }
 
-void RobotRuntime::emitChannelHealthLocked(
+void RobotRuntime::emitStreamHealthLocked(
     const ros::WallTime &now, std::vector<xgc::robot::v1::RobotMessage> *messages) {
-  if (!channelEnabled("diagnostic.channel-health") ||
-      !shouldEmitLocked("diagnostic.channel-health", now)) {
+  if (!channelEnabled("diagnostic.stream-health") ||
+      !shouldEmitLocked("diagnostic.stream-health", now)) {
     return;
   }
   contract::ChannelMetadata diagnostic{};
-  if (!contract::channelMetadata(profile_id_, "diagnostic.channel-health",
+  if (!contract::channelMetadata(profile_id_, "diagnostic.stream-health",
                                  &diagnostic)) {
     throw std::logic_error("generated Mecanum diagnostic binding is missing");
   }
+  xgc::semantic::common::v1::StreamHealthReport report;
   for (std::size_t index = 0u; index < diagnostic.observes_count; ++index) {
     const std::string channel_id(diagnostic.observes[index]);
     const auto found = sources_.find(channel_id);
@@ -963,17 +964,17 @@ void RobotRuntime::emitChannelHealthLocked(
     source.output_samples = 0;
     source.window_started = now;
 
-    xgc::semantic::common::v1::ChannelHealth payload;
-    payload.set_channel_id(channel_id);
-    payload.set_source_rate_hz(source.source_rate_hz);
-    payload.set_output_rate_hz(source.output_rate_hz);
-    payload.set_dropped_samples(source.dropped_samples);
-    payload.set_source_age_ms(sourceAgeMillisLocked(channel_id, now));
-    payload.set_stale(
+    auto *payload = report.add_channels();
+    payload->set_channel_id(channel_id);
+    payload->set_source_rate_hz(source.source_rate_hz);
+    payload->set_output_rate_hz(source.output_rate_hz);
+    payload->set_dropped_samples(source.dropped_samples);
+    payload->set_source_age_ms(sourceAgeMillisLocked(channel_id, now));
+    payload->set_stale(
         !sourceIsFresh(source.last_seen, now, source.stale_after_seconds));
-    messages->push_back(makeEnvelopeLocked("diagnostic.channel-health",
-                                           ros::Time::now(), payload));
   }
+  messages->push_back(makeEnvelopeLocked("diagnostic.stream-health",
+                                         ros::Time::now(), report));
 }
 
 } // namespace xgc_mecanum_ugv_ros1_adapter

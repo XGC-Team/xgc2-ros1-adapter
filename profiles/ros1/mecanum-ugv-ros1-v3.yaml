@@ -111,10 +111,10 @@ channels:
     policy:
       timeout_ms: 1000
 
-  - id: diagnostic.channel-health
+  - id: diagnostic.stream-health
     kind: stream_out
-    output_message_id: 2010
-    processor: common.channel-health
+    output_message_id: 2011
+    processor: common.stream-health-report
     output_rate_hz: 10
     observes:
       - vrpn.position

@@ -467,15 +467,25 @@ class ContractGeneratorTest(unittest.TestCase):
                 # Profile gates online on it and leaves VRPN to gate readiness.
                 "state.imu",
                 "operation.motion-intent",
-                "diagnostic.channel-health",
+                "diagnostic.stream-health",
             },
         )
+        self.assertEqual(
+            scout_channels["diagnostic.stream-health"]["output_message_id"],
+            2011,
+        )
+        self.assertNotIn("diagnostic.channel-health", scout_channels)
+        self.assertEqual(
+            mecanum_channels["diagnostic.stream-health"]["output_message_id"],
+            2011,
+        )
+        self.assertNotIn("diagnostic.channel-health", mecanum_channels)
         for channel_id in (
             "vrpn.position",
             "vrpn.velocity",
             "vrpn.speed",
             "command.velocity",
-            "diagnostic.channel-health",
+            "diagnostic.stream-health",
         ):
             self.assertEqual(mecanum_channels[channel_id]["output_rate_hz"], 10)
         self.assertEqual(mecanum_channels["vrpn.position"]["output_message_id"], 2001)
