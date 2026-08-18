@@ -4,18 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PACKAGE_NAME="ros-noetic-xgc2-unitree-b2-adapter"
-PACKAGE_VERSION="${PACKAGE_VERSION:-$(
-  awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
-    "${REPO_ROOT}/.xgc2/product.yml"
-)}"
-PROTOBUF_PACKAGE_VERSION="${PROTOBUF_PACKAGE_VERSION:-0.5.0-11~focal}"
+# Install the last published B2 package from production APT. This is not the
+# in-tree product.yml version (which may have been bumped for a later train).
+PUBLISHED_B2_VERSION="0.5.0-18"
+PACKAGE_VERSION="${PACKAGE_VERSION:-${PUBLISHED_B2_VERSION}}"
+PROTOBUF_PACKAGE_VERSION="${PROTOBUF_PACKAGE_VERSION:-0.5.0-12~focal}"
 APT_BASE_URL="${XGC2_APT_BASE_URL:-https://xgc2.apt.xiaokang.ink}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
-
-if [[ "${PACKAGE_VERSION}" != "0.5.0-18" ]]; then
-  echo "public B2 APT gate is frozen to 0.5.0-18, got ${PACKAGE_VERSION}" >&2
-  exit 1
-fi
 
 container_name="xgc2-b2-public-apt-check-$(date +%s)-$$"
 cleanup() {

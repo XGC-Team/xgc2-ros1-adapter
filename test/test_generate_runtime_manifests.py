@@ -751,8 +751,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-18")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-18")
+        self.assertEqual(product["version"], "0.5.0-19")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-19")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
@@ -763,7 +763,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("https://xgc2.apt.xiaokang.ink", public_gate)
         self.assertIn('PACKAGE_NAME="ros-noetic-xgc2-unitree-b2-adapter"', public_gate)
-        self.assertIn('PACKAGE_VERSION}" != "0.5.0-18"', public_gate)
+        self.assertIn('PUBLISHED_B2_VERSION="0.5.0-18"', public_gate)
         self.assertIn("apt-cache madison", public_gate)
         self.assertIn("check_installed_b2_package.sh", public_gate)
 
