@@ -33,6 +33,15 @@ TEST(RosNames, BuildsNamespacedMecanumTopics) {
   EXPECT_EQ("/vrpn_client_node/Ugv1/pose",
             topicName("", "vrpn_client_node/Ugv1/pose"));
   EXPECT_EQ("/fleet/ugv2/twist", topicName("/fleet/ugv2", "/twist"));
+  EXPECT_EQ("/ugv1/PowerVoltage", topicName("/ugv1", "PowerVoltage"));
+}
+
+TEST(BatteryProjection, UsesTheMecanum3SLinearVoltageModel) {
+  EXPECT_DOUBLE_EQ(0.0, mecanumBatteryPercentage(10.5));
+  EXPECT_DOUBLE_EQ(1.0, mecanumBatteryPercentage(12.6));
+  EXPECT_NEAR(0.88, mecanumBatteryPercentage(12.348), 1e-12);
+  EXPECT_DOUBLE_EQ(0.0, mecanumBatteryPercentage(9.0));
+  EXPECT_DOUBLE_EQ(1.0, mecanumBatteryPercentage(13.0));
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
@@ -200,7 +209,7 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
   ASSERT_NE(nullptr, channels);
-  ASSERT_EQ(7u, channel_count);
+  ASSERT_EQ(8u, channel_count);
 
   const std::vector<std::string> streams{
       "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",

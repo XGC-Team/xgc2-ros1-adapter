@@ -312,6 +312,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "diagnostic.stream-health",
                 "operation.motion-intent",
                 "state.imu",
+                "state.power",
                 "vrpn.position",
                 "vrpn.speed",
                 "vrpn.velocity",

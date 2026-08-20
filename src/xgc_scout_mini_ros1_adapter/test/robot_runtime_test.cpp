@@ -33,8 +33,10 @@ TEST(RosNames, BuildsNamespacedScoutTopics) {
             topicName("", "vrpn_client_node/Scout1/pose"));
   EXPECT_EQ("/fleet/scout2/scout_status",
             topicName("/fleet/scout2", "/scout_status"));
-  EXPECT_EQ("/fleet/scout2/scout/status_text",
-            topicName("/fleet/scout2", "scout/status_text"));
+  EXPECT_EQ("/fleet/scout2/PowerVoltage",
+            topicName("/fleet/scout2", "PowerVoltage"));
+  EXPECT_EQ("/fleet/scout2/scout/chassis_state",
+            topicName("/fleet/scout2", "scout/chassis_state"));
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
@@ -210,22 +212,15 @@ TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
   EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(32.0));
 }
 
-TEST(StatusText, ParsesTheOnboardRelayFormat) {
-  ScoutStatusText parsed;
-  ASSERT_TRUE(parseScoutStatusText(
-      "mode=1 base=0 fault=0 batt=28.77 light_mode=0 light=0", &parsed));
+TEST(ChassisState, PacksAndUnpacksModeBaseAndFault) {
+  const std::uint32_t word = packScoutChassisState(1u, 2u, 0xABCDu);
+  EXPECT_EQ(0xABCDu << 16 | 2u << 8 | 1u, word);
+  ScoutChassisState parsed;
+  ASSERT_TRUE(unpackScoutChassisState(word, &parsed));
   EXPECT_EQ(1u, parsed.control_mode);
-  EXPECT_EQ(0u, parsed.base_state);
-  EXPECT_EQ(0u, parsed.fault_code);
-  EXPECT_NEAR(28.77, parsed.battery_voltage, 1e-6);
-  EXPECT_EQ(0u, parsed.light_mode);
-  EXPECT_EQ(0u, parsed.light_custom);
-
-  EXPECT_FALSE(parseScoutStatusText("mode=1", &parsed));
-  EXPECT_FALSE(parseScoutStatusText("", &parsed));
-  EXPECT_FALSE(parseScoutStatusText("not a status", &parsed));
-  EXPECT_FALSE(parseScoutStatusText(
-      "mode=1 base=0 fault=0 batt=28.77 light_mode=0 light=0", nullptr));
+  EXPECT_EQ(2u, parsed.base_state);
+  EXPECT_EQ(0xABCDu, parsed.fault_code);
+  EXPECT_FALSE(unpackScoutChassisState(0u, nullptr));
 }
 
 TEST(ChassisProjection, MapsNativeScoutControlModes) {

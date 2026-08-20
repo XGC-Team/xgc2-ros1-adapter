@@ -24,6 +24,7 @@ semantic_traits:
     vrpn.speed: 1000
     state.imu: 1000
     command.velocity: 1000
+    state.power: 5000
   # Same contract as the Scout Mini: online is the vehicle's own liveness and
   # localization is a separate fact, so ready means both. This chassis carries
   # far less instrumentation than a Scout or a PX4 airframe, and the IMU is the
@@ -94,6 +95,16 @@ channels:
         name: imu
         type: sensor_msgs/Imu
 
+  - id: state.power
+    kind: stream_out
+    output_message_id: 2004
+    processor: mecanum-ugv.power-status
+    output_rate_hz: 1
+    inputs:
+      battery:
+        name: PowerVoltage
+        type: std_msgs/Float32
+
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent
@@ -122,3 +133,4 @@ channels:
       - vrpn.speed
       - state.imu
       - command.velocity
+      - state.power

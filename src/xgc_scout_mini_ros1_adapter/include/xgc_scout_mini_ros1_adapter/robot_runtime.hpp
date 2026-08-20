@@ -15,7 +15,8 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
-#include <std_msgs/String.h>
+#include <std_msgs/Float32.h>
+#include <std_msgs/UInt32.h>
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
@@ -41,16 +42,15 @@ double scoutBatteryPercentage(double voltage_v);
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
 
-struct ScoutStatusText {
+struct ScoutChassisState {
   unsigned control_mode = 0;
   unsigned base_state = 0;
   unsigned fault_code = 0;
-  double battery_voltage = 0.0;
-  unsigned light_mode = 0;
-  unsigned light_custom = 0;
 };
 
-bool parseScoutStatusText(const std::string &text, ScoutStatusText *out);
+std::uint32_t packScoutChassisState(unsigned control_mode, unsigned base_state,
+                                    unsigned fault_code);
+bool unpackScoutChassisState(std::uint32_t word, ScoutChassisState *out);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
@@ -106,7 +106,8 @@ private:
                std::string mocap_rigid_body, std::string pose_endpoint,
                std::string vrpn_velocity_endpoint,
                std::string command_velocity_endpoint, std::string imu_endpoint,
-               std::string status_endpoint, EnvelopeEmitter emitter);
+               std::string voltage_endpoint, std::string chassis_state_endpoint,
+               EnvelopeEmitter emitter);
 
   bool install(std::string *error);
   bool beginCallback();
@@ -133,7 +134,8 @@ private:
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
-  void statusCallback(const std_msgs::String::ConstPtr &message);
+  void voltageCallback(const std_msgs::Float32::ConstPtr &message);
+  void chassisStateCallback(const std_msgs::UInt32::ConstPtr &message);
   void emitHealthLocked(const ros::WallTime &now,
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitStreamHealthLocked(const ros::WallTime &now,
@@ -153,7 +155,8 @@ private:
   const std::string vrpn_velocity_endpoint_;
   const std::string command_velocity_endpoint_;
   const std::string imu_endpoint_;
-  const std::string status_endpoint_;
+  const std::string voltage_endpoint_;
+  const std::string chassis_state_endpoint_;
 
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;
@@ -164,9 +167,9 @@ private:
   std::map<std::string, ros::WallTime> last_output_;
   std::map<std::string, std::uint64_t> sequences_;
 
-  ScoutStatusText scout_status_;
+  ScoutChassisState scout_status_;
   ros::Time status_stamp_;
-  bool has_status_ = false;
+  bool has_chassis_ = false;
   geometry_msgs::Quaternion vrpn_orientation_;
   bool has_vrpn_orientation_ = false;
 
@@ -174,7 +177,8 @@ private:
   ros::Subscriber vrpn_velocity_subscriber_;
   ros::Subscriber command_velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
-  ros::Subscriber status_subscriber_;
+  ros::Subscriber voltage_subscriber_;
+  ros::Subscriber chassis_state_subscriber_;
 };
 
 } // namespace xgc_scout_mini_ros1_adapter

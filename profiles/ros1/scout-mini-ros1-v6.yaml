@@ -23,9 +23,8 @@ semantic_traits:
     vrpn.velocity: 1000
     vrpn.speed: 1000
     state.imu: 1000
-    # 2s: chassis text is 2 Hz; 1s left too little margin after sourceAge + SSE
-    # lag and the UI painted brief unavailable (yellow) flashes.
-    state.power: 2000
+    # Voltage is 0.5 Hz; chassis_state is 1 Hz.
+    state.power: 5000
     state.health: 2000
     state.chassis: 2000
   # Online and localized are separate facts, and a robot is ready only when both
@@ -119,31 +118,31 @@ channels:
     kind: stream_out
     output_message_id: 2004
     processor: scout-mini.power-status
-    output_rate_hz: 2
+    output_rate_hz: 1
     inputs:
-      chassis_status:
-        name: scout/status_text
-        type: std_msgs/String
+      battery:
+        name: PowerVoltage
+        type: std_msgs/Float32
 
   - id: state.health
     kind: stream_out
     output_message_id: 2005
     processor: scout-mini.vehicle-health
-    output_rate_hz: 2
+    output_rate_hz: 1
     inputs:
-      chassis_status:
-        name: scout/status_text
-        type: std_msgs/String
+      chassis_state:
+        name: scout/chassis_state
+        type: std_msgs/UInt32
 
   - id: state.chassis
     kind: stream_out
     output_message_id: 3102
     processor: scout-mini.chassis-status
-    output_rate_hz: 2
+    output_rate_hz: 1
     inputs:
-      chassis_status:
-        name: scout/status_text
-        type: std_msgs/String
+      chassis_state:
+        name: scout/chassis_state
+        type: std_msgs/UInt32
 
   - id: diagnostic.stream-health
     kind: stream_out

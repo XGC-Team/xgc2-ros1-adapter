@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 #include <regex>
 #include <stdexcept>
@@ -104,12 +103,12 @@ const std::array<NativeChannelBinding, 9u> kNativeBindings{{
      "geometry_msgs/Twist", "xgc.semantic.common.v1.VelocityEstimate", false},
     {"state.imu", "scout-mini.imu-estimate", "imu", "sensor_msgs/Imu",
      "xgc.semantic.common.v1.ImuEstimate", false},
-    {"state.power", "scout-mini.power-status", "chassis_status",
-     "std_msgs/String", "xgc.semantic.common.v1.PowerStatus", false},
-    {"state.health", "scout-mini.vehicle-health", "chassis_status",
-     "std_msgs/String", "xgc.semantic.common.v1.VehicleHealth", false},
-    {"state.chassis", "scout-mini.chassis-status", "chassis_status",
-     "std_msgs/String", "xgc.semantic.ground.v1.ChassisStatus", false},
+    {"state.power", "scout-mini.power-status", "battery",
+     "std_msgs/Float32", "xgc.semantic.common.v1.PowerStatus", false},
+    {"state.health", "scout-mini.vehicle-health", "chassis_state",
+     "std_msgs/UInt32", "xgc.semantic.common.v1.VehicleHealth", false},
+    {"state.chassis", "scout-mini.chassis-status", "chassis_state",
+     "std_msgs/UInt32", "xgc.semantic.ground.v1.ChassisStatus", false},
     {"diagnostic.stream-health", "common.stream-health-report", nullptr,
      nullptr, "xgc.semantic.common.v1.StreamHealthReport", true},
 }};
@@ -294,26 +293,18 @@ double scoutBatteryPercentage(double voltage_v) {
                                          (kFullVoltage - kEmptyVoltage)));
 }
 
-bool parseScoutStatusText(const std::string &text, ScoutStatusText *out) {
+std::uint32_t packScoutChassisState(unsigned control_mode, unsigned base_state,
+                                    unsigned fault_code) {
+  return (control_mode & 0xFFu) | ((base_state & 0xFFu) << 8) |
+         ((fault_code & 0xFFFFu) << 16);
+}
+
+bool unpackScoutChassisState(std::uint32_t word, ScoutChassisState *out) {
   if (out == nullptr)
     return false;
-  unsigned mode = 0;
-  unsigned base = 0;
-  unsigned fault = 0;
-  unsigned light_mode = 0;
-  unsigned light = 0;
-  float batt = 0.0f;
-  if (std::sscanf(text.c_str(),
-                  "mode=%u base=%u fault=%u batt=%f light_mode=%u light=%u",
-                  &mode, &base, &fault, &batt, &light_mode, &light) != 6) {
-    return false;
-  }
-  out->control_mode = mode;
-  out->base_state = base;
-  out->fault_code = fault;
-  out->battery_voltage = static_cast<double>(batt);
-  out->light_mode = light_mode;
-  out->light_custom = light;
+  out->control_mode = word & 0xFFu;
+  out->base_state = (word >> 8) & 0xFFu;
+  out->fault_code = (word >> 16) & 0xFFFFu;
   return true;
 }
 
@@ -528,7 +519,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string speed_pose_endpoint;
   std::string command_velocity_endpoint;
   std::string imu_endpoint;
-  std::string status_endpoint;
+  std::string voltage_endpoint;
   std::string health_endpoint;
   std::string chassis_endpoint;
   if (!resolveInputEndpoint(config, "vrpn.position", "pose",
@@ -543,18 +534,17 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &command_velocity_endpoint, error) ||
       !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint,
                             error) ||
-      !resolveInputEndpoint(config, "state.power", "chassis_status",
-                            &status_endpoint, error) ||
-      !resolveInputEndpoint(config, "state.health", "chassis_status",
+      !resolveInputEndpoint(config, "state.power", "battery",
+                            &voltage_endpoint, error) ||
+      !resolveInputEndpoint(config, "state.health", "chassis_state",
                             &health_endpoint, error) ||
-      !resolveInputEndpoint(config, "state.chassis", "chassis_status",
+      !resolveInputEndpoint(config, "state.chassis", "chassis_state",
                             &chassis_endpoint, error)) {
     return nullptr;
   }
   if (vrpn_velocity_endpoint != speed_endpoint ||
       pose_endpoint != speed_pose_endpoint ||
-      status_endpoint != health_endpoint ||
-      status_endpoint != chassis_endpoint) {
+      health_endpoint != chassis_endpoint) {
     fail(error,
          "Scout processors sharing a subscription resolved to different "
          "native endpoints");
@@ -570,7 +560,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(vrpn_velocity_endpoint),
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint),
-                       std::move(status_endpoint), std::move(emitter)));
+                       std::move(voltage_endpoint), std::move(chassis_endpoint),
+                       std::move(emitter)));
   try {
     if (!runtime->install(error)) {
       runtime->Stop();
@@ -593,7 +584,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string vrpn_velocity_endpoint,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
-                           std::string status_endpoint,
+                           std::string voltage_endpoint,
+                           std::string chassis_state_endpoint,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
@@ -607,7 +599,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
-      status_endpoint_(std::move(status_endpoint)) {}
+      voltage_endpoint_(std::move(voltage_endpoint)),
+      chassis_state_endpoint_(std::move(chassis_state_endpoint)) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -649,7 +642,8 @@ void RobotRuntime::Stop() {
   vrpn_velocity_subscriber_.shutdown();
   command_velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
-  status_subscriber_.shutdown();
+  voltage_subscriber_.shutdown();
+  chassis_state_subscriber_.shutdown();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -741,13 +735,23 @@ bool RobotRuntime::install(std::string *error) {
       if (!requireRosRegistration(imu_subscriber_, imu_endpoint_, error))
         return false;
     }
-    if (required_channels_.count("state.power") != 0u ||
-        required_channels_.count("state.health") != 0u ||
+    if (required_channels_.count("state.power") != 0u) {
+      ensureSourceLocked(
+          "state.power",
+          channelStaleAfterSeconds(profile_id_, "state.power"));
+      voltage_subscriber_ = node_handle_.subscribe<std_msgs::Float32>(
+          voltage_endpoint_, 10,
+          [weak_self](const std_msgs::Float32::ConstPtr &message) {
+            if (const auto self = weak_self.lock()) {
+              self->voltageCallback(message);
+            }
+          });
+      if (!requireRosRegistration(voltage_subscriber_, voltage_endpoint_,
+                                  error))
+        return false;
+    }
+    if (required_channels_.count("state.health") != 0u ||
         required_channels_.count("state.chassis") != 0u) {
-      if (required_channels_.count("state.power") != 0u)
-        ensureSourceLocked(
-            "state.power",
-            channelStaleAfterSeconds(profile_id_, "state.power"));
       if (required_channels_.count("state.health") != 0u)
         ensureSourceLocked(
             "state.health",
@@ -756,14 +760,15 @@ bool RobotRuntime::install(std::string *error) {
         ensureSourceLocked(
             "state.chassis",
             channelStaleAfterSeconds(profile_id_, "state.chassis"));
-      status_subscriber_ = node_handle_.subscribe<std_msgs::String>(
-          status_endpoint_, 10,
-          [weak_self](const std_msgs::String::ConstPtr &message) {
+      chassis_state_subscriber_ = node_handle_.subscribe<std_msgs::UInt32>(
+          chassis_state_endpoint_, 10,
+          [weak_self](const std_msgs::UInt32::ConstPtr &message) {
             if (const auto self = weak_self.lock()) {
-              self->statusCallback(message);
+              self->chassisStateCallback(message);
             }
           });
-      if (!requireRosRegistration(status_subscriber_, status_endpoint_, error))
+      if (!requireRosRegistration(chassis_state_subscriber_,
+                                  chassis_state_endpoint_, error))
         return false;
     }
   }
@@ -1020,12 +1025,39 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
   emit(std::move(output));
 }
 
-void RobotRuntime::statusCallback(const std_msgs::String::ConstPtr &message) {
+void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
   CallbackGuard callback(this);
   if (!callback)
     return;
-  ScoutStatusText parsed;
-  if (!parseScoutStatusText(message->data, &parsed))
+  const double voltage = static_cast<double>(message->data);
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  const ros::Time stamp = ros::Time::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("state.power", now);
+    if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
+      xgc::semantic::common::v1::PowerStatus payload;
+      if (std::isfinite(voltage)) {
+        payload.set_voltage_v(voltage);
+        payload.set_percentage(scoutBatteryPercentage(voltage));
+      }
+      output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
+      recordOutputLocked("state.power");
+    } else if (channelEnabled("state.power")) {
+      ++sources_["state.power"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::chassisStateCallback(
+    const std_msgs::UInt32::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  ScoutChassisState parsed;
+  if (!unpackScoutChassisState(message->data, &parsed))
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
@@ -1034,25 +1066,13 @@ void RobotRuntime::statusCallback(const std_msgs::String::ConstPtr &message) {
     std::lock_guard<std::mutex> lock(mutex_);
     scout_status_ = parsed;
     status_stamp_ = stamp;
-    has_status_ = true;
-    if (required_channels_.count("state.power") != 0u)
-      recordSourceLocked("state.power", now);
+    has_chassis_ = true;
     if (required_channels_.count("state.health") != 0u)
       recordSourceLocked("state.health", now);
     if (required_channels_.count("state.chassis") != 0u)
       recordSourceLocked("state.chassis", now);
-    if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
-      xgc::semantic::common::v1::PowerStatus payload;
-      if (std::isfinite(parsed.battery_voltage)) {
-        payload.set_voltage_v(parsed.battery_voltage);
-        payload.set_percentage(scoutBatteryPercentage(parsed.battery_voltage));
-      }
-      output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
-      recordOutputLocked("state.power");
-    } else if (channelEnabled("state.power")) {
-      ++sources_["state.power"].dropped_samples;
-    }
-    if (channelEnabled("state.chassis") && shouldEmitLocked("state.chassis", now)) {
+    if (channelEnabled("state.chassis") &&
+        shouldEmitLocked("state.chassis", now)) {
       xgc::semantic::ground::v1::ChassisStatus payload;
       payload.set_control_mode(scoutControlMode(
           static_cast<std::uint8_t>(parsed.control_mode)));
@@ -1088,10 +1108,10 @@ void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
   }
 
   const bool status_fresh =
-      has_status_ && sourceFreshLocked("state.health", now);
+      has_chassis_ && sourceFreshLocked("state.health", now);
   xgc::semantic::common::v1::VehicleHealth payload;
   payload.set_online(scoutIsOnline(status_fresh));
-  if (!has_status_) {
+  if (!has_chassis_) {
     addFault(&payload, "scout.status.missing",
              "Scout chassis status has not been observed", 2);
   } else if (!status_fresh) {
@@ -1105,12 +1125,12 @@ void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
   }
   if (payload.online() && payload.faults_size() == 0) {
     payload.set_summary("Scout chassis telemetry is healthy");
-  } else if (has_status_ && scout_status_.fault_code != 0) {
+  } else if (has_chassis_ && scout_status_.fault_code != 0) {
     payload.set_summary("Scout chassis reports a fault");
   } else {
     payload.set_summary("Scout chassis telemetry is incomplete or stale");
   }
-  const ros::Time stamp = has_status_ ? status_stamp_ : ros::Time::now();
+  const ros::Time stamp = has_chassis_ ? status_stamp_ : ros::Time::now();
   messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
   recordOutputLocked("state.health");
 }

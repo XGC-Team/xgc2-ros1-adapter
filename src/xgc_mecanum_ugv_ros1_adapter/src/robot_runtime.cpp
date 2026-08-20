@@ -10,6 +10,7 @@
 
 #include <ros/names.h>
 #include <sensor_msgs/Imu.h>
+#include <std_msgs/Float32.h>
 
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc_mecanum_ugv_ros1_adapter/generated_contract.hpp"
@@ -83,7 +84,7 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 6u> kNativeBindings{{
+const std::array<NativeChannelBinding, 7u> kNativeBindings{{
     {"vrpn.position", "mecanum-ugv.vrpn-pose", "pose",
      "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
     {"vrpn.velocity", "mecanum-ugv.vrpn-velocity", "velocity",
@@ -96,6 +97,8 @@ const std::array<NativeChannelBinding, 6u> kNativeBindings{{
      "geometry_msgs/Twist", "xgc.semantic.common.v1.VelocityEstimate", false},
     {"state.imu", "mecanum-ugv.imu-estimate", "imu", "sensor_msgs/Imu",
      "xgc.semantic.common.v1.ImuEstimate", false},
+    {"state.power", "mecanum-ugv.power-status", "battery", "std_msgs/Float32",
+     "xgc.semantic.common.v1.PowerStatus", false},
     {"diagnostic.stream-health", "common.stream-health-report", nullptr,
      nullptr, "xgc.semantic.common.v1.StreamHealthReport", true},
 }};
@@ -267,6 +270,15 @@ double vrpnForwardSpeedMetersPerSecond(
   const double body_x_world_z = 2.0 * (x * z - w * y);
   return body_x_world_x * velocity_x + body_x_world_y * velocity_y +
          body_x_world_z * velocity_z;
+}
+
+double mecanumBatteryPercentage(double voltage_v) {
+  constexpr double kEmptyVoltage = 10.5;
+  constexpr double kFullVoltage = 12.6;
+  if (!std::isfinite(voltage_v))
+    return 0.0;
+  return std::max(0.0, std::min(1.0, (voltage_v - kEmptyVoltage) /
+                                         (kFullVoltage - kEmptyVoltage)));
 }
 
 bool validateNativeProfileContract(std::string *error) {
@@ -465,6 +477,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string speed_pose_endpoint;
   std::string command_velocity_endpoint;
   std::string imu_endpoint;
+  std::string voltage_endpoint;
   if (!resolveInputEndpoint(config, "vrpn.position", "pose",
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
@@ -475,7 +488,10 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &speed_pose_endpoint, error) ||
       !resolveInputEndpoint(config, "command.velocity", "command",
                             &command_velocity_endpoint, error) ||
-      !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint, error)) {
+      !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint,
+                            error) ||
+      !resolveInputEndpoint(config, "state.power", "battery",
+                            &voltage_endpoint, error)) {
     return nullptr;
   }
   if (vrpn_velocity_endpoint != speed_endpoint ||
@@ -494,7 +510,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        mocap_it->second, std::move(pose_endpoint),
                        std::move(vrpn_velocity_endpoint),
                        std::move(command_velocity_endpoint),
-                       std::move(imu_endpoint), std::move(emitter)));
+                       std::move(imu_endpoint), std::move(voltage_endpoint),
+                       std::move(emitter)));
   try {
     if (!runtime->install(error)) {
       runtime->Stop();
@@ -516,7 +533,9 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string pose_endpoint,
                            std::string vrpn_velocity_endpoint,
                            std::string command_velocity_endpoint,
-                           std::string imu_endpoint, EnvelopeEmitter emitter)
+                           std::string imu_endpoint,
+                           std::string voltage_endpoint,
+                           EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
       robot_namespace_(cleanTopicPart(robot_namespace)),
@@ -528,7 +547,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       pose_endpoint_(std::move(pose_endpoint)),
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
-      imu_endpoint_(std::move(imu_endpoint)) {}
+      imu_endpoint_(std::move(imu_endpoint)),
+      voltage_endpoint_(std::move(voltage_endpoint)) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -570,6 +590,7 @@ void RobotRuntime::Stop() {
   vrpn_velocity_subscriber_.shutdown();
   command_velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
+  voltage_subscriber_.shutdown();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -659,6 +680,21 @@ bool RobotRuntime::install(std::string *error) {
             }
           });
       if (!requireRosRegistration(imu_subscriber_, imu_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("state.power") != 0u) {
+      ensureSourceLocked(
+          "state.power",
+          channelStaleAfterSeconds(profile_id_, "state.power"));
+      voltage_subscriber_ = node_handle_.subscribe<std_msgs::Float32>(
+          voltage_endpoint_, 10,
+          [weak_self](const std_msgs::Float32::ConstPtr &message) {
+            if (const auto self = weak_self.lock()) {
+              self->voltageCallback(message);
+            }
+          });
+      if (!requireRosRegistration(voltage_subscriber_, voltage_endpoint_,
+                                  error))
         return false;
     }
   }
@@ -862,6 +898,32 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
       recordOutputLocked("state.imu");
     } else if (channelEnabled("state.imu")) {
       ++sources_["state.imu"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  const double voltage = static_cast<double>(message->data);
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  const ros::Time stamp = ros::Time::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("state.power", now);
+    if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
+      xgc::semantic::common::v1::PowerStatus payload;
+      if (std::isfinite(voltage)) {
+        payload.set_voltage_v(voltage);
+        payload.set_percentage(mecanumBatteryPercentage(voltage));
+      }
+      output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
+      recordOutputLocked("state.power");
+    } else if (channelEnabled("state.power")) {
+      ++sources_["state.power"].dropped_samples;
     }
   }
   emit(std::move(output));

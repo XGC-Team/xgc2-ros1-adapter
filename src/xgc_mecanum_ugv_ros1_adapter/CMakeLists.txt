@@ -6,6 +6,8 @@ add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   roscpp
+  sensor_msgs
+  std_msgs
 )
 find_package(PythonInterp 3 REQUIRED)
 find_package(xgc2_adapter_runtime_client CONFIG REQUIRED)

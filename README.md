@@ -61,7 +61,7 @@ vehicle state.
 
 Scout Mini telemetry consumes the global
 `/vrpn_client_node/{mocap_rigid_body}/pose` and `twist` streams plus `cmd_vel`,
-`imu/data_raw`, and `scout/status_text` under the configured namespace.
+`imu/data_raw`, `PowerVoltage`, and `scout/chassis_state` under the configured namespace.
 `vrpn.position` records position and orientation, while `vrpn.velocity`
 retains the raw linear and angular vectors. The Adapter combines both VRPN
 streams to project world-frame linear velocity onto the signed body X axis;
@@ -97,13 +97,15 @@ have one effective command owner. Stop any autonomous controller first, or put
 both sources behind an explicit ROS command mux; competing publishers would
 otherwise interleave velocity commands.
 
-The Mecanum UGV profile intentionally contains only `vrpn.position`, raw
-`vrpn.velocity`, processed `vrpn.speed`, `command.velocity`, the existing
-longitudinal/yaw motion-intent operation, and channel diagnostics. Online state
-depends only on a fresh `vrpn.position`; it has no Scout status or odometry
-dependency. The scalar speed is computed in C++ by projecting the world-frame
-VRPN linear vector onto the body X axis from the VRPN pose quaternion, preserving
-reverse sign while excluding lateral slip. Motion intent keeps the existing
+The Mecanum UGV profile carries `vrpn.position`, raw `vrpn.velocity`,
+processed `vrpn.speed`, `command.velocity`, on-board `state.imu` (`imu`),
+`state.power` (`PowerVoltage`, `std_msgs/Float32`, the same topic and type
+as Scout), the existing longitudinal/yaw motion-intent operation, and
+channel diagnostics. Online state depends on a fresh IMU; VRPN pose gates
+readiness. It has no Scout status or odometry dependency. The scalar speed
+is computed in C++ by projecting the world-frame VRPN linear vector onto
+the body X axis from the VRPN pose quaternion, preserving reverse sign
+while excluding lateral slip. Motion intent keeps the existing
 protobuf contract (there is no lateral field) and maps its three gears to the
 deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
 0.5236/1.0472/1.5708 rad/s yaw. Before the first accepted intent, the adapter

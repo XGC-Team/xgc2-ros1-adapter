@@ -370,9 +370,19 @@ class ContractGeneratorTest(unittest.TestCase):
             scout_channels["state.power"]["endpoints"][0],
             {
                 "kind": "input",
-                "role": "chassis_status",
-                "name_template": "scout/status_text",
-                "ros_type": "std_msgs/String",
+                "role": "battery",
+                "name_template": "PowerVoltage",
+                "ros_type": "std_msgs/Float32",
+                "scope": "robot_namespace",
+            },
+        )
+        self.assertEqual(
+            scout_channels["state.chassis"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "chassis_state",
+                "name_template": "scout/chassis_state",
+                "ros_type": "std_msgs/UInt32",
                 "scope": "robot_namespace",
             },
         )
@@ -466,6 +476,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 # The on-board IMU is this chassis's liveness stream: the Robot
                 # Profile gates online on it and leaves VRPN to gate readiness.
                 "state.imu",
+                "state.power",
                 "operation.motion-intent",
                 "diagnostic.stream-health",
             },
@@ -493,6 +504,18 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertEqual(mecanum_channels["vrpn.speed"]["output_message_id"], 2006)
         self.assertEqual(mecanum_channels["command.velocity"]["output_message_id"], 2002)
         self.assertEqual(mecanum_channels["state.imu"]["output_message_id"], 2003)
+        self.assertEqual(mecanum_channels["state.power"]["output_message_id"], 2004)
+        self.assertEqual(mecanum_channels["state.power"]["output_rate_hz"], 1)
+        self.assertEqual(
+            mecanum_channels["state.power"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "battery",
+                "name_template": "PowerVoltage",
+                "ros_type": "std_msgs/Float32",
+                "scope": "robot_namespace",
+            },
+        )
         self.assertEqual(
             {endpoint["role"] for endpoint in mecanum_channels["vrpn.speed"]["endpoints"]},
             {"pose", "velocity"},
