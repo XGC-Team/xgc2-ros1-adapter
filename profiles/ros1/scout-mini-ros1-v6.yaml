@@ -119,6 +119,11 @@ channels:
     output_message_id: 2004
     processor: scout-mini.power-status
     output_rate_hz: 1
+    # Deliberately no battery_voltage_percentage_curve. The official Scout Mini
+    # manual documents 24 V / 15 Ah, about 29.2 V fully charged, a 22.5 V
+    # warning, and 20.5 V protection, but not the exact pack series/revision or
+    # an OCV/load-voltage-to-SOC curve. Warning and protection thresholds are
+    # safety limits, not percentage calibration points.
     inputs:
       battery:
         name: PowerVoltage

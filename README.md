@@ -68,11 +68,12 @@ streams to project world-frame linear velocity onto the signed body X axis;
 that processed scalar is `vrpn.speed`, so lateral slip is excluded.
 `command.velocity` separately records the commanded
 linear and angular velocity; the Adapter does not consume odometry. `state.power.voltageV`
-retains the measured chassis voltage. `state.power.percentage` is currently a
-clamped linear projection from
-the Scout Mini manual's 20.5 V protection voltage (0%) to 29.2 V full-charge
-voltage (100%); it is a display estimate rather than a battery state-of-charge
-model.
+retains the measured chassis voltage. `state.power.percentage` remains
+`PERCENTAGE_STATE_UNAVAILABLE` because the profile intentionally has no
+`battery_voltage_percentage_curve`: the manual's protection, warning, and
+full-charge voltages do not define state of charge under load. The exact pack
+identity and a manufacturer or measured voltage-to-SOC curve are required
+before the Adapter may publish a percentage.
 
 Scout Mini also exposes the idempotent `set-motion-intent` operation with a
 three-field `xgc.semantic.ground.v1.MotionIntentRequest`: `gear` is 1, 2, or 3,
@@ -110,7 +111,11 @@ protobuf contract (there is no lateral field) and maps its three gears to the
 deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
 0.5236/1.0472/1.5708 rad/s yaw. Before the first accepted intent, the adapter
 publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz and
-sends a final zero on shutdown.
+sends a final zero on shutdown. `state.power.voltageV` retains the measured
+voltage, while `state.power.percentage` remains
+`PERCENTAGE_STATE_UNAVAILABLE`. The physical `mini_mec` mode is not proof of an
+exact WheelTec battery SKU, and the profile has no authoritative
+voltage-to-SOC curve.
 
 The Mocap Rotor uses two computers and two independent ROS1 lifecycles. Its
 existing MAVROS and ROS master remain on the Orin NX; neither the ground Core

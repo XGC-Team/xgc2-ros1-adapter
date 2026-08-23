@@ -101,6 +101,12 @@ channels:
     output_message_id: 2004
     processor: mecanum-ugv.power-status
     output_rate_hz: 1
+    # Deliberately no battery_voltage_percentage_curve. The physical
+    # car_mode=mini_mec observation does not identify an exact WheelTec chassis
+    # SKU or battery pack. Official R550 material gives only voltage landmarks
+    # and multiple optional chassis forms; it does not provide the physical
+    # unit's chemistry, series count, BMS cutoff, or discharge/SOC curve. Do not
+    # infer a pack topology from 12.60 V and do not reuse Scout calibration.
     inputs:
       battery:
         name: PowerVoltage
