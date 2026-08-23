@@ -257,7 +257,7 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
 }
 
 TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
-  EXPECT_EQ(7816354851595606443ULL, contract::kRegistryFingerprint);
+  EXPECT_EQ(2385881224210779534ULL, contract::kRegistryFingerprint);
 
   contract::MessageMetadata metadata;
   ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));

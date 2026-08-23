@@ -741,6 +741,18 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             'XGC2_PROTOBUF_DEB_VERSION="$(apt_candidate_version xgc2-protobuf-dev)"',
             docker_build,
         )
+        self.assertIn(
+            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-13~focal}"',
+            docker_build,
+        )
+        self.assertIn(
+            "https://github.com/XGC-Team/xgc2-protobuf.git",
+            docker_build,
+        )
+        self.assertIn(
+            "17395aabbeb1987898dca3a8e7ee1a720ceb2ccf",
+            docker_build,
+        )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
         self.assertIn("third-party/zenoh-c/NOTICE.md", installed_gate)
         for mapping in (

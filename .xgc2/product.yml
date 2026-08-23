@@ -125,7 +125,7 @@ ownership:
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-mocap-rotor-ros1-adapter.json
   - /usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json
 release:
-  repository: lxk36/xgc2-ros1-adapter
+  repository: XGC-Team/xgc2-ros1-adapter
   ref: master
   workflow: release.yml
   ci_workflow: ci.yml
