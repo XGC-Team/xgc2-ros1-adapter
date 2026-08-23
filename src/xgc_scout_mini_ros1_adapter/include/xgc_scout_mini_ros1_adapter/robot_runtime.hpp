@@ -20,6 +20,7 @@
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
@@ -38,7 +39,6 @@ double vrpnForwardSpeedMetersPerSecond(
     double velocity_x, double velocity_y, double velocity_z,
     double orientation_x, double orientation_y, double orientation_z,
     double orientation_w);
-double scoutBatteryPercentage(double voltage_v);
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
 
@@ -107,6 +107,8 @@ private:
                std::string vrpn_velocity_endpoint,
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint, std::string chassis_state_endpoint,
+               xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
+               std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve,
                EnvelopeEmitter emitter);
 
   bool install(std::string *error);
@@ -157,6 +159,8 @@ private:
   const std::string imu_endpoint_;
   const std::string voltage_endpoint_;
   const std::string chassis_state_endpoint_;
+  xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
+  const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
 
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;

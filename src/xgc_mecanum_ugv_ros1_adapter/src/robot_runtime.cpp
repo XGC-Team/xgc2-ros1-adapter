@@ -58,6 +58,15 @@ void copyQuaternion(const RosQuaternion &source,
   target->set_w(source.w);
 }
 
+void addFault(xgc::semantic::common::v1::VehicleHealth *health,
+              const std::string &code, const std::string &summary,
+              std::uint32_t severity) {
+  auto *fault = health->add_faults();
+  fault->set_code(code);
+  fault->set_summary(summary);
+  fault->set_severity(severity);
+}
+
 template <typename Handle>
 bool requireRosRegistration(const Handle &handle, const std::string &endpoint,
                             std::string *error) {
@@ -84,7 +93,7 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 7u> kNativeBindings{{
+const std::array<NativeChannelBinding, 8u> kNativeBindings{{
     {"vrpn.position", "mecanum-ugv.vrpn-pose", "pose",
      "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
     {"vrpn.velocity", "mecanum-ugv.vrpn-velocity", "velocity",
@@ -99,6 +108,8 @@ const std::array<NativeChannelBinding, 7u> kNativeBindings{{
      "xgc.semantic.common.v1.ImuEstimate", false},
     {"state.power", "mecanum-ugv.power-status", "battery", "std_msgs/Float32",
      "xgc.semantic.common.v1.PowerStatus", false},
+    {"state.health", "mecanum-ugv.vehicle-health", nullptr, nullptr,
+     "xgc.semantic.common.v1.VehicleHealth", true},
     {"diagnostic.stream-health", "common.stream-health-report", nullptr,
      nullptr, "xgc.semantic.common.v1.StreamHealthReport", true},
 }};
@@ -171,6 +182,115 @@ double channelStaleAfterSeconds(const std::string &profile_id,
     throw std::logic_error("generated channel stale policy is invalid");
   }
   return static_cast<double>(channel.stale_after_millis) / 1000.0;
+}
+
+bool loadPositioningHealthConfig(
+    const std::string &profile_id,
+    xgc2_ros1_robot_adapter::PositioningHealthConfig *config,
+    std::string *error) {
+  if (config == nullptr)
+    return fail(error, "positioning health configuration output is required");
+  contract::ChannelMetadata health{};
+  std::int64_t window_millis = 0;
+  std::int64_t minimum_samples = 0;
+  double stationary_speed_threshold_mps = 0.0;
+  double maximum_position_spread_m = 0.0;
+  if (!contract::channelMetadata(profile_id, "state.health", &health) ||
+      !contract::channelPolicyInteger(health, "positioning_window_ms",
+                                      &window_millis) ||
+      !contract::channelPolicyInteger(
+          health, "positioning_minimum_samples", &minimum_samples) ||
+      !contract::channelPolicyNumber(
+          health, "positioning_stationary_speed_threshold_mps",
+          &stationary_speed_threshold_mps) ||
+      !contract::channelPolicyNumber(
+          health, "positioning_maximum_spread_m",
+          &maximum_position_spread_m) ||
+      window_millis <= 0 || minimum_samples < 2) {
+    return fail(error, "Mecanum positioning health policy is incomplete");
+  }
+  config->window_seconds = static_cast<double>(window_millis) / 1000.0;
+  config->minimum_samples = static_cast<std::size_t>(minimum_samples);
+  config->stationary_speed_threshold_mps = stationary_speed_threshold_mps;
+  config->maximum_position_spread_m = maximum_position_spread_m;
+  config->vrpn_timeout_seconds =
+      channelStaleAfterSeconds(profile_id, "vrpn.position");
+  return xgc2_ros1_robot_adapter::validPositioningHealthConfig(*config, error);
+}
+
+bool loadBatteryCurve(
+    const std::string &profile_id,
+    std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> *curve,
+    std::string *error) {
+  contract::ChannelMetadata power{};
+  if (!contract::channelMetadata(profile_id, "state.power", &power))
+    return fail(error, "Mecanum power channel is missing");
+  const auto *policy = contract::channelPolicy(
+      power, "battery_voltage_percentage_curve");
+  if (policy == nullptr) {
+    curve->clear();
+    return true;
+  }
+  const char *const *entries = nullptr;
+  std::size_t count = 0u;
+  if (!contract::channelPolicyStringArray(
+          power, "battery_voltage_percentage_curve", &entries, &count)) {
+    return fail(error, "Mecanum battery curve policy must be a string array");
+  }
+  return xgc2_ros1_robot_adapter::parseBatteryCurve(entries, count, curve,
+                                                     error);
+}
+
+void setPositioningHealth(
+    const xgc2_ros1_robot_adapter::PositioningHealthResult &result,
+    xgc::semantic::common::v1::PositioningHealth *payload) {
+  using Health = xgc::semantic::common::v1::PositioningHealth;
+  using Reason = xgc2_ros1_robot_adapter::PositioningHealthReason;
+  using State = xgc2_ros1_robot_adapter::PositioningHealthState;
+  switch (result.state) {
+  case State::kWarmingUp:
+    payload->set_state(Health::POSITIONING_STATE_WARMING_UP);
+    break;
+  case State::kStable:
+    payload->set_state(Health::POSITIONING_STATE_STABLE);
+    break;
+  case State::kJittering:
+    payload->set_state(Health::POSITIONING_STATE_JITTERING);
+    break;
+  case State::kMoving:
+    payload->set_state(Health::POSITIONING_STATE_MOVING);
+    break;
+  case State::kTimedOut:
+    payload->set_state(Health::POSITIONING_STATE_TIMED_OUT);
+    break;
+  case State::kUnspecified:
+    payload->set_state(Health::POSITIONING_STATE_UNSPECIFIED);
+    break;
+  }
+  switch (result.reason) {
+  case Reason::kInsufficientSamples:
+    payload->set_reason(Health::POSITIONING_REASON_INSUFFICIENT_SAMPLES);
+    break;
+  case Reason::kStationaryWindowStable:
+    payload->set_reason(Health::POSITIONING_REASON_STATIONARY_WINDOW_STABLE);
+    break;
+  case Reason::kStationaryJitterExceeded:
+    payload->set_reason(
+        Health::POSITIONING_REASON_STATIONARY_JITTER_EXCEEDED);
+    break;
+  case Reason::kRobotMoving:
+    payload->set_reason(Health::POSITIONING_REASON_ROBOT_MOVING);
+    break;
+  case Reason::kVrpnTimeout:
+    payload->set_reason(Health::POSITIONING_REASON_VRPN_TIMEOUT);
+    break;
+  case Reason::kUnspecified:
+    payload->set_reason(Health::POSITIONING_REASON_UNSPECIFIED);
+    break;
+  }
+  payload->set_observed_age_ms(result.observed_age_ms);
+  payload->set_window_spread_m(result.window_spread_m);
+  payload->set_sample_count(static_cast<std::uint32_t>(result.sample_count));
 }
 
 } // namespace
@@ -272,15 +392,6 @@ double vrpnForwardSpeedMetersPerSecond(
          body_x_world_z * velocity_z;
 }
 
-double mecanumBatteryPercentage(double voltage_v) {
-  constexpr double kEmptyVoltage = 10.5;
-  constexpr double kFullVoltage = 12.6;
-  if (!std::isfinite(voltage_v))
-    return 0.0;
-  return std::max(0.0, std::min(1.0, (voltage_v - kEmptyVoltage) /
-                                         (kFullVoltage - kEmptyVoltage)));
-}
-
 bool validateNativeProfileContract(std::string *error) {
   std::size_t parameter_count = 0u;
   const auto *parameters =
@@ -304,13 +415,30 @@ bool validateNativeProfileContract(std::string *error) {
   for (const auto &binding : kNativeBindings) {
     contract::ChannelMetadata channel{};
     if (!contract::channelMetadata(contract::kProfileId, binding.channel_id,
-                                   &channel) ||
-        channel.kind != contract::ChannelKind::kStreamOut ||
+                                   &channel)) {
+      return fail(error, std::string("Mecanum native channel is missing: ") +
+                             binding.channel_id);
+    }
+    const std::string channel_id(binding.channel_id);
+    const bool positioning_health = channel_id == "state.health";
+    const bool power = channel_id == "state.power";
+    bool invalid_policy =
+        positioning_health ? channel.policy_count != 4u
+                           : power ? channel.policy_count > 1u
+                                   : channel.policy_count != 0u;
+    if (power && channel.policy_count == 1u) {
+      const auto *curve = contract::channelPolicy(
+          channel, "battery_voltage_percentage_curve");
+      invalid_policy =
+          curve == nullptr ||
+          curve->kind != contract::PolicyValueKind::kStringArray;
+    }
+    if (channel.kind != contract::ChannelKind::kStreamOut ||
         std::string(channel.processor) != binding.processor ||
         channel.input_message_id != 0u || channel.output_message_id == 0u ||
         channel.output_rate_hz <= 0.0 ||
         channel.operation_timeout_millis != 0u ||
-        channel.stale_after_millis == 0u || channel.policy_count != 0u ||
+        channel.stale_after_millis == 0u || invalid_policy ||
         std::string(channel.operation_id).size() != 0u ||
         std::string(channel.operation_contract.side_effect).size() != 0u ||
         std::string(channel.operation_contract.idempotency).size() != 0u ||
@@ -335,6 +463,16 @@ bool validateNativeProfileContract(std::string *error) {
             observed.kind != contract::ChannelKind::kStreamOut ||
             std::string(observed.channel_id) == binding.channel_id) {
           return fail(error, "Mecanum diagnostic observes binding is invalid");
+        }
+      }
+      if (positioning_health) {
+        const std::set<std::string> expected{
+            "state.imu", "vrpn.position", "vrpn.velocity"};
+        const std::set<std::string> observed(
+            channel.observes, channel.observes + channel.observes_count);
+        if (observed != expected) {
+          return fail(error,
+                      "Mecanum positioning health observes binding drifted");
         }
       }
     } else {
@@ -401,6 +539,13 @@ bool validateNativeProfileContract(std::string *error) {
       std::string(motion_endpoint->ros_type) != "geometry_msgs/Twist" ||
       motion_endpoint->scope != contract::EndpointScope::kRobotNamespace) {
     return fail(error, "Mecanum motion-intent output topic binding drifted");
+  }
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve;
+  if (!loadPositioningHealthConfig(contract::kProfileId, &positioning_config,
+                                   error) ||
+      !loadBatteryCurve(contract::kProfileId, &battery_curve, error)) {
+    return false;
   }
   if (error != nullptr)
     error->clear();
@@ -501,6 +646,13 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
          "native endpoints");
     return nullptr;
   }
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve;
+  if (!loadPositioningHealthConfig(config.profile_id, &positioning_config,
+                                   error) ||
+      !loadBatteryCurve(config.profile_id, &battery_curve, error)) {
+    return nullptr;
+  }
 
   auto runtime = std::shared_ptr<RobotRuntime>(
       new RobotRuntime(std::move(node_handle), config.robot_id,
@@ -511,6 +663,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(vrpn_velocity_endpoint),
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint), std::move(voltage_endpoint),
+                       positioning_config, std::move(battery_curve),
                        std::move(emitter)));
   try {
     if (!runtime->install(error)) {
@@ -535,6 +688,10 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
+                           xgc2_ros1_robot_adapter::PositioningHealthConfig
+                               positioning_config,
+                           std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint>
+                               battery_curve,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
@@ -548,7 +705,9 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
-      voltage_endpoint_(std::move(voltage_endpoint)) {}
+      voltage_endpoint_(std::move(voltage_endpoint)),
+      positioning_health_(positioning_config),
+      battery_curve_(std::move(battery_curve)) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -824,6 +983,9 @@ void RobotRuntime::poseCallback(
     std::lock_guard<std::mutex> lock(mutex_);
     vrpn_orientation_ = message->pose.orientation;
     has_vrpn_orientation_ = true;
+    positioning_health_.recordPose(
+        now.toSec(), message->pose.position.x, message->pose.position.y,
+        message->pose.position.z);
     recordSourceLocked("vrpn.position", now);
     if (channelEnabled("vrpn.position") &&
         shouldEmitLocked("vrpn.position", now)) {
@@ -916,9 +1078,18 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
     recordSourceLocked("state.power", now);
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
+      payload.set_percentage_state(
+          xgc::semantic::common::v1::PowerStatus::PERCENTAGE_STATE_UNAVAILABLE);
       if (std::isfinite(voltage)) {
         payload.set_voltage_v(voltage);
-        payload.set_percentage(mecanumBatteryPercentage(voltage));
+        double percentage = 0.0;
+        if (xgc2_ros1_robot_adapter::batteryPercentage(
+                battery_curve_, voltage, &percentage)) {
+          payload.set_percentage(percentage);
+          payload.set_percentage_state(
+              xgc::semantic::common::v1::PowerStatus::
+                  PERCENTAGE_STATE_AVAILABLE);
+        }
       }
       output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
       recordOutputLocked("state.power");
@@ -938,6 +1109,9 @@ void RobotRuntime::vrpnVelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    positioning_health_.recordVelocity(
+        now.toSec(), message->twist.linear.x, message->twist.linear.y,
+        message->twist.linear.z);
     if (required_channels_.count("vrpn.velocity") != 0u)
       recordSourceLocked("vrpn.velocity", now);
     if (required_channels_.count("vrpn.speed") != 0u)
@@ -987,9 +1161,39 @@ void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
   std::vector<xgc::robot::v1::RobotMessage> messages;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    emitHealthLocked(now, &messages);
     emitStreamHealthLocked(now, &messages);
   }
   emit(std::move(messages));
+}
+
+void RobotRuntime::emitHealthLocked(
+    const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *messages) {
+  if (!channelEnabled("state.health") ||
+      !shouldEmitLocked("state.health", now)) {
+    return;
+  }
+  const auto imu = sources_.find("state.imu");
+  const bool imu_observed =
+      imu != sources_.end() && !imu->second.last_seen.isZero();
+  const bool imu_fresh = sourceFreshLocked("state.imu", now);
+  xgc::semantic::common::v1::VehicleHealth payload;
+  payload.set_online(imu_fresh);
+  setPositioningHealth(positioning_health_.evaluate(now.toSec()),
+                       payload.mutable_positioning());
+  if (!imu_observed) {
+    addFault(&payload, "mecanum.imu.missing",
+             "Mecanum IMU has not been observed", 2);
+  } else if (!imu_fresh) {
+    addFault(&payload, "mecanum.imu.stale",
+             "Mecanum IMU exceeded its freshness limit", 2);
+  }
+  payload.set_summary(imu_fresh ? "Mecanum on-board telemetry is healthy"
+                                : "Mecanum on-board telemetry is missing or stale");
+  messages->push_back(
+      makeEnvelopeLocked("state.health", ros::Time::now(), payload));
+  recordOutputLocked("state.health");
 }
 
 void RobotRuntime::emitStreamHealthLocked(

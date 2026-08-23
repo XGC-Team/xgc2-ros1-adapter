@@ -183,6 +183,115 @@ double channelStaleAfterSeconds(const std::string &profile_id,
   return static_cast<double>(channel.stale_after_millis) / 1000.0;
 }
 
+bool loadPositioningHealthConfig(
+    const std::string &profile_id,
+    xgc2_ros1_robot_adapter::PositioningHealthConfig *config,
+    std::string *error) {
+  if (config == nullptr)
+    return fail(error, "positioning health configuration output is required");
+  contract::ChannelMetadata health{};
+  std::int64_t window_millis = 0;
+  std::int64_t minimum_samples = 0;
+  double stationary_speed_threshold_mps = 0.0;
+  double maximum_position_spread_m = 0.0;
+  if (!contract::channelMetadata(profile_id, "state.health", &health) ||
+      !contract::channelPolicyInteger(health, "positioning_window_ms",
+                                      &window_millis) ||
+      !contract::channelPolicyInteger(
+          health, "positioning_minimum_samples", &minimum_samples) ||
+      !contract::channelPolicyNumber(
+          health, "positioning_stationary_speed_threshold_mps",
+          &stationary_speed_threshold_mps) ||
+      !contract::channelPolicyNumber(
+          health, "positioning_maximum_spread_m",
+          &maximum_position_spread_m) ||
+      window_millis <= 0 || minimum_samples < 2) {
+    return fail(error, "Scout positioning health policy is incomplete");
+  }
+  config->window_seconds = static_cast<double>(window_millis) / 1000.0;
+  config->minimum_samples = static_cast<std::size_t>(minimum_samples);
+  config->stationary_speed_threshold_mps = stationary_speed_threshold_mps;
+  config->maximum_position_spread_m = maximum_position_spread_m;
+  config->vrpn_timeout_seconds =
+      channelStaleAfterSeconds(profile_id, "vrpn.position");
+  return xgc2_ros1_robot_adapter::validPositioningHealthConfig(*config, error);
+}
+
+bool loadBatteryCurve(
+    const std::string &profile_id,
+    std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> *curve,
+    std::string *error) {
+  contract::ChannelMetadata power{};
+  if (!contract::channelMetadata(profile_id, "state.power", &power))
+    return fail(error, "Scout power channel is missing");
+  const auto *policy = contract::channelPolicy(
+      power, "battery_voltage_percentage_curve");
+  if (policy == nullptr) {
+    curve->clear();
+    return true;
+  }
+  const char *const *entries = nullptr;
+  std::size_t count = 0u;
+  if (!contract::channelPolicyStringArray(
+          power, "battery_voltage_percentage_curve", &entries, &count)) {
+    return fail(error, "Scout battery curve policy must be a string array");
+  }
+  return xgc2_ros1_robot_adapter::parseBatteryCurve(entries, count, curve,
+                                                     error);
+}
+
+void setPositioningHealth(
+    const xgc2_ros1_robot_adapter::PositioningHealthResult &result,
+    xgc::semantic::common::v1::PositioningHealth *payload) {
+  using Health = xgc::semantic::common::v1::PositioningHealth;
+  using Reason = xgc2_ros1_robot_adapter::PositioningHealthReason;
+  using State = xgc2_ros1_robot_adapter::PositioningHealthState;
+  switch (result.state) {
+  case State::kWarmingUp:
+    payload->set_state(Health::POSITIONING_STATE_WARMING_UP);
+    break;
+  case State::kStable:
+    payload->set_state(Health::POSITIONING_STATE_STABLE);
+    break;
+  case State::kJittering:
+    payload->set_state(Health::POSITIONING_STATE_JITTERING);
+    break;
+  case State::kMoving:
+    payload->set_state(Health::POSITIONING_STATE_MOVING);
+    break;
+  case State::kTimedOut:
+    payload->set_state(Health::POSITIONING_STATE_TIMED_OUT);
+    break;
+  case State::kUnspecified:
+    payload->set_state(Health::POSITIONING_STATE_UNSPECIFIED);
+    break;
+  }
+  switch (result.reason) {
+  case Reason::kInsufficientSamples:
+    payload->set_reason(Health::POSITIONING_REASON_INSUFFICIENT_SAMPLES);
+    break;
+  case Reason::kStationaryWindowStable:
+    payload->set_reason(Health::POSITIONING_REASON_STATIONARY_WINDOW_STABLE);
+    break;
+  case Reason::kStationaryJitterExceeded:
+    payload->set_reason(
+        Health::POSITIONING_REASON_STATIONARY_JITTER_EXCEEDED);
+    break;
+  case Reason::kRobotMoving:
+    payload->set_reason(Health::POSITIONING_REASON_ROBOT_MOVING);
+    break;
+  case Reason::kVrpnTimeout:
+    payload->set_reason(Health::POSITIONING_REASON_VRPN_TIMEOUT);
+    break;
+  case Reason::kUnspecified:
+    payload->set_reason(Health::POSITIONING_REASON_UNSPECIFIED);
+    break;
+  }
+  payload->set_observed_age_ms(result.observed_age_ms);
+  payload->set_window_spread_m(result.window_spread_m);
+  payload->set_sample_count(static_cast<std::uint32_t>(result.sample_count));
+}
+
 } // namespace
 
 std::string topicName(const std::string &robot_namespace,
@@ -284,15 +393,6 @@ double vrpnForwardSpeedMetersPerSecond(
          body_x_world_z * velocity_z;
 }
 
-double scoutBatteryPercentage(double voltage_v) {
-  constexpr double kEmptyVoltage = 20.5;
-  constexpr double kFullVoltage = 29.2;
-  if (!std::isfinite(voltage_v))
-    return 0.0;
-  return std::max(0.0, std::min(1.0, (voltage_v - kEmptyVoltage) /
-                                         (kFullVoltage - kEmptyVoltage)));
-}
-
 std::uint32_t packScoutChassisState(unsigned control_mode, unsigned base_state,
                                     unsigned fault_code) {
   return (control_mode & 0xFFu) | ((base_state & 0xFFu) << 8) |
@@ -312,12 +412,10 @@ xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode) {
   using Status = xgc::semantic::ground::v1::ChassisStatus;
   switch (native_mode) {
-  case 0u:
-    return Status::CONTROL_MODE_REMOTE;
   case 1u:
     return Status::CONTROL_MODE_COMMAND_CAN;
-  case 2u:
-    return Status::CONTROL_MODE_COMMAND_UART;
+  case 3u:
+    return Status::CONTROL_MODE_REMOTE;
   default:
     return Status::CONTROL_MODE_UNSPECIFIED;
   }
@@ -346,13 +444,30 @@ bool validateNativeProfileContract(std::string *error) {
   for (const auto &binding : kNativeBindings) {
     contract::ChannelMetadata channel{};
     if (!contract::channelMetadata(contract::kProfileId, binding.channel_id,
-                                   &channel) ||
-        channel.kind != contract::ChannelKind::kStreamOut ||
+                                   &channel)) {
+      return fail(error, std::string("Scout native channel is missing: ") +
+                             binding.channel_id);
+    }
+    const std::string channel_id(binding.channel_id);
+    const bool positioning_health = channel_id == "state.health";
+    const bool power = channel_id == "state.power";
+    bool invalid_policy =
+        positioning_health ? channel.policy_count != 4u
+                           : power ? channel.policy_count > 1u
+                                   : channel.policy_count != 0u;
+    if (power && channel.policy_count == 1u) {
+      const auto *curve = contract::channelPolicy(
+          channel, "battery_voltage_percentage_curve");
+      invalid_policy =
+          curve == nullptr ||
+          curve->kind != contract::PolicyValueKind::kStringArray;
+    }
+    if (channel.kind != contract::ChannelKind::kStreamOut ||
         std::string(channel.processor) != binding.processor ||
         channel.input_message_id != 0u || channel.output_message_id == 0u ||
         channel.output_rate_hz <= 0.0 ||
         channel.operation_timeout_millis != 0u ||
-        channel.stale_after_millis == 0u || channel.policy_count != 0u ||
+        channel.stale_after_millis == 0u || invalid_policy ||
         std::string(channel.operation_id).size() != 0u ||
         std::string(channel.operation_contract.side_effect).size() != 0u ||
         std::string(channel.operation_contract.idempotency).size() != 0u ||
@@ -380,9 +495,9 @@ bool validateNativeProfileContract(std::string *error) {
         }
       }
     } else {
-      const bool fused_speed = std::string(binding.channel_id) == "vrpn.speed";
+      const bool fused_speed = channel_id == "vrpn.speed";
       if (channel.endpoint_count != (fused_speed ? 2u : 1u) ||
-          channel.observes_count != 0u) {
+          channel.observes_count != (positioning_health ? 3u : 0u)) {
         return fail(error, std::string("Scout endpoint binding drifted: ") +
                                binding.channel_id);
       }
@@ -403,6 +518,15 @@ bool validateNativeProfileContract(std::string *error) {
             std::string(pose_endpoint->name_template).empty()) {
           return fail(error,
                       "Scout VRPN speed pose binding drifted");
+        }
+      }
+      if (positioning_health) {
+        const std::set<std::string> expected{
+            "state.imu", "vrpn.position", "vrpn.velocity"};
+        const std::set<std::string> observed(
+            channel.observes, channel.observes + channel.observes_count);
+        if (observed != expected) {
+          return fail(error, "Scout positioning health observes binding drifted");
         }
       }
     }
@@ -443,6 +567,13 @@ bool validateNativeProfileContract(std::string *error) {
       std::string(motion_endpoint->ros_type) != "geometry_msgs/Twist" ||
       motion_endpoint->scope != contract::EndpointScope::kRobotNamespace) {
     return fail(error, "Scout motion-intent output topic binding drifted");
+  }
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve;
+  if (!loadPositioningHealthConfig(contract::kProfileId, &positioning_config,
+                                   error) ||
+      !loadBatteryCurve(contract::kProfileId, &battery_curve, error)) {
+    return false;
   }
   if (error != nullptr)
     error->clear();
@@ -550,6 +681,13 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
          "native endpoints");
     return nullptr;
   }
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve;
+  if (!loadPositioningHealthConfig(config.profile_id, &positioning_config,
+                                   error) ||
+      !loadBatteryCurve(config.profile_id, &battery_curve, error)) {
+    return nullptr;
+  }
 
   auto runtime = std::shared_ptr<RobotRuntime>(
       new RobotRuntime(std::move(node_handle), config.robot_id,
@@ -561,6 +699,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint),
                        std::move(voltage_endpoint), std::move(chassis_endpoint),
+                       positioning_config, std::move(battery_curve),
                        std::move(emitter)));
   try {
     if (!runtime->install(error)) {
@@ -586,6 +725,10 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
                            std::string chassis_state_endpoint,
+                           xgc2_ros1_robot_adapter::PositioningHealthConfig
+                               positioning_config,
+                           std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint>
+                               battery_curve,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
@@ -600,7 +743,9 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
       voltage_endpoint_(std::move(voltage_endpoint)),
-      chassis_state_endpoint_(std::move(chassis_state_endpoint)) {}
+      chassis_state_endpoint_(std::move(chassis_state_endpoint)),
+      positioning_health_(positioning_config),
+      battery_curve_(std::move(battery_curve)) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -898,6 +1043,9 @@ void RobotRuntime::poseCallback(
     std::lock_guard<std::mutex> lock(mutex_);
     vrpn_orientation_ = message->pose.orientation;
     has_vrpn_orientation_ = true;
+    positioning_health_.recordPose(
+        now.toSec(), message->pose.position.x, message->pose.position.y,
+        message->pose.position.z);
     recordSourceLocked("vrpn.position", now);
     if (channelEnabled("vrpn.position") &&
         shouldEmitLocked("vrpn.position", now)) {
@@ -951,6 +1099,9 @@ void RobotRuntime::vrpnVelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    positioning_health_.recordVelocity(
+        now.toSec(), message->twist.linear.x, message->twist.linear.y,
+        message->twist.linear.z);
     if (required_channels_.count("vrpn.velocity") != 0u)
       recordSourceLocked("vrpn.velocity", now);
     if (required_channels_.count("vrpn.speed") != 0u)
@@ -1038,9 +1189,18 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
     recordSourceLocked("state.power", now);
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
+      payload.set_percentage_state(
+          xgc::semantic::common::v1::PowerStatus::PERCENTAGE_STATE_UNAVAILABLE);
       if (std::isfinite(voltage)) {
         payload.set_voltage_v(voltage);
-        payload.set_percentage(scoutBatteryPercentage(voltage));
+        double percentage = 0.0;
+        if (xgc2_ros1_robot_adapter::batteryPercentage(
+                battery_curve_, voltage, &percentage)) {
+          payload.set_percentage(percentage);
+          payload.set_percentage_state(
+              xgc::semantic::common::v1::PowerStatus::
+                  PERCENTAGE_STATE_AVAILABLE);
+        }
       }
       output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
       recordOutputLocked("state.power");
@@ -1111,6 +1271,8 @@ void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
       has_chassis_ && sourceFreshLocked("state.health", now);
   xgc::semantic::common::v1::VehicleHealth payload;
   payload.set_online(scoutIsOnline(status_fresh));
+  setPositioningHealth(positioning_health_.evaluate(now.toSec()),
+                       payload.mutable_positioning());
   if (!has_chassis_) {
     addFault(&payload, "scout.status.missing",
              "Scout chassis status has not been observed", 2);

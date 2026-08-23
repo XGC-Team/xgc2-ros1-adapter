@@ -477,6 +477,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 # Profile gates online on it and leaves VRPN to gate readiness.
                 "state.imu",
                 "state.power",
+                "state.health",
                 "operation.motion-intent",
                 "diagnostic.stream-health",
             },

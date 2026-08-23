@@ -48,6 +48,7 @@ function(xgc2_add_ros1_robot_common target_name)
 
   add_library(${target_name} STATIC
     ${protocol_sources}
+    "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/ground_health.cpp"
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_domain.cpp"
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/runtime_support.cpp"
   )

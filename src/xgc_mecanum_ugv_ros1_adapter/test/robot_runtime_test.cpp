@@ -36,12 +36,16 @@ TEST(RosNames, BuildsNamespacedMecanumTopics) {
   EXPECT_EQ("/ugv1/PowerVoltage", topicName("/ugv1", "PowerVoltage"));
 }
 
-TEST(BatteryProjection, UsesTheMecanum3SLinearVoltageModel) {
-  EXPECT_DOUBLE_EQ(0.0, mecanumBatteryPercentage(10.5));
-  EXPECT_DOUBLE_EQ(1.0, mecanumBatteryPercentage(12.6));
-  EXPECT_NEAR(0.88, mecanumBatteryPercentage(12.348), 1e-12);
-  EXPECT_DOUBLE_EQ(0.0, mecanumBatteryPercentage(9.0));
-  EXPECT_DOUBLE_EQ(1.0, mecanumBatteryPercentage(13.0));
+TEST(BatteryProjection, LeavesPercentageUnknownWithoutAnAuthoritativeCurve) {
+  contract::ChannelMetadata power{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power",
+                                        &power));
+  EXPECT_EQ(nullptr, contract::channelPolicy(
+                         power, "battery_voltage_percentage_curve"));
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> curve;
+  double percentage = 0.0;
+  EXPECT_FALSE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 12.0, &percentage));
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
@@ -209,7 +213,7 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
   ASSERT_NE(nullptr, channels);
-  ASSERT_EQ(8u, channel_count);
+  ASSERT_EQ(9u, channel_count);
 
   const std::vector<std::string> streams{
       "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",
@@ -247,10 +251,16 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   EXPECT_FALSE(contract::channelMetadata(
       contract::kProfileId, "diagnostic.channel-health", &diagnostics));
 
+  contract::ChannelMetadata health{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.health",
+                                        &health));
+  EXPECT_EQ(2005u, health.output_message_id);
+  EXPECT_DOUBLE_EQ(1.0, health.output_rate_hz);
+  EXPECT_EQ(3u, health.observes_count);
+  EXPECT_EQ(4u, health.policy_count);
+
   contract::ChannelMetadata forbidden{};
   EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.odom",
-                                         &forbidden));
-  EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.health",
                                          &forbidden));
   EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.chassis",
                                          &forbidden));

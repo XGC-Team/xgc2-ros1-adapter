@@ -18,6 +18,7 @@
 #include <ros/ros.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_mecanum_ugv_ros1_adapter {
@@ -35,7 +36,6 @@ double vrpnForwardSpeedMetersPerSecond(
     double velocity_x, double velocity_y, double velocity_z,
     double orientation_x, double orientation_y, double orientation_z,
     double orientation_w);
-double mecanumBatteryPercentage(double voltage_v);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
@@ -91,7 +91,10 @@ private:
                std::string mocap_rigid_body, std::string pose_endpoint,
                std::string vrpn_velocity_endpoint,
                std::string command_velocity_endpoint, std::string imu_endpoint,
-               std::string voltage_endpoint, EnvelopeEmitter emitter);
+               std::string voltage_endpoint,
+               xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
+               std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve,
+               EnvelopeEmitter emitter);
 
   bool install(std::string *error);
   bool beginCallback();
@@ -119,6 +122,8 @@ private:
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);
+  void emitHealthLocked(const ros::WallTime &now,
+                        std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitStreamHealthLocked(const ros::WallTime &now,
                               std::vector<xgc::robot::v1::RobotMessage> *messages);
 
@@ -137,6 +142,8 @@ private:
   const std::string command_velocity_endpoint_;
   const std::string imu_endpoint_;
   const std::string voltage_endpoint_;
+  xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
+  const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
 
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;

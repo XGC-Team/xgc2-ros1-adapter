@@ -133,6 +133,15 @@ channels:
       chassis_state:
         name: scout/chassis_state
         type: std_msgs/UInt32
+    observes:
+      - vrpn.position
+      - vrpn.velocity
+      - state.imu
+    policy:
+      positioning_window_ms: 1000
+      positioning_minimum_samples: 5
+      positioning_stationary_speed_threshold_mps: 0.05
+      positioning_maximum_spread_m: 0.03
 
   - id: state.chassis
     kind: stream_out

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <deque>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -204,12 +205,100 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
       vrpnForwardSpeedMetersPerSecond(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
-TEST(BatteryProjection, UsesTheManualLinearVoltageModel) {
-  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(20.5));
-  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(29.2));
-  EXPECT_NEAR(0.95, scoutBatteryPercentage(28.765), 1e-12);
-  EXPECT_DOUBLE_EQ(0.0, scoutBatteryPercentage(18.0));
-  EXPECT_DOUBLE_EQ(1.0, scoutBatteryPercentage(32.0));
+TEST(BatteryProjection, UsesOnlyConfiguredCurvesAndKeepsMissingCurvesUnknown) {
+  contract::ChannelMetadata power{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power",
+                                        &power));
+  EXPECT_EQ(nullptr, contract::channelPolicy(
+                         power, "battery_voltage_percentage_curve"));
+
+  std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> curve;
+  double percentage = 0.0;
+  EXPECT_FALSE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 24.0, &percentage));
+
+  const char *entries[] = {"10.0=0.0", "11.0=0.4", "12.0=1.0"};
+  std::string error;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::parseBatteryCurve(
+      entries, 3u, &curve, &error)) << error;
+  EXPECT_TRUE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 9.0, &percentage));
+  EXPECT_DOUBLE_EQ(0.0, percentage);
+  EXPECT_TRUE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 11.5, &percentage));
+  EXPECT_NEAR(0.7, percentage, 1e-12);
+  EXPECT_TRUE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 13.0, &percentage));
+  EXPECT_DOUBLE_EQ(1.0, percentage);
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::batteryPercentage(
+      curve, std::numeric_limits<double>::quiet_NaN(), &percentage));
+  EXPECT_TRUE(
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 11.0, &percentage));
+  EXPECT_DOUBLE_EQ(0.4, percentage);
+}
+
+TEST(PositioningHealth, DistinguishesStationaryJitterMotionTimeoutAndRecovery) {
+  using xgc2_ros1_robot_adapter::PositioningHealthConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthReason;
+  using xgc2_ros1_robot_adapter::PositioningHealthState;
+  using xgc2_ros1_robot_adapter::PositioningHealthWindow;
+  const PositioningHealthConfig config{1.0, 5u, 0.05, 0.03, 1.0};
+
+  PositioningHealthWindow stable(config);
+  for (int index = 0; index < 5; ++index) {
+    stable.recordPose(index * 0.1, index % 2 == 0 ? 0.002 : -0.002,
+                      0.001, 0.0);
+  }
+  stable.recordVelocity(0.4, 0.0, 0.0, 0.0);
+  const auto stable_result = stable.evaluate(0.45);
+  EXPECT_EQ(PositioningHealthState::kStable, stable_result.state);
+  EXPECT_EQ(PositioningHealthReason::kStationaryWindowStable,
+            stable_result.reason);
+  EXPECT_EQ(50u, stable_result.observed_age_ms);
+
+  PositioningHealthWindow jitter(config);
+  const double jitter_x[] = {0.0, 0.05, -0.05, 0.04, -0.04};
+  for (int index = 0; index < 5; ++index)
+    jitter.recordPose(index * 0.1, jitter_x[index], 0.0, 0.0);
+  jitter.recordVelocity(0.4, 0.0, 0.0, 0.0);
+  const auto jitter_result = jitter.evaluate(0.4);
+  EXPECT_EQ(PositioningHealthState::kJittering, jitter_result.state);
+  EXPECT_EQ(PositioningHealthReason::kStationaryJitterExceeded,
+            jitter_result.reason);
+
+  PositioningHealthWindow moving(config);
+  for (int index = 0; index < 5; ++index)
+    moving.recordPose(index * 0.1, index * 0.1, 0.0, 0.0);
+  moving.recordVelocity(0.4, 0.5, 0.0, 0.0);
+  const auto moving_result = moving.evaluate(0.4);
+  EXPECT_EQ(PositioningHealthState::kMoving, moving_result.state);
+  EXPECT_EQ(PositioningHealthReason::kRobotMoving, moving_result.reason);
+  moving.recordVelocity(0.5, 0.0, 0.0, 0.0);
+  moving.recordPose(0.6, 0.4, 0.0, 0.0);
+  const auto stopped_result = moving.evaluate(0.6);
+  EXPECT_EQ(PositioningHealthState::kWarmingUp, stopped_result.state);
+  EXPECT_EQ(PositioningHealthReason::kInsufficientSamples,
+            stopped_result.reason);
+  for (int index = 1; index < 5; ++index)
+    moving.recordPose(0.6 + index * 0.1, 0.4 + index * 0.001, 0.0, 0.0);
+  moving.recordVelocity(1.0, 0.0, 0.0, 0.0);
+  EXPECT_EQ(PositioningHealthState::kStable, moving.evaluate(1.0).state);
+
+  const auto timeout_result = stable.evaluate(1.6);
+  EXPECT_EQ(PositioningHealthState::kTimedOut, timeout_result.state);
+  EXPECT_EQ(PositioningHealthReason::kVrpnTimeout, timeout_result.reason);
+  EXPECT_EQ(1200u, timeout_result.observed_age_ms);
+
+  for (int index = 0; index < 5; ++index) {
+    stable.recordPose(1.7 + index * 0.1, 1.0 + index * 0.001, 2.0, 0.0);
+  }
+  stable.recordVelocity(2.1, 0.0, 0.0, 0.0);
+  EXPECT_EQ(PositioningHealthState::kStable, stable.evaluate(2.1).state);
+
+  for (int index = 0; index < 5; ++index)
+    jitter.recordPose(1.5 + index * 0.1, 3.0 + index * 0.001, 0.0, 0.0);
+  jitter.recordVelocity(1.9, 0.0, 0.0, 0.0);
+  EXPECT_EQ(PositioningHealthState::kStable, jitter.evaluate(1.9).state);
 }
 
 TEST(ChassisState, PacksAndUnpacksModeBaseAndFault) {
@@ -225,9 +314,10 @@ TEST(ChassisState, PacksAndUnpacksModeBaseAndFault) {
 
 TEST(ChassisProjection, MapsNativeScoutControlModes) {
   using Status = xgc::semantic::ground::v1::ChassisStatus;
-  EXPECT_EQ(Status::CONTROL_MODE_REMOTE, scoutControlMode(0));
   EXPECT_EQ(Status::CONTROL_MODE_COMMAND_CAN, scoutControlMode(1));
-  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_UART, scoutControlMode(2));
+  EXPECT_EQ(Status::CONTROL_MODE_REMOTE, scoutControlMode(3));
+  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(0));
+  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(2));
   EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(255));
 }
 
@@ -272,6 +362,13 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
                                          "diagnostic.channel-health",
                                          &diagnostics));
 
+  contract::ChannelMetadata health;
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v6", "state.health",
+                                        &health));
+  EXPECT_EQ(2005u, health.output_message_id);
+  EXPECT_EQ(3u, health.observes_count);
+  EXPECT_EQ(4u, health.policy_count);
+
   contract::ChannelMetadata unknown;
   EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v6", "operation.arm",
                                          &unknown));
@@ -299,6 +396,10 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 TEST(InstalledContract, ContainsScoutMotionButNotPx4Operations) {
   contract::MessageMetadata metadata;
   EXPECT_TRUE(contract::messageMetadata(2001, &metadata));
+  ASSERT_TRUE(contract::messageMetadata(2004, &metadata));
+  EXPECT_EQ(2u, metadata.version);
+  ASSERT_TRUE(contract::messageMetadata(2005, &metadata));
+  EXPECT_EQ(2u, metadata.version);
   EXPECT_TRUE(contract::messageMetadata(3102, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3205, &metadata));
   EXPECT_EQ("xgc.semantic.common.v1.RemoteControlIntentRequest",
