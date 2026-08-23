@@ -742,6 +742,29 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-12~focal}"',
+            docker_build,
+        )
+        self.assertIn(
+            "https://github.com/XGC-Team/xgc2-adapter-runtime-client-cpp.git",
+            docker_build,
+        )
+        self.assertIn(
+            "362072586671e6d052fb5207b3bfe560ea26da43",
+            docker_build,
+        )
+        self.assertIn(
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-12~focal}"',
+            installed_gate,
+        )
+        bootstrap_contract = docker_build + installed_gate
+        for retired_literal in (
+            "0.6.0-" + "7~focal",
+            "https://github.com/" + "lxk36/xgc2-adapter-runtime-client-cpp.git",
+            "805814559502ac6d0a336173401c75dd" + "9c9e3cc4",
+        ):
+            self.assertEqual(bootstrap_contract.count(retired_literal), 0)
+        self.assertIn(
             'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-13~focal}"',
             docker_build,
         )
