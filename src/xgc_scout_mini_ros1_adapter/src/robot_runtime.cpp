@@ -369,6 +369,26 @@ bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
 
 bool scoutIsOnline(bool status_fresh) { return status_fresh; }
 
+StreamRateEstimate updateStreamRateEstimate(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh) {
+  if (!source_fresh)
+    return {};
+
+  StreamRateEstimate next = previous;
+  if (!std::isfinite(elapsed_seconds) || elapsed_seconds <= 0.0)
+    return next;
+  if (source_samples > 0u) {
+    next.source_rate_hz =
+        static_cast<double>(source_samples) / elapsed_seconds;
+  }
+  if (output_samples > 0u) {
+    next.output_rate_hz =
+        static_cast<double>(output_samples) / elapsed_seconds;
+  }
+  return next;
+}
+
 double vrpnForwardSpeedMetersPerSecond(
     double velocity_x, double velocity_y, double velocity_z,
     double orientation_x, double orientation_y, double orientation_z,
@@ -1379,12 +1399,13 @@ void RobotRuntime::emitStreamHealthLocked(
     const double elapsed = now >= source.window_started
                                ? (now - source.window_started).toSec()
                                : 0.0;
-    if (elapsed > 0.0) {
-      source.source_rate_hz =
-          static_cast<double>(source.source_samples) / elapsed;
-      source.output_rate_hz =
-          static_cast<double>(source.output_samples) / elapsed;
-    }
+    const bool fresh =
+        sourceIsFresh(source.last_seen, now, source.stale_after_seconds);
+    const auto rates = updateStreamRateEstimate(
+        {source.source_rate_hz, source.output_rate_hz}, source.source_samples,
+        source.output_samples, elapsed, fresh);
+    source.source_rate_hz = rates.source_rate_hz;
+    source.output_rate_hz = rates.output_rate_hz;
     source.source_samples = 0;
     source.output_samples = 0;
     source.window_started = now;
@@ -1395,8 +1416,7 @@ void RobotRuntime::emitStreamHealthLocked(
     payload->set_output_rate_hz(source.output_rate_hz);
     payload->set_dropped_samples(source.dropped_samples);
     payload->set_source_age_ms(sourceAgeMillisLocked(channel_id, now));
-    payload->set_stale(
-        !sourceIsFresh(source.last_seen, now, source.stale_after_seconds));
+    payload->set_stale(!fresh);
   }
   messages->push_back(makeEnvelopeLocked("diagnostic.stream-health",
                                          ros::Time::now(), report));

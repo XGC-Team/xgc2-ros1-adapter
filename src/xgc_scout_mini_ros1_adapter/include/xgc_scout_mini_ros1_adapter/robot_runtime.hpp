@@ -36,6 +36,13 @@ bool resolveMotionCommandTopic(
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
 bool scoutIsOnline(bool status_fresh);
+struct StreamRateEstimate {
+  double source_rate_hz = 0.0;
+  double output_rate_hz = 0.0;
+};
+StreamRateEstimate updateStreamRateEstimate(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh);
 double vrpnForwardSpeedMetersPerSecond(
     double velocity_x, double velocity_y, double velocity_z,
     double orientation_x, double orientation_y, double orientation_z,

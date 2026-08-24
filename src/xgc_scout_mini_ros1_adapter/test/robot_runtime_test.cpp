@@ -187,6 +187,25 @@ TEST(OnlineProjection, FollowsTheDeclaredChassisStatusInput) {
   EXPECT_FALSE(scoutIsOnline(false));
 }
 
+TEST(StreamRateEstimate, RetainsCredibleRatesAcrossFreshEmptyWindows) {
+  const auto observed = updateStreamRateEstimate({}, 1u, 1u, 1.1, true);
+  EXPECT_NEAR(0.909, observed.source_rate_hz, 0.001);
+  EXPECT_NEAR(0.909, observed.output_rate_hz, 0.001);
+
+  const auto empty =
+      updateStreamRateEstimate(observed, 0u, 0u, 1.0, true);
+  EXPECT_DOUBLE_EQ(observed.source_rate_hz, empty.source_rate_hz);
+  EXPECT_DOUBLE_EQ(observed.output_rate_hz, empty.output_rate_hz);
+}
+
+TEST(StreamRateEstimate, ClearsRetainedRatesWhenTheSourceIsStale) {
+  const StreamRateEstimate previous{0.9, 1.0};
+  const auto stale =
+      updateStreamRateEstimate(previous, 0u, 0u, 1.0, false);
+  EXPECT_DOUBLE_EQ(0.0, stale.source_rate_hz);
+  EXPECT_DOUBLE_EQ(0.0, stale.output_rate_hz);
+}
+
 TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
   const double half_sqrt_two = std::sqrt(0.5);
   EXPECT_DOUBLE_EQ(
