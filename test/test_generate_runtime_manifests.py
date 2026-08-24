@@ -745,7 +745,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-12~focal}"',
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-13~focal}"',
             docker_build,
         )
         self.assertIn(
@@ -753,11 +753,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "362072586671e6d052fb5207b3bfe560ea26da43",
+            "320de43c8c71dded21936f7ecd23f66cb17a13a2",
             docker_build,
         )
         self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-12~focal}"',
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-13~focal}"',
             installed_gate,
         )
         bootstrap_contract = docker_build + installed_gate
@@ -791,8 +791,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-23")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-23")
+        self.assertEqual(product["version"], "0.5.0-24")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-24")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
