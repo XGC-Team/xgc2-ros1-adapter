@@ -19,6 +19,7 @@
 #include <std_msgs/UInt32.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/common/v1/acceleration.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
@@ -41,6 +42,8 @@ double vrpnForwardSpeedMetersPerSecond(
     double orientation_w);
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
+xgc::semantic::common::v1::AccelerationEstimate
+vrpnAccelerationEstimate(const geometry_msgs::TwistStamped &message);
 
 struct ScoutChassisState {
   unsigned control_mode = 0;
@@ -105,6 +108,7 @@ private:
                std::set<std::string> required_channels,
                std::string mocap_rigid_body, std::string pose_endpoint,
                std::string vrpn_velocity_endpoint,
+               std::string vrpn_acceleration_endpoint,
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint, std::string chassis_state_endpoint,
                xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
@@ -134,6 +138,8 @@ private:
   void poseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
+  void vrpnAccelerationCallback(
+      const geometry_msgs::TwistStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);
@@ -155,6 +161,7 @@ private:
 
   const std::string pose_endpoint_;
   const std::string vrpn_velocity_endpoint_;
+  const std::string vrpn_acceleration_endpoint_;
   const std::string command_velocity_endpoint_;
   const std::string imu_endpoint_;
   const std::string voltage_endpoint_;
@@ -179,6 +186,7 @@ private:
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber vrpn_velocity_subscriber_;
+  ros::Subscriber vrpn_acceleration_subscriber_;
   ros::Subscriber command_velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber voltage_subscriber_;

@@ -21,9 +21,9 @@ SCHEMA_PATH = (
     / "robot-adapter-profile-v4.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v7.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v6.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v7.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v3.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v4.yaml"
 )
 B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE_PATH = (
@@ -47,6 +47,7 @@ MESSAGE_ROLES = {
     2005: "telemetry",
     2006: "telemetry",
     2007: "telemetry",
+    2008: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
     3001: "telemetry",
@@ -70,6 +71,7 @@ TYPE_NAMES = {
     2005: "xgc.semantic.common.v1.VehicleHealth",
     2006: "xgc.semantic.common.v1.SpeedEstimate",
     2007: "xgc.semantic.common.v1.DistanceEstimate",
+    2008: "xgc.semantic.common.v1.AccelerationEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3103: "xgc.semantic.ground.v1.LocomotionStatus",
@@ -332,7 +334,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v6"]
+        scout = scout_profiles["scout-mini.ros1.v7"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -365,6 +367,19 @@ class ContractGeneratorTest(unittest.TestCase):
                 "ros_type": "geometry_msgs/TwistStamped",
                 "scope": "global",
             },
+        )
+        self.assertEqual(
+            scout_channels["vrpn.acceleration"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "acceleration",
+                "name_template": "vrpn_client_node/{mocap_rigid_body}/accel",
+                "ros_type": "geometry_msgs/TwistStamped",
+                "scope": "global",
+            },
+        )
+        self.assertEqual(
+            scout_channels["vrpn.acceleration"]["output_message_id"], 2008
         )
         self.assertEqual(
             scout_channels["state.power"]["endpoints"][0],
@@ -451,7 +466,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v3"]
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v4"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -471,6 +486,7 @@ class ContractGeneratorTest(unittest.TestCase):
             {
                 "vrpn.position",
                 "vrpn.velocity",
+                "vrpn.acceleration",
                 "vrpn.speed",
                 "command.velocity",
                 # The on-board IMU is this chassis's liveness stream: the Robot
@@ -495,6 +511,7 @@ class ContractGeneratorTest(unittest.TestCase):
         for channel_id in (
             "vrpn.position",
             "vrpn.velocity",
+            "vrpn.acceleration",
             "vrpn.speed",
             "command.velocity",
             "diagnostic.stream-health",
@@ -502,6 +519,11 @@ class ContractGeneratorTest(unittest.TestCase):
             self.assertEqual(mecanum_channels[channel_id]["output_rate_hz"], 10)
         self.assertEqual(mecanum_channels["vrpn.position"]["output_message_id"], 2001)
         self.assertEqual(mecanum_channels["vrpn.velocity"]["output_message_id"], 2002)
+        self.assertEqual(mecanum_channels["vrpn.acceleration"]["output_message_id"], 2008)
+        self.assertEqual(
+            mecanum_channels["vrpn.acceleration"]["endpoints"][0]["name_template"],
+            "vrpn_client_node/{mocap_rigid_body}/accel",
+        )
         self.assertEqual(mecanum_channels["vrpn.speed"]["output_message_id"], 2006)
         self.assertEqual(mecanum_channels["command.velocity"]["output_message_id"], 2002)
         self.assertEqual(mecanum_channels["state.imu"]["output_message_id"], 2003)
@@ -594,7 +616,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v3"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v4"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
 
@@ -1162,6 +1184,9 @@ int main() {
         channels["vrpn.velocity"]["inputs"]["velocity"]["name"] = (
             "vrpn_client_node/fixture/twist"
         )
+        channels["vrpn.acceleration"]["inputs"]["acceleration"]["name"] = (
+            "vrpn_client_node/fixture/accel"
+        )
         channels["vrpn.speed"]["inputs"]["velocity"]["name"] = (
             "vrpn_client_node/fixture/twist"
         )
@@ -1181,7 +1206,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v6") {\n'
+            'if (profile_id == "scout-mini.ros1.v7") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1237,7 +1262,7 @@ int main() {
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
                 self.assertNotIn("px4.multirotor.ros1.v7", source)
-                self.assertNotIn("scout-mini.ros1.v6", source)
+                self.assertNotIn("scout-mini.ros1.v7", source)
 
         # Adapter Runtime applications consume a supervisor bootstrap. The
         # separately packaged onboard Mocap Rotor Forwarder is intentionally

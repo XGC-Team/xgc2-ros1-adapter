@@ -13,6 +13,7 @@ function(xgc2_add_ros1_robot_common target_name)
     xgc/semantic/aerial/v1/diagnostic.proto
     xgc/semantic/aerial/v1/flight.proto
     xgc/semantic/aerial/v1/setpoint.proto
+    xgc/semantic/common/v1/acceleration.proto
     xgc/semantic/common/v1/control.proto
     xgc/semantic/common/v1/telemetry.proto
     xgc/semantic/common/v1/types.proto

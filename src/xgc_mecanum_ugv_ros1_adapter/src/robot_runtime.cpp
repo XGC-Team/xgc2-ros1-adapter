@@ -93,12 +93,15 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 8u> kNativeBindings{{
+const std::array<NativeChannelBinding, 9u> kNativeBindings{{
     {"vrpn.position", "mecanum-ugv.vrpn-pose", "pose",
      "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
     {"vrpn.velocity", "mecanum-ugv.vrpn-velocity", "velocity",
      "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.VelocityEstimate",
      false},
+    {"vrpn.acceleration", "mecanum-ugv.vrpn-acceleration", "acceleration",
+     "geometry_msgs/TwistStamped",
+     "xgc.semantic.common.v1.AccelerationEstimate", false},
     {"vrpn.speed", "mecanum-ugv.vrpn-speed", "velocity",
      "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.SpeedEstimate",
      false},
@@ -392,6 +395,15 @@ double vrpnForwardSpeedMetersPerSecond(
          body_x_world_z * velocity_z;
 }
 
+xgc::semantic::common::v1::AccelerationEstimate
+vrpnAccelerationEstimate(const geometry_msgs::TwistStamped &message) {
+  xgc::semantic::common::v1::AccelerationEstimate payload;
+  payload.set_frame_id(message.header.frame_id);
+  copyVector(message.twist.linear, payload.mutable_linear());
+  copyVector(message.twist.angular, payload.mutable_angular());
+  return payload;
+}
+
 bool validateNativeProfileContract(std::string *error) {
   std::size_t parameter_count = 0u;
   const auto *parameters =
@@ -618,6 +630,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
 
   std::string pose_endpoint;
   std::string vrpn_velocity_endpoint;
+  std::string vrpn_acceleration_endpoint;
   std::string speed_endpoint;
   std::string speed_pose_endpoint;
   std::string command_velocity_endpoint;
@@ -627,6 +640,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
                             &vrpn_velocity_endpoint, error) ||
+      !resolveInputEndpoint(config, "vrpn.acceleration", "acceleration",
+                            &vrpn_acceleration_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.speed", "velocity",
                             &speed_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.speed", "pose",
@@ -661,6 +676,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(required_channels),
                        mocap_it->second, std::move(pose_endpoint),
                        std::move(vrpn_velocity_endpoint),
+                       std::move(vrpn_acceleration_endpoint),
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint), std::move(voltage_endpoint),
                        positioning_config, std::move(battery_curve),
@@ -685,6 +701,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string mocap_rigid_body,
                            std::string pose_endpoint,
                            std::string vrpn_velocity_endpoint,
+                           std::string vrpn_acceleration_endpoint,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
@@ -703,6 +720,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       emitter_(std::move(emitter)),
       pose_endpoint_(std::move(pose_endpoint)),
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
+      vrpn_acceleration_endpoint_(std::move(vrpn_acceleration_endpoint)),
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
       voltage_endpoint_(std::move(voltage_endpoint)),
@@ -747,6 +765,7 @@ void RobotRuntime::Stop() {
 
   pose_subscriber_.shutdown();
   vrpn_velocity_subscriber_.shutdown();
+  vrpn_acceleration_subscriber_.shutdown();
   command_velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
   voltage_subscriber_.shutdown();
@@ -810,6 +829,22 @@ bool RobotRuntime::install(std::string *error) {
               });
       if (!requireRosRegistration(vrpn_velocity_subscriber_,
                                   vrpn_velocity_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("vrpn.acceleration") != 0u) {
+      ensureSourceLocked(
+          "vrpn.acceleration",
+          channelStaleAfterSeconds(profile_id_, "vrpn.acceleration"));
+      vrpn_acceleration_subscriber_ =
+          node_handle_.subscribe<geometry_msgs::TwistStamped>(
+              vrpn_acceleration_endpoint_, 20,
+              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                if (const auto self = weak_self.lock()) {
+                  self->vrpnAccelerationCallback(message);
+                }
+              });
+      if (!requireRosRegistration(vrpn_acceleration_subscriber_,
+                                  vrpn_acceleration_endpoint_, error))
         return false;
     }
     if (required_channels_.count("command.velocity") != 0u) {
@@ -1149,6 +1184,29 @@ void RobotRuntime::vrpnVelocityCallback(
       recordOutputLocked("vrpn.speed");
     } else if (channelEnabled("vrpn.speed")) {
       ++sources_["vrpn.speed"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::vrpnAccelerationCallback(
+    const geometry_msgs::TwistStamped::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("vrpn.acceleration", now);
+    if (channelEnabled("vrpn.acceleration") &&
+        shouldEmitLocked("vrpn.acceleration", now)) {
+      output.push_back(makeEnvelopeLocked(
+          "vrpn.acceleration", message->header.stamp,
+          vrpnAccelerationEstimate(*message)));
+      recordOutputLocked("vrpn.acceleration");
+    } else if (channelEnabled("vrpn.acceleration")) {
+      ++sources_["vrpn.acceleration"].dropped_samples;
     }
   }
   emit(std::move(output));

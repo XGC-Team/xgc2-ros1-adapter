@@ -31,8 +31,8 @@ VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v7.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v6.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v3.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v7.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v4.yaml"
 B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mocap-rotor-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
@@ -58,6 +58,7 @@ MESSAGE_ROLES = {
     2005: "telemetry",
     2006: "telemetry",
     2007: "telemetry",
+    2008: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
     3001: "telemetry",
@@ -81,6 +82,7 @@ TYPE_NAMES = {
     2005: "xgc.semantic.common.v1.VehicleHealth",
     2006: "xgc.semantic.common.v1.SpeedEstimate",
     2007: "xgc.semantic.common.v1.DistanceEstimate",
+    2008: "xgc.semantic.common.v1.AccelerationEstimate",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3103: "xgc.semantic.ground.v1.LocomotionStatus",
@@ -295,7 +297,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v3")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v4")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
@@ -314,6 +316,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "state.health",
                 "state.imu",
                 "state.power",
+                "vrpn.acceleration",
                 "vrpn.position",
                 "vrpn.speed",
                 "vrpn.velocity",

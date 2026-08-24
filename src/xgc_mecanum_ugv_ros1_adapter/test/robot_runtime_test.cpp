@@ -204,19 +204,40 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoSignedBodyXAxis) {
       1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
+TEST(VrpnAccelerationProjection, PreservesFrameAndBothTwistVectors) {
+  geometry_msgs::TwistStamped source;
+  source.header.frame_id = "world";
+  source.twist.linear.x = 1.25;
+  source.twist.linear.y = -2.5;
+  source.twist.linear.z = 3.75;
+  source.twist.angular.x = -0.1;
+  source.twist.angular.y = 0.2;
+  source.twist.angular.z = -0.3;
+
+  const auto estimate = vrpnAccelerationEstimate(source);
+  EXPECT_EQ("world", estimate.frame_id());
+  EXPECT_DOUBLE_EQ(1.25, estimate.linear().x());
+  EXPECT_DOUBLE_EQ(-2.5, estimate.linear().y());
+  EXPECT_DOUBLE_EQ(3.75, estimate.linear().z());
+  EXPECT_DOUBLE_EQ(-0.1, estimate.angular().x());
+  EXPECT_DOUBLE_EQ(0.2, estimate.angular().y());
+  EXPECT_DOUBLE_EQ(-0.3, estimate.angular().z());
+}
+
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v3", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v4", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
   ASSERT_NE(nullptr, channels);
-  ASSERT_EQ(9u, channel_count);
+  ASSERT_EQ(10u, channel_count);
 
   const std::vector<std::string> streams{
-      "vrpn.position", "vrpn.velocity", "vrpn.speed", "command.velocity",
+      "vrpn.position", "vrpn.velocity", "vrpn.acceleration", "vrpn.speed",
+      "command.velocity",
       "diagnostic.stream-health"};
   for (const auto &channel_id : streams) {
     contract::ChannelMetadata channel{};
@@ -228,18 +249,22 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
 
   contract::ChannelMetadata position{};
   contract::ChannelMetadata raw_velocity{};
+  contract::ChannelMetadata acceleration{};
   contract::ChannelMetadata speed{};
   contract::ChannelMetadata command{};
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.position",
                                         &position));
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.velocity",
                                         &raw_velocity));
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId,
+                                        "vrpn.acceleration", &acceleration));
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "vrpn.speed",
                                         &speed));
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId,
                                         "command.velocity", &command));
   EXPECT_EQ(2001u, position.output_message_id);
   EXPECT_EQ(2002u, raw_velocity.output_message_id);
+  EXPECT_EQ(2008u, acceleration.output_message_id);
   EXPECT_EQ(2006u, speed.output_message_id);
   EXPECT_EQ(2002u, command.output_message_id);
 
