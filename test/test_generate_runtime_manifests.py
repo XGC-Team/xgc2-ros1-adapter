@@ -768,7 +768,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertEqual(bootstrap_contract.count(retired_literal), 0)
         self.assertIn(
-            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-13~focal}"',
+            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-14~focal}"',
             docker_build,
         )
         self.assertIn(
@@ -776,7 +776,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "17395aabbeb1987898dca3a8e7ee1a720ceb2ccf",
+            "9dede23fb8b110b16f986e291e37700debf347ba",
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
@@ -791,8 +791,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-22")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-22")
+        self.assertEqual(product["version"], "0.5.0-23")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-23")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
