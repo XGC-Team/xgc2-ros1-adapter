@@ -282,7 +282,7 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   EXPECT_EQ(2005u, health.output_message_id);
   EXPECT_DOUBLE_EQ(1.0, health.output_rate_hz);
   EXPECT_EQ(3u, health.observes_count);
-  EXPECT_EQ(4u, health.policy_count);
+  EXPECT_EQ(0u, health.policy_count);
 
   contract::ChannelMetadata forbidden{};
   EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.odom",

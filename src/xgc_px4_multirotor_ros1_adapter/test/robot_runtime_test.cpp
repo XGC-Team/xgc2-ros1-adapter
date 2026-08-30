@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "xgc_px4_multirotor_ros1_adapter/generated_contract.hpp"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/shutdown_signal.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/telemetry_batch.hpp"
@@ -19,6 +20,8 @@ xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   config.profile_id = contract::kProfileId;
   config.parameters["namespace"] = "/uav1";
   config.parameters["mocap_rigid_body"] = "FS150_01";
+  config.parameters["positioning_frame_number"] = "5";
+  config.parameters["positioning_comparison_threshold_m"] = "1e-10";
   return config;
 }
 
@@ -151,6 +154,44 @@ TEST(LocalizationError, ComputesEuclideanPositionDistance) {
   mocap.y = 2.0;
   mocap.z = 3.0;
   EXPECT_DOUBLE_EQ(13.0, positionDistanceMeters(local, mocap));
+}
+
+TEST(PositioningLiveness, PreservesXgc1RepeatFrameAndAnyAxisAlgorithm) {
+  using xgc2_ros1_robot_adapter::PositioningHealthConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthState;
+  using xgc2_ros1_robot_adapter::PositioningHealthWindow;
+  const PositioningHealthConfig config{5u, 1.0e-10, 0.1};
+  PositioningHealthWindow window(config);
+
+  for (std::size_t index = 0u; index < 6u; ++index)
+    window.recordPose(static_cast<double>(index) * 0.01, 1.0, 2.0, 3.0);
+  const auto frozen = window.evaluate(0.051);
+  EXPECT_EQ(PositioningHealthState::kFrozen, frozen.state);
+  EXPECT_EQ(5u, frozen.sample_count);
+  EXPECT_DOUBLE_EQ(0.0, frozen.comparison_metric_m);
+
+  // Only Y varies. FS150 passes when any axis exceeds the threshold, matching
+  // XAutoDronePhyMocapRosModule's en_single_axis_check=true path in XGC1.
+  window.recordPose(0.06, 1.0, 2.0 + 2.0e-10, 3.0);
+  const auto active = window.evaluate(0.061);
+  EXPECT_EQ(PositioningHealthState::kActive, active.state);
+  EXPECT_GT(active.comparison_metric_m, config.comparison_threshold_m);
+
+  EXPECT_EQ(PositioningHealthState::kActive, window.evaluate(0.159).state);
+  EXPECT_EQ(PositioningHealthState::kTimedOut,
+            window.evaluate(0.16).state);
+}
+
+TEST(PositioningLiveness, ValidatesTheXgc1AssetParameterBounds) {
+  std::string error;
+  EXPECT_TRUE(xgc2_ros1_robot_adapter::validPositioningHealthConfig(
+      {5u, 1.0e-10, 0.1}, &error));
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::validPositioningHealthConfig(
+      {0u, 1.0e-10, 0.1}, &error));
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::validPositioningHealthConfig(
+      {5u, 0.0, 0.1}, &error));
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::validPositioningHealthConfig(
+      {5u, 1.0e-10, 0.0}, &error));
 }
 
 TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {

@@ -16,6 +16,16 @@ parameters:
     delivery: target_binding
     pattern: ^[A-Za-z][A-Za-z0-9_]*$
     description: Trusted VRPN tracker name assigned to this Mecanum UGV.
+  positioning_frame_number:
+    type: integer
+    required: true
+    delivery: target_binding
+    description: XGC1-compatible repeat-frame window length owned by the Robot asset.
+  positioning_comparison_threshold_m:
+    type: number
+    required: true
+    delivery: target_binding
+    description: XGC1-compatible per-axis root-sum-square pose-change threshold in metres.
 semantic_traits:
   default_stale_after_ms: 2000
   channel_stale_after_ms:
@@ -121,12 +131,6 @@ channels:
       - vrpn.position
       - vrpn.velocity
       - state.imu
-    policy:
-      positioning_window_ms: 1000
-      positioning_minimum_samples: 5
-      positioning_stationary_speed_threshold_mps: 0.05
-      positioning_maximum_spread_m: 0.03
-
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent

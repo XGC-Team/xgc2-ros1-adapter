@@ -791,8 +791,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-25")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-25")
+        self.assertEqual(product["version"], "0.5.0-26")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-26")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],

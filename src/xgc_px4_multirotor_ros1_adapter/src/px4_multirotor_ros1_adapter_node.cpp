@@ -445,18 +445,23 @@ private:
       *error = "profile digest mismatch for robot " + robot.robot_id;
       return false;
     }
-    if (robot.parameters.size() != 2 ||
+    if (robot.parameters.size() != 4 ||
         robot.parameters.find("namespace") == robot.parameters.end() ||
-        robot.parameters.find("mocap_rigid_body") == robot.parameters.end()) {
+        robot.parameters.find("mocap_rigid_body") == robot.parameters.end() ||
+        robot.parameters.find("positioning_frame_number") == robot.parameters.end() ||
+        robot.parameters.find("positioning_comparison_threshold_m") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly namespace and "
-               "mocap_rigid_body";
+               " must contain exactly namespace, mocap_rigid_body, "
+               "positioning_frame_number, and positioning_comparison_threshold_m";
       return false;
     }
     std::string native_error;
+    xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
     if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error) ||
         !validMocapRigidBodyName(robot.parameters.at("mocap_rigid_body"),
-                                 &native_error)) {
+                                 &native_error) ||
+        !loadPositioningLivenessConfig(robot, &positioning_config,
+                                       &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +
                ": " + native_error;
       return false;

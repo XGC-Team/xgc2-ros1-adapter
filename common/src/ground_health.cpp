@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <iterator>
 #include <limits>
 
@@ -116,22 +117,51 @@ bool batteryPercentage(const std::vector<BatteryCurvePoint> &curve,
 
 bool validPositioningHealthConfig(const PositioningHealthConfig &config,
                                   std::string *error) {
-  if (!std::isfinite(config.window_seconds) || config.window_seconds <= 0.0)
-    return fail(error, "positioning window must be positive");
-  if (config.minimum_samples < 2u)
-    return fail(error, "positioning window requires at least two samples");
-  if (!std::isfinite(config.stationary_speed_threshold_mps) ||
-      config.stationary_speed_threshold_mps < 0.0) {
-    return fail(error, "stationary speed threshold must be non-negative");
+  if (config.frame_number < 1u || config.frame_number > 999u)
+    return fail(error, "positioning frame number must be between 1 and 999");
+  if (!std::isfinite(config.comparison_threshold_m) ||
+      config.comparison_threshold_m < 1.0e-10 ||
+      config.comparison_threshold_m > 10.0)
+    return fail(error,
+                "positioning comparison threshold must be between 1e-10 and 10 metres");
+  if (!std::isfinite(config.timeout_seconds) || config.timeout_seconds <= 0.0)
+    return fail(error, "positioning timeout must be positive");
+  return true;
+}
+
+bool parsePositioningHealthConfig(
+    const std::map<std::string, std::string> &parameters,
+    PositioningHealthConfig *config, std::string *error) {
+  if (config == nullptr)
+    return fail(error, "positioning health configuration output is required");
+  const auto frames = parameters.find("positioning_frame_number");
+  const auto threshold =
+      parameters.find("positioning_comparison_threshold_m");
+  if (frames == parameters.end() || threshold == parameters.end()) {
+    return fail(
+        error,
+        "positioning_frame_number and positioning_comparison_threshold_m are required");
   }
-  if (!std::isfinite(config.maximum_position_spread_m) ||
-      config.maximum_position_spread_m < 0.0) {
-    return fail(error, "positioning spread threshold must be non-negative");
+  PositioningHealthConfig candidate;
+  try {
+    std::size_t parsed = 0u;
+    const unsigned long long value = std::stoull(frames->second, &parsed, 10);
+    if (parsed != frames->second.size())
+      return fail(error, "positioning frame number is not canonical");
+    candidate.frame_number = static_cast<std::size_t>(value);
+    parsed = 0u;
+    candidate.comparison_threshold_m = std::stod(threshold->second, &parsed);
+    if (parsed != threshold->second.size())
+      return fail(error, "positioning comparison threshold is not canonical");
+  } catch (const std::exception &) {
+    return fail(error, "positioning health parameters are not canonical numbers");
   }
-  if (!std::isfinite(config.vrpn_timeout_seconds) ||
-      config.vrpn_timeout_seconds <= 0.0) {
-    return fail(error, "VRPN timeout must be positive");
-  }
+  // XGC1 exposes frame_number and comparison_threshold but keeps the proven
+  // 100 ms freshness boundary fixed in the detector.
+  candidate.timeout_seconds = 0.1;
+  if (!validPositioningHealthConfig(candidate, error))
+    return false;
+  *config = candidate;
   return true;
 }
 
@@ -144,104 +174,64 @@ void PositioningHealthWindow::recordPose(double observed_seconds, double x,
       !std::isfinite(y) || !std::isfinite(z)) {
     return;
   }
-  if (!poses_.empty() && observed_seconds < poses_.back().observed_seconds)
-    poses_.clear();
-  poses_.push_back({observed_seconds, x, y, z});
-  prune(observed_seconds);
-}
+  if (has_observation_ && observed_seconds < last_observed_seconds_) {
+    for (auto &values : registers_)
+      values.clear();
+    active_ = false;
+    comparison_metric_m_ = 0.0;
+  }
+  last_observed_seconds_ = observed_seconds;
+  has_observation_ = true;
+  const std::array<double, 3> newest{{x, y, z}};
+  for (std::size_t axis = 0u; axis < registers_.size(); ++axis)
+    registers_[axis].push_back(newest[axis]);
 
-void PositioningHealthWindow::recordVelocity(double observed_seconds, double x,
-                                             double y, double z) {
-  if (!std::isfinite(observed_seconds) || !std::isfinite(x) ||
-      !std::isfinite(y) || !std::isfinite(z)) {
+  // XGC1 evaluates after frame_number retained samples plus the newest frame,
+  // then removes the oldest frame. Keep this order exactly.
+  if (registers_[0].size() <= config_.frame_number) {
+    active_ = false;
+    comparison_metric_m_ = 0.0;
     return;
   }
-  if (has_velocity_ && observed_seconds < last_velocity_seconds_) {
-    poses_.clear();
-    last_velocity_was_moving_ = false;
-  }
-  const double speed_mps = std::hypot(std::hypot(x, y), z);
-  const bool moving = speed_mps > config_.stationary_speed_threshold_mps;
-  if ((moving || last_velocity_was_moving_ != moving) && !poses_.empty()) {
-    const PoseSample latest_pose = poses_.back();
-    poses_.clear();
-    poses_.push_back(latest_pose);
-  }
-  last_velocity_seconds_ = observed_seconds;
-  last_speed_mps_ = speed_mps;
-  has_velocity_ = true;
-  last_velocity_was_moving_ = moving;
-}
-
-PositioningHealthResult PositioningHealthWindow::evaluate(double now_seconds) {
-  PositioningHealthResult result;
-  if (poses_.empty() || !std::isfinite(now_seconds) ||
-      now_seconds < poses_.back().observed_seconds) {
-    result.state = PositioningHealthState::kTimedOut;
-    result.reason = PositioningHealthReason::kVrpnTimeout;
-    return result;
-  }
-
-  result.observed_age_ms =
-      ageMillis(now_seconds, poses_.back().observed_seconds);
-  const double pose_age_seconds = now_seconds - poses_.back().observed_seconds;
-  if (pose_age_seconds > config_.vrpn_timeout_seconds) {
-    result.state = PositioningHealthState::kTimedOut;
-    result.reason = PositioningHealthReason::kVrpnTimeout;
-    result.sample_count = poses_.size();
-    return result;
-  }
-  prune(now_seconds);
-  result.sample_count = poses_.size();
-
-  const bool velocity_fresh =
-      has_velocity_ && now_seconds >= last_velocity_seconds_ &&
-      now_seconds - last_velocity_seconds_ <= config_.vrpn_timeout_seconds;
-  if (!velocity_fresh) {
-    result.state = PositioningHealthState::kWarmingUp;
-    result.reason = PositioningHealthReason::kInsufficientSamples;
-    return result;
-  }
-  if (last_speed_mps_ > config_.stationary_speed_threshold_mps) {
-    result.state = PositioningHealthState::kMoving;
-    result.reason = PositioningHealthReason::kRobotMoving;
-    return result;
-  }
-  if (poses_.size() < config_.minimum_samples) {
-    result.state = PositioningHealthState::kWarmingUp;
-    result.reason = PositioningHealthReason::kInsufficientSamples;
-    return result;
-  }
-
-  result.window_spread_m = windowSpreadMeters();
-  if (result.window_spread_m > config_.maximum_position_spread_m) {
-    result.state = PositioningHealthState::kJittering;
-    result.reason = PositioningHealthReason::kStationaryJitterExceeded;
-  } else {
-    result.state = PositioningHealthState::kStable;
-    result.reason = PositioningHealthReason::kStationaryWindowStable;
-  }
-  return result;
-}
-
-void PositioningHealthWindow::prune(double now_seconds) {
-  if (!std::isfinite(now_seconds))
-    return;
-  const double oldest_allowed = now_seconds - config_.window_seconds;
-  while (!poses_.empty() && poses_.front().observed_seconds < oldest_allowed)
-    poses_.pop_front();
-}
-
-double PositioningHealthWindow::windowSpreadMeters() const {
-  double maximum = 0.0;
-  for (auto left = poses_.begin(); left != poses_.end(); ++left) {
-    for (auto right = std::next(left); right != poses_.end(); ++right) {
-      maximum = std::max(maximum, std::hypot(std::hypot(left->x - right->x,
-                                                        left->y - right->y),
-                                             left->z - right->z));
+  active_ = false;
+  comparison_metric_m_ = 0.0;
+  const double threshold_squared =
+      config_.comparison_threshold_m * config_.comparison_threshold_m;
+  for (std::size_t axis = 0u; axis < registers_.size(); ++axis) {
+    double sum_squared_difference = 0.0;
+    for (const double value : registers_[axis]) {
+      const double difference = value - newest[axis];
+      sum_squared_difference += difference * difference;
     }
+    comparison_metric_m_ =
+        std::max(comparison_metric_m_, std::sqrt(sum_squared_difference));
+    // XGC1 physical PX4 and UGV modules enable the single-axis check: natural
+    // variation on any axis proves that the source is not replaying one pose.
+    active_ = active_ || sum_squared_difference > threshold_squared;
   }
-  return maximum;
+  for (auto &values : registers_)
+    values.pop_front();
+}
+
+PositioningHealthResult
+PositioningHealthWindow::evaluate(double now_seconds) const {
+  PositioningHealthResult result;
+  result.comparison_metric_m = comparison_metric_m_;
+  result.sample_count = registers_[0].size();
+  result.state = PositioningHealthState::kTimedOut;
+  result.reason = PositioningHealthReason::kVrpnTimeout;
+  if (!has_observation_ || !std::isfinite(now_seconds) ||
+      now_seconds < last_observed_seconds_)
+    return result;
+  result.observed_age_ms = ageMillis(now_seconds, last_observed_seconds_);
+  if (now_seconds - last_observed_seconds_ >= config_.timeout_seconds)
+    return result;
+  result.state = active_ ? PositioningHealthState::kActive
+                         : PositioningHealthState::kFrozen;
+  result.reason = active_
+                      ? PositioningHealthReason::kWindowVariationObserved
+                      : PositioningHealthReason::kRepeatFrameWindowFrozen;
+  return result;
 }
 
 } // namespace xgc2_ros1_robot_adapter

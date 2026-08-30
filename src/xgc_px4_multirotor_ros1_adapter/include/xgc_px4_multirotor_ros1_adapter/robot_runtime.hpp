@@ -23,6 +23,8 @@
 #include <sensor_msgs/Imu.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/common/v1/telemetry.pb.h"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
@@ -67,6 +69,10 @@ bool resolveRemoteControlTopic(
     std::string *error);
 bool validRobotNamespace(const std::string &value, std::string *error);
 bool validMocapRigidBodyName(const std::string &value, std::string *error);
+bool loadPositioningLivenessConfig(
+    const xgc2_ros1_robot_adapter::RobotConfig &config,
+    xgc2_ros1_robot_adapter::PositioningHealthConfig *output,
+    std::string *error);
 bool validVisionPose(const geometry_msgs::PoseStamped &message);
 bool normalizeVisionPose(geometry_msgs::PoseStamped *message);
 double positionDistanceMeters(const geometry_msgs::Point &left,
@@ -132,7 +138,10 @@ private:
                std::uint64_t spec_revision,
                std::set<std::string> enabled_channels,
                std::set<std::string> required_channels,
-               NativeProfileConfig native_profile, EnvelopeEmitter emitter);
+               NativeProfileConfig native_profile,
+               xgc2_ros1_robot_adapter::PositioningHealthConfig
+                   positioning_health_config,
+               EnvelopeEmitter emitter);
 
   bool install(std::string *error);
   bool installPx4(std::string *error);
@@ -157,6 +166,9 @@ private:
   void emitPositionErrorLocked(
       const ros::Time &source_stamp, const ros::WallTime &now,
       std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void setPositioningHealthLocked(
+      const ros::WallTime &now,
+      xgc::semantic::common::v1::VehicleHealth *payload) const;
   std::uint64_t sourceAgeMillisLocked(const std::string &channel_id,
                                       const ros::WallTime &now) const;
 
@@ -198,6 +210,7 @@ private:
   const double mocap_timeout_seconds_;
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
+  xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
 
   const std::string pose_endpoint_;
   const std::string velocity_endpoint_;

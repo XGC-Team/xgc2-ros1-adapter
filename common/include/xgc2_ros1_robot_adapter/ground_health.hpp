@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,8 @@ enum class PositioningHealthState {
   kJittering,
   kMoving,
   kTimedOut,
+  kActive,
+  kFrozen,
 };
 
 enum class PositioningHealthReason {
@@ -35,52 +39,44 @@ enum class PositioningHealthReason {
   kStationaryJitterExceeded,
   kRobotMoving,
   kVrpnTimeout,
+  kWindowVariationObserved,
+  kRepeatFrameWindowFrozen,
 };
 
 struct PositioningHealthConfig {
-  double window_seconds = 0.0;
-  std::size_t minimum_samples = 0u;
-  double stationary_speed_threshold_mps = 0.0;
-  double maximum_position_spread_m = 0.0;
-  double vrpn_timeout_seconds = 0.0;
+  std::size_t frame_number = 5u;
+  double comparison_threshold_m = 1.0e-10;
+  double timeout_seconds = 0.1;
 };
 
 struct PositioningHealthResult {
   PositioningHealthState state = PositioningHealthState::kUnspecified;
   PositioningHealthReason reason = PositioningHealthReason::kUnspecified;
   std::uint64_t observed_age_ms = 0u;
-  double window_spread_m = 0.0;
+  double comparison_metric_m = 0.0;
   std::size_t sample_count = 0u;
 };
 
 bool validPositioningHealthConfig(const PositioningHealthConfig &config,
                                   std::string *error);
+bool parsePositioningHealthConfig(
+    const std::map<std::string, std::string> &parameters,
+    PositioningHealthConfig *config, std::string *error);
 
 class PositioningHealthWindow {
 public:
   explicit PositioningHealthWindow(PositioningHealthConfig config);
 
   void recordPose(double observed_seconds, double x, double y, double z);
-  void recordVelocity(double observed_seconds, double x, double y, double z);
-  PositioningHealthResult evaluate(double now_seconds);
+  PositioningHealthResult evaluate(double now_seconds) const;
 
 private:
-  struct PoseSample {
-    double observed_seconds = 0.0;
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-  };
-
-  void prune(double now_seconds);
-  double windowSpreadMeters() const;
-
   PositioningHealthConfig config_;
-  std::deque<PoseSample> poses_;
-  double last_velocity_seconds_ = 0.0;
-  double last_speed_mps_ = 0.0;
-  bool has_velocity_ = false;
-  bool last_velocity_was_moving_ = false;
+  std::array<std::deque<double>, 3> registers_;
+  double last_observed_seconds_ = 0.0;
+  double comparison_metric_m_ = 0.0;
+  bool has_observation_ = false;
+  bool active_ = false;
 };
 
 } // namespace xgc2_ros1_robot_adapter

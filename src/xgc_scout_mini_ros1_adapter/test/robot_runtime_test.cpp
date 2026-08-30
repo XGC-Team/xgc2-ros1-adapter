@@ -276,68 +276,35 @@ TEST(BatteryProjection, UsesOnlyConfiguredCurvesAndKeepsMissingCurvesUnknown) {
   EXPECT_DOUBLE_EQ(0.4, percentage);
 }
 
-TEST(PositioningHealth, DistinguishesStationaryJitterMotionTimeoutAndRecovery) {
+TEST(PositioningHealth, DetectsXgc1RepeatFramesTimeoutAndRecovery) {
   using xgc2_ros1_robot_adapter::PositioningHealthConfig;
   using xgc2_ros1_robot_adapter::PositioningHealthReason;
   using xgc2_ros1_robot_adapter::PositioningHealthState;
   using xgc2_ros1_robot_adapter::PositioningHealthWindow;
-  const PositioningHealthConfig config{1.0, 5u, 0.05, 0.03, 1.0};
+  const PositioningHealthConfig config{5u, 1.0e-10, 0.1};
+  PositioningHealthWindow health(config);
+  for (int index = 0; index < 6; ++index)
+    health.recordPose(index * 0.01, 1.0, 2.0, 3.0);
+  const auto frozen = health.evaluate(0.051);
+  EXPECT_EQ(PositioningHealthState::kFrozen, frozen.state);
+  EXPECT_EQ(PositioningHealthReason::kRepeatFrameWindowFrozen, frozen.reason);
+  EXPECT_EQ(1u, frozen.observed_age_ms);
 
-  PositioningHealthWindow stable(config);
-  for (int index = 0; index < 5; ++index) {
-    stable.recordPose(index * 0.1, index % 2 == 0 ? 0.002 : -0.002,
-                      0.001, 0.0);
-  }
-  stable.recordVelocity(0.4, 0.0, 0.0, 0.0);
-  const auto stable_result = stable.evaluate(0.45);
-  EXPECT_EQ(PositioningHealthState::kStable, stable_result.state);
-  EXPECT_EQ(PositioningHealthReason::kStationaryWindowStable,
-            stable_result.reason);
-  EXPECT_EQ(50u, stable_result.observed_age_ms);
+  // XGC1 UGV physical mocap also enables its single-axis check. Only Z needs
+  // to vary for the source to become active.
+  health.recordPose(0.06, 1.0, 2.0, 3.0 + 2.0e-10);
+  const auto active = health.evaluate(0.061);
+  EXPECT_EQ(PositioningHealthState::kActive, active.state);
+  EXPECT_EQ(PositioningHealthReason::kWindowVariationObserved, active.reason);
+  EXPECT_GT(active.comparison_metric_m, config.comparison_threshold_m);
 
-  PositioningHealthWindow jitter(config);
-  const double jitter_x[] = {0.0, 0.05, -0.05, 0.04, -0.04};
-  for (int index = 0; index < 5; ++index)
-    jitter.recordPose(index * 0.1, jitter_x[index], 0.0, 0.0);
-  jitter.recordVelocity(0.4, 0.0, 0.0, 0.0);
-  const auto jitter_result = jitter.evaluate(0.4);
-  EXPECT_EQ(PositioningHealthState::kJittering, jitter_result.state);
-  EXPECT_EQ(PositioningHealthReason::kStationaryJitterExceeded,
-            jitter_result.reason);
-
-  PositioningHealthWindow moving(config);
-  for (int index = 0; index < 5; ++index)
-    moving.recordPose(index * 0.1, index * 0.1, 0.0, 0.0);
-  moving.recordVelocity(0.4, 0.5, 0.0, 0.0);
-  const auto moving_result = moving.evaluate(0.4);
-  EXPECT_EQ(PositioningHealthState::kMoving, moving_result.state);
-  EXPECT_EQ(PositioningHealthReason::kRobotMoving, moving_result.reason);
-  moving.recordVelocity(0.5, 0.0, 0.0, 0.0);
-  moving.recordPose(0.6, 0.4, 0.0, 0.0);
-  const auto stopped_result = moving.evaluate(0.6);
-  EXPECT_EQ(PositioningHealthState::kWarmingUp, stopped_result.state);
-  EXPECT_EQ(PositioningHealthReason::kInsufficientSamples,
-            stopped_result.reason);
-  for (int index = 1; index < 5; ++index)
-    moving.recordPose(0.6 + index * 0.1, 0.4 + index * 0.001, 0.0, 0.0);
-  moving.recordVelocity(1.0, 0.0, 0.0, 0.0);
-  EXPECT_EQ(PositioningHealthState::kStable, moving.evaluate(1.0).state);
-
-  const auto timeout_result = stable.evaluate(1.6);
+  const auto timeout_result = health.evaluate(0.16);
   EXPECT_EQ(PositioningHealthState::kTimedOut, timeout_result.state);
   EXPECT_EQ(PositioningHealthReason::kVrpnTimeout, timeout_result.reason);
-  EXPECT_EQ(1200u, timeout_result.observed_age_ms);
+  EXPECT_EQ(100u, timeout_result.observed_age_ms);
 
-  for (int index = 0; index < 5; ++index) {
-    stable.recordPose(1.7 + index * 0.1, 1.0 + index * 0.001, 2.0, 0.0);
-  }
-  stable.recordVelocity(2.1, 0.0, 0.0, 0.0);
-  EXPECT_EQ(PositioningHealthState::kStable, stable.evaluate(2.1).state);
-
-  for (int index = 0; index < 5; ++index)
-    jitter.recordPose(1.5 + index * 0.1, 3.0 + index * 0.001, 0.0, 0.0);
-  jitter.recordVelocity(1.9, 0.0, 0.0, 0.0);
-  EXPECT_EQ(PositioningHealthState::kStable, jitter.evaluate(1.9).state);
+  health.recordPose(0.17, 1.0 + 4.0e-10, 2.0, 3.0);
+  EXPECT_EQ(PositioningHealthState::kActive, health.evaluate(0.171).state);
 }
 
 TEST(ChassisState, PacksAndUnpacksModeBaseAndFault) {
@@ -412,7 +379,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
                                         &health));
   EXPECT_EQ(2005u, health.output_message_id);
   EXPECT_EQ(3u, health.observes_count);
-  EXPECT_EQ(4u, health.policy_count);
+  EXPECT_EQ(0u, health.policy_count);
 
   contract::ChannelMetadata unknown;
   EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v7", "operation.arm",

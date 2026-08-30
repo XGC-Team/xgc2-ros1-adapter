@@ -16,6 +16,16 @@ parameters:
     delivery: target_binding
     pattern: "^[A-Za-z][A-Za-z0-9_]*$"
     description: VRPN rigid-body name assigned by the robot-domain instance specification.
+  positioning_frame_number:
+    type: integer
+    required: true
+    delivery: target_binding
+    description: XGC1-compatible repeat-frame window length owned by the Robot asset.
+  positioning_comparison_threshold_m:
+    type: number
+    required: true
+    delivery: target_binding
+    description: XGC1-compatible per-axis root-sum-square pose-change threshold in metres.
 semantic_traits:
   default_stale_after_ms: 2000
   channel_stale_after_ms:
@@ -137,6 +147,8 @@ channels:
       extended_state:
         name: mavros/extended_state
         type: mavros_msgs/ExtendedState
+    observes:
+      - state.mocap.pose
 
   - id: state.flight
     kind: stream_out

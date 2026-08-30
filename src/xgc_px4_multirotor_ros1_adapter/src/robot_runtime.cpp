@@ -6,6 +6,7 @@
 #include <limits>
 #include <regex>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <ros/master.h>
@@ -440,6 +441,14 @@ bool validMocapRigidBodyName(const std::string &value, std::string *error) {
   return true;
 }
 
+bool loadPositioningLivenessConfig(
+    const xgc2_ros1_robot_adapter::RobotConfig &config,
+    xgc2_ros1_robot_adapter::PositioningHealthConfig *output,
+    std::string *error) {
+  return xgc2_ros1_robot_adapter::parsePositioningHealthConfig(
+      config.parameters, output, error);
+}
+
 bool validVisionPose(const geometry_msgs::PoseStamped &message) {
   const auto &position = message.pose.position;
   const auto &orientation = message.pose.orientation;
@@ -491,11 +500,13 @@ bool BuildNativeProfileConfig(
   std::size_t parameter_count = 0u;
   const auto *parameters =
       contract::profileParameters(config.profile_id, &parameter_count);
-  if (parameters == nullptr || parameter_count != 2u ||
+  if (parameters == nullptr || parameter_count != 4u ||
       config.parameters.size() != parameter_count)
     return fail(error, "PX4 native parameter binding is not exhaustive");
   contract::ParameterMetadata namespace_descriptor{};
   contract::ParameterMetadata mocap_parameter{};
+  contract::ParameterMetadata positioning_frames{};
+  contract::ParameterMetadata positioning_threshold{};
   if (!contract::parameterMetadata(config.profile_id, "namespace",
                                    &namespace_descriptor) ||
       namespace_descriptor.type != contract::ParameterType::kString ||
@@ -504,7 +515,11 @@ bool BuildNativeProfileConfig(
                                    &mocap_parameter) ||
       mocap_parameter.type != contract::ParameterType::kString ||
       !mocap_parameter.required ||
-      std::string(mocap_parameter.pattern) != "^[A-Za-z][A-Za-z0-9_]*$") {
+      std::string(mocap_parameter.pattern) != "^[A-Za-z][A-Za-z0-9_]*$" ||
+      !contract::parameterMetadata(config.profile_id, "positioning_frame_number", &positioning_frames) ||
+      positioning_frames.type != contract::ParameterType::kInteger || !positioning_frames.required ||
+      !contract::parameterMetadata(config.profile_id, "positioning_comparison_threshold_m", &positioning_threshold) ||
+      positioning_threshold.type != contract::ParameterType::kNumber || !positioning_threshold.required) {
     return fail(error, "PX4 native parameter descriptors drifted");
   }
   const auto namespace_value =
@@ -520,6 +535,10 @@ bool BuildNativeProfileConfig(
       !validMocapRigidBodyName(mocap_value->second, &parameter_error)) {
     return fail(error, "PX4 mocap parameter is invalid: " + parameter_error);
   }
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+  if (!loadPositioningLivenessConfig(config, &positioning_config,
+                                     &parameter_error))
+    return fail(error, "PX4 positioning parameters are invalid: " + parameter_error);
 
   std::size_t channel_count = 0u;
   const auto *channels =
@@ -843,12 +862,16 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
   NativeProfileConfig native_profile;
   if (!BuildNativeProfileConfig(config, &native_profile, error))
     return nullptr;
+  xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_health_config;
+  if (!loadPositioningLivenessConfig(config, &positioning_health_config,
+                                     error))
+    return nullptr;
 
   auto runtime = std::shared_ptr<RobotRuntime>(new RobotRuntime(
       std::move(node_handle), config.robot_id, config.profile_id,
       namespace_it->second, spec_revision, std::move(enabled_channels),
       std::move(required_channels), std::move(native_profile),
-      std::move(emitter)));
+      positioning_health_config, std::move(emitter)));
   try {
     if (!runtime->install(error)) {
       runtime->Stop();
@@ -867,6 +890,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::set<std::string> enabled_channels,
                            std::set<std::string> required_channels,
                            NativeProfileConfig native_profile,
+                           xgc2_ros1_robot_adapter::PositioningHealthConfig
+                               positioning_health_config,
                            EnvelopeEmitter emitter)
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
@@ -881,6 +906,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       offboard_source_timeout_seconds_(
           native_profile.offboard_source_timeout_seconds),
       offboard_minimum_rate_hz_(native_profile.offboard_minimum_rate_hz),
+      positioning_health_(positioning_health_config),
       pose_endpoint_(std::move(native_profile.pose_endpoint)),
       velocity_endpoint_(std::move(native_profile.velocity_endpoint)),
       imu_endpoint_(std::move(native_profile.imu_endpoint)),
@@ -1358,6 +1384,56 @@ void RobotRuntime::emitPositionErrorLocked(
   }
 }
 
+void RobotRuntime::setPositioningHealthLocked(
+    const ros::WallTime &now,
+    xgc::semantic::common::v1::VehicleHealth *payload) const {
+  if (payload == nullptr)
+    return;
+  const auto result = positioning_health_.evaluate(now.toSec());
+  auto *positioning = payload->mutable_positioning();
+  using Health = xgc::semantic::common::v1::PositioningHealth;
+  using Reason = xgc2_ros1_robot_adapter::PositioningHealthReason;
+  using State = xgc2_ros1_robot_adapter::PositioningHealthState;
+  switch (result.state) {
+  case State::kActive:
+    positioning->set_state(Health::POSITIONING_STATE_ACTIVE);
+    break;
+  case State::kFrozen:
+    positioning->set_state(Health::POSITIONING_STATE_FROZEN);
+    addFault(payload, "mocap.position.frozen",
+             "VRPN is publishing a repeated frozen pose", 2);
+    break;
+  case State::kTimedOut:
+    positioning->set_state(Health::POSITIONING_STATE_TIMED_OUT);
+    addFault(payload, "mocap.position.timeout",
+             "VRPN pose exceeded the XGC1 100 ms freshness boundary", 2);
+    break;
+  default:
+    positioning->set_state(Health::POSITIONING_STATE_UNSPECIFIED);
+    break;
+  }
+  switch (result.reason) {
+  case Reason::kWindowVariationObserved:
+    positioning->set_reason(
+        Health::POSITIONING_REASON_WINDOW_VARIATION_OBSERVED);
+    break;
+  case Reason::kRepeatFrameWindowFrozen:
+    positioning->set_reason(
+        Health::POSITIONING_REASON_REPEAT_FRAME_WINDOW_FROZEN);
+    break;
+  case Reason::kVrpnTimeout:
+    positioning->set_reason(Health::POSITIONING_REASON_VRPN_TIMEOUT);
+    break;
+  default:
+    positioning->set_reason(Health::POSITIONING_REASON_UNSPECIFIED);
+    break;
+  }
+  positioning->set_observed_age_ms(result.observed_age_ms);
+  positioning->set_window_spread_m(result.comparison_metric_m);
+  positioning->set_sample_count(
+      static_cast<std::uint32_t>(result.sample_count));
+}
+
 std::uint64_t
 RobotRuntime::sourceAgeMillisLocked(const std::string &channel_id,
                                     const ros::WallTime &now) const {
@@ -1422,6 +1498,9 @@ void RobotRuntime::mocapPoseCallback(
     }
     mocap_position_ = normalized_message.pose.position;
     has_mocap_position_ = true;
+    positioning_health_.recordPose(
+        now.toSec(), normalized_message.pose.position.x,
+        normalized_message.pose.position.y, normalized_message.pose.position.z);
 
     if (channelEnabled("state.mocap.pose") &&
         native_outputs_active_.load(std::memory_order_acquire) &&
@@ -1771,6 +1850,7 @@ void RobotRuntime::emitPx4PeriodicLocked(
     const bool online = px4IsOnline(has_mavros_state_, health_state_fresh,
                                     mavros_state_.connected);
     payload.set_online(online);
+    setPositioningHealthLocked(now, &payload);
     if (!has_mavros_state_) {
       payload.set_summary("MAVROS state has not been observed");
       addFault(&payload, "mavros.state.missing",
@@ -1792,6 +1872,15 @@ void RobotRuntime::emitPx4PeriodicLocked(
     } else if (!health_extended_fresh) {
       addFault(&payload, "mavros.extended-state.stale",
                "MAVROS extended state exceeded its freshness limit", 1);
+    }
+    if (online && payload.positioning().state() ==
+                      xgc::semantic::common::v1::PositioningHealth::
+                          POSITIONING_STATE_FROZEN) {
+      payload.set_summary("VRPN positioning data is frozen");
+    } else if (online && payload.positioning().state() ==
+                             xgc::semantic::common::v1::PositioningHealth::
+                                 POSITIONING_STATE_TIMED_OUT) {
+      payload.set_summary("VRPN positioning is unavailable");
     }
     const ros::Time stamp =
         has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();

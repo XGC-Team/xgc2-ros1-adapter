@@ -920,7 +920,7 @@ int main() {
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        for index in range(62):
+        for index in range(64 - len(profile["parameters"])):
             profile["parameters"]["optional_{:02d}".format(index)] = dict(
                 optional_parameter
             )
