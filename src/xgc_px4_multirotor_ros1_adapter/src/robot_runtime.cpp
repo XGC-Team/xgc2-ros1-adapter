@@ -282,7 +282,7 @@ const std::array<NativeChannelBinding, 19u> kNativeBindings{{
     {"state.power", "px4.power-status", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PowerStatus", 1u, 0u, false},
     {"state.health", "px4.vehicle-health", contract::ChannelKind::kStreamOut,
-     "xgc.semantic.common.v1.VehicleHealth", 2u, 0u, false},
+     "xgc.semantic.common.v1.VehicleHealth", 2u, 0u, true},
     {"state.flight", "px4.flight-status", contract::ChannelKind::kStreamOut,
      "xgc.semantic.aerial.v1.FlightStatus", 2u, 0u, false},
     {"setpoint.local", "px4.local-trajectory-setpoint",
