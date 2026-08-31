@@ -201,15 +201,11 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
       << error;
 
   EXPECT_EQ("/uav1/mavros/local_position/pose", native.pose_endpoint);
-  EXPECT_EQ("/vrpn_client_node/FS150_01/pose", native.mocap_endpoint);
-  EXPECT_EQ("/vrpn_client_node/FS150_01/twist",
-            native.mocap_velocity_endpoint);
-  EXPECT_EQ("/uav1/mavros/vision_pose/pose", native.vision_pose_endpoint);
+  EXPECT_EQ("/uav1/pose", native.mocap_endpoint);
+  EXPECT_EQ("/uav1/twist", native.mocap_velocity_endpoint);
   EXPECT_EQ("/uav1/mavros/cmd/arming", native.arm_service_endpoint);
   EXPECT_EQ("/uav1/mavros/set_mode", native.mode_service_endpoint);
   EXPECT_EQ("/uav1/mavros/cmd/command", native.reboot_service_endpoint);
-  EXPECT_DOUBLE_EQ(0.02, native.vision_minimum_period_seconds);
-  EXPECT_DOUBLE_EQ(0.2, native.mocap_timeout_seconds);
   EXPECT_DOUBLE_EQ(0.5, native.offboard_source_timeout_seconds);
   EXPECT_DOUBLE_EQ(2.5, native.offboard_minimum_rate_hz);
   EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
@@ -217,6 +213,13 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   EXPECT_EQ(
       (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
       native.allowed_modes);
+
+  contract::ChannelMetadata mocap_pose{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.mocap.pose",
+                                        &mocap_pose));
+  EXPECT_STREQ("px4.mocap-pose", mocap_pose.processor);
+  EXPECT_EQ(1u, mocap_pose.endpoint_count);
+  EXPECT_EQ(0u, mocap_pose.policy_count);
 }
 
 TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
@@ -258,25 +261,25 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
-  const char *digest = contract::profileDigest("px4.multirotor.ros1.v7");
+  const char *digest = contract::profileDigest("px4.multirotor.ros1.v8");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("px4.multirotor.ros1.v7", "state.pose", &pose));
+      contract::channelMetadata("px4.multirotor.ros1.v8", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata arm;
-  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v7",
+  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v8",
                                         "operation.arm", &arm));
   EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
   EXPECT_EQ(3201u, arm.input_message_id);
 
   contract::OperationMetadata mode;
   ASSERT_TRUE(contract::operationMetadata(
-      "px4.multirotor.ros1.v7", "set-flight-mode", &mode));
+      "px4.multirotor.ros1.v8", "set-flight-mode", &mode));
   EXPECT_EQ(5000u, mode.timeout_millis);
   const std::string parameter_schema(mode.parameter_schema_json);
   EXPECT_NE(std::string::npos, parameter_schema.find("additionalProperties"));

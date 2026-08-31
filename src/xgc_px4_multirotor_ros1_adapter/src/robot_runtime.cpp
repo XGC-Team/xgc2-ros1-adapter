@@ -9,9 +9,7 @@
 #include <string>
 #include <utility>
 
-#include <ros/master.h>
 #include <ros/names.h>
-#include <xmlrpcpp/XmlRpcValue.h>
 
 #include "xgc/semantic/aerial/v1/diagnostic.pb.h"
 #include "xgc/semantic/aerial/v1/flight.pb.h"
@@ -186,52 +184,6 @@ bool finiteAttitudeSetpoint(const mavros_msgs::AttitudeTarget &message,
   return true;
 }
 
-enum class ExternalPublisherProbe {
-  kNone,
-  kOwned,
-  kPresent,
-  kUnavailable,
-};
-
-ExternalPublisherProbe probeExternalPublisher(const std::string &topic) {
-  XmlRpc::XmlRpcValue request;
-  request.setSize(1);
-  request[0] = ros::this_node::getName();
-  XmlRpc::XmlRpcValue response;
-  XmlRpc::XmlRpcValue state;
-  if (!ros::master::execute("getSystemState", request, response, state,
-                            false) ||
-      state.getType() != XmlRpc::XmlRpcValue::TypeArray || state.size() < 1) {
-    return ExternalPublisherProbe::kUnavailable;
-  }
-  const auto &publishers = state[0];
-  if (publishers.getType() != XmlRpc::XmlRpcValue::TypeArray)
-    return ExternalPublisherProbe::kUnavailable;
-  bool owned = false;
-  for (int index = 0; index < publishers.size(); ++index) {
-    const auto &entry = publishers[index];
-    if (entry.getType() != XmlRpc::XmlRpcValue::TypeArray ||
-        entry.size() != 2 ||
-        entry[0].getType() != XmlRpc::XmlRpcValue::TypeString ||
-        entry[1].getType() != XmlRpc::XmlRpcValue::TypeArray) {
-      return ExternalPublisherProbe::kUnavailable;
-    }
-    if (static_cast<std::string>(entry[0]) != topic)
-      continue;
-    const auto &nodes = entry[1];
-    for (int node_index = 0; node_index < nodes.size(); ++node_index) {
-      if (nodes[node_index].getType() != XmlRpc::XmlRpcValue::TypeString)
-        return ExternalPublisherProbe::kUnavailable;
-      if (static_cast<std::string>(nodes[node_index]) !=
-          ros::this_node::getName()) {
-        return ExternalPublisherProbe::kPresent;
-      }
-      owned = true;
-    }
-  }
-  return owned ? ExternalPublisherProbe::kOwned : ExternalPublisherProbe::kNone;
-}
-
 template <typename Handle>
 bool requireRosRegistration(const Handle &handle, const std::string &endpoint,
                             std::string *error) {
@@ -262,9 +214,9 @@ struct NativeChannelBinding {
 const std::array<NativeChannelBinding, 19u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
-    {"state.mocap.pose", "px4.mocap-vision-relay",
+    {"state.mocap.pose", "px4.mocap-pose",
      contract::ChannelKind::kStreamOut, "xgc.semantic.common.v1.PoseEstimate",
-     2u, 5u, false},
+     1u, 0u, false},
     {"state.velocity", "px4.velocity-estimate",
      contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.VelocityEstimate", 1u, 0u, false},
@@ -605,16 +557,12 @@ bool BuildNativeProfileConfig(
   std::string mocap_speed_endpoint;
   const auto input = contract::EndpointKind::kInput;
   const auto service = contract::EndpointKind::kService;
-  const auto output_kind = contract::EndpointKind::kOutput;
   if (!resolveEndpoint(config, "state.pose", input, "pose",
                        "geometry_msgs/PoseStamped", &candidate.pose_endpoint,
                        error) ||
       !resolveEndpoint(config, "state.mocap.pose", input, "pose",
                        "geometry_msgs/PoseStamped", &candidate.mocap_endpoint,
                        error) ||
-      !resolveEndpoint(config, "state.mocap.pose", output_kind, "output",
-                       "geometry_msgs/PoseStamped",
-                       &candidate.vision_pose_endpoint, error) ||
       !resolveEndpoint(config, "state.mocap.velocity", input, "velocity",
                        "geometry_msgs/TwistStamped",
                        &candidate.mocap_velocity_endpoint, error) ||
@@ -668,16 +616,14 @@ bool BuildNativeProfileConfig(
   }
   if (candidate.mocap_velocity_endpoint != mocap_speed_endpoint) {
     return fail(error,
-                "PX4 mocap velocity and speed must share the VRPN twist input");
+                "PX4 mocap velocity and speed must share the canonical twist input");
   }
 
-  contract::ChannelMetadata mocap{};
   contract::ChannelMetadata offboard{};
   contract::ChannelMetadata arm{};
   contract::ChannelMetadata mode{};
   contract::ChannelMetadata reboot{};
   contract::ChannelMetadata remote{};
-  contract::channelMetadata(config.profile_id, "state.mocap.pose", &mocap);
   contract::channelMetadata(config.profile_id, "diagnostic.offboard-input",
                             &offboard);
   contract::channelMetadata(config.profile_id, "operation.arm", &arm);
@@ -686,11 +632,6 @@ bool BuildNativeProfileConfig(
                             &reboot);
   contract::channelMetadata(config.profile_id, "operation.motion-intent",
                             &remote);
-  std::int64_t vision_rate = 0;
-  std::int64_t mocap_timeout = 0;
-  const char *coordinate_transform = nullptr;
-  bool interpolate = true;
-  bool repeat_last = true;
   double offboard_rate = 0.0;
   std::int64_t offboard_timeout = 0;
   const char *const *allowed_modes = nullptr;
@@ -710,19 +651,7 @@ bool BuildNativeProfileConfig(
   double remote_yaw = 0.0;
   std::int64_t remote_publish_rate = 0;
   std::int64_t remote_timeout = 0;
-  if (!contract::channelPolicyInteger(mocap, "vision_publish_rate_hz",
-                                      &vision_rate) ||
-      !contract::channelPolicyInteger(mocap, "source_timeout_ms",
-                                      &mocap_timeout) ||
-      !contract::channelPolicyString(mocap, "coordinate_transform",
-                                     &coordinate_transform) ||
-      !contract::channelPolicyBoolean(mocap, "interpolate", &interpolate) ||
-      !contract::channelPolicyBoolean(mocap, "repeat_last_sample",
-                                      &repeat_last) ||
-      vision_rate <= 0 || mocap_timeout <= 0 ||
-      std::string(coordinate_transform) != "none" || interpolate ||
-      repeat_last ||
-      !contract::channelPolicyNumber(offboard, "minimum_rate_hz",
+  if (!contract::channelPolicyNumber(offboard, "minimum_rate_hz",
                                      &offboard_rate) ||
       !contract::channelPolicyInteger(offboard, "source_timeout_ms",
                                       &offboard_timeout) ||
@@ -761,9 +690,6 @@ bool BuildNativeProfileConfig(
       remote_publish_rate != 10 || remote_timeout != 1000) {
     return fail(error, "PX4 native policy binding is incomplete or unsafe");
   }
-  candidate.vision_minimum_period_seconds =
-      1.0 / static_cast<double>(vision_rate);
-  candidate.mocap_timeout_seconds = static_cast<double>(mocap_timeout) / 1000.0;
   candidate.offboard_source_timeout_seconds =
       static_cast<double>(offboard_timeout) / 1000.0;
   candidate.offboard_minimum_rate_hz = offboard_rate;
@@ -900,9 +826,6 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       enabled_channels_(std::move(enabled_channels)),
       required_channels_(std::move(required_channels)),
       emitter_(std::move(emitter)),
-      vision_minimum_period_seconds_(
-          native_profile.vision_minimum_period_seconds),
-      mocap_timeout_seconds_(native_profile.mocap_timeout_seconds),
       offboard_source_timeout_seconds_(
           native_profile.offboard_source_timeout_seconds),
       offboard_minimum_rate_hz_(native_profile.offboard_minimum_rate_hz),
@@ -917,7 +840,6 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       mocap_endpoint_(std::move(native_profile.mocap_endpoint)),
       mocap_velocity_endpoint_(
           std::move(native_profile.mocap_velocity_endpoint)),
-      vision_pose_endpoint_(std::move(native_profile.vision_pose_endpoint)),
       local_setpoint_endpoint_(
           std::move(native_profile.local_setpoint_endpoint)),
       attitude_setpoint_endpoint_(
@@ -926,13 +848,9 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
-void RobotRuntime::Activate() noexcept {
-  native_outputs_active_.store(true, std::memory_order_release);
-}
+void RobotRuntime::Activate() noexcept {}
 
-void RobotRuntime::Deactivate() noexcept {
-  native_outputs_active_.store(false, std::memory_order_release);
-}
+void RobotRuntime::Deactivate() noexcept {}
 
 RobotRuntime::CallbackGuard::CallbackGuard(RobotRuntime *runtime)
     : runtime_(runtime),
@@ -986,9 +904,6 @@ void RobotRuntime::Stop() {
     std::unique_lock<std::mutex> lock(mutex_);
     callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0; });
   }
-  // A mocap callback publishes outside mutex_ while still holding its callback
-  // guard. Shut the publisher down only after every such callback is fenced.
-  vision_pose_publisher_.shutdown();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stop_complete_ = true;
@@ -1010,18 +925,6 @@ bool RobotRuntime::install(std::string *error) {
       *error = "unsupported profile: " + profile_id_;
     }
     return false;
-  }
-  if (channelEnabled("state.mocap.pose")) {
-    const auto publisher = probeExternalPublisher(vision_pose_endpoint_);
-    if (publisher != ExternalPublisherProbe::kNone) {
-      if (error != nullptr)
-        *error = publisher == ExternalPublisherProbe::kUnavailable
-                     ? "cannot verify exclusive ownership of vision topic: " +
-                           vision_pose_endpoint_
-                     : "vision topic already has a publisher: " +
-                           vision_pose_endpoint_;
-      return false;
-    }
   }
   {
     // Build all tracking state before any subscriber callback can observe it.
@@ -1058,27 +961,9 @@ bool RobotRuntime::installPx4(std::string *error) {
       return false;
   }
   if (channelRequired("state.mocap.pose")) {
-    ensureSourceLocked("state.mocap.pose", mocap_timeout_seconds_);
-    if (channelEnabled("state.mocap.pose")) {
-      vision_pose_publisher_ =
-          node_handle_.advertise<geometry_msgs::PoseStamped>(
-              vision_pose_endpoint_, 10, false);
-      if (!requireRosRegistration(vision_pose_publisher_, vision_pose_endpoint_,
-                                  error))
-        return false;
-      const auto publisher = probeExternalPublisher(vision_pose_endpoint_);
-      if (publisher != ExternalPublisherProbe::kOwned) {
-        if (error != nullptr) {
-          *error =
-              publisher == ExternalPublisherProbe::kPresent
-                  ? "vision topic ownership changed during registration: " +
-                        vision_pose_endpoint_
-                  : "ROS master did not confirm vision publisher " +
-                        vision_pose_endpoint_;
-        }
-        return false;
-      }
-    }
+    ensureSourceLocked(
+        "state.mocap.pose",
+        channelStaleAfterSeconds(profile_id_, "state.mocap.pose"));
     mocap_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
         mocap_endpoint_, 50,
         [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
@@ -1485,8 +1370,6 @@ void RobotRuntime::mocapPoseCallback(
   if (!callback)
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
-  geometry_msgs::PoseStamped vision_message;
-  bool publish_vision = false;
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1503,16 +1386,6 @@ void RobotRuntime::mocapPoseCallback(
         normalized_message.pose.position.y, normalized_message.pose.position.z);
 
     if (channelEnabled("state.mocap.pose") &&
-        native_outputs_active_.load(std::memory_order_acquire) &&
-        (last_vision_publish_.isZero() || now < last_vision_publish_ ||
-         (now - last_vision_publish_).toSec() >=
-             vision_minimum_period_seconds_)) {
-      last_vision_publish_ = now;
-      vision_message = normalized_message;
-      publish_vision = true;
-    }
-
-    if (channelEnabled("state.mocap.pose") &&
         shouldEmitLocked("state.mocap.pose", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(normalized_message.header.frame_id);
@@ -1527,8 +1400,6 @@ void RobotRuntime::mocapPoseCallback(
     }
     emitPositionErrorLocked(normalized_message.header.stamp, now, &output);
   }
-  if (publish_vision)
-    vision_pose_publisher_.publish(vision_message);
   emit(std::move(output));
 }
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -38,7 +37,6 @@ struct NativeProfileConfig {
   std::string extended_state_endpoint;
   std::string mocap_endpoint;
   std::string mocap_velocity_endpoint;
-  std::string vision_pose_endpoint;
   std::string local_setpoint_endpoint;
   std::string attitude_setpoint_endpoint;
   std::string timesync_endpoint;
@@ -46,8 +44,6 @@ struct NativeProfileConfig {
   std::string mode_service_endpoint;
   std::string reboot_service_endpoint;
   std::string remote_control_endpoint;
-  double vision_minimum_period_seconds = 0.0;
-  double mocap_timeout_seconds = 0.0;
   double offboard_source_timeout_seconds = 0.0;
   double offboard_minimum_rate_hz = 0.0;
   double reboot_state_timeout_seconds = 0.0;
@@ -206,8 +202,6 @@ private:
   const std::set<std::string> required_channels_;
   const EnvelopeEmitter emitter_;
 
-  const double vision_minimum_period_seconds_;
-  const double mocap_timeout_seconds_;
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
@@ -220,7 +214,6 @@ private:
   const std::string extended_state_endpoint_;
   const std::string mocap_endpoint_;
   const std::string mocap_velocity_endpoint_;
-  const std::string vision_pose_endpoint_;
   const std::string local_setpoint_endpoint_;
   const std::string attitude_setpoint_endpoint_;
   const std::string timesync_endpoint_;
@@ -246,13 +239,11 @@ private:
   bool valid_attitude_setpoint_ = false;
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
-  ros::WallTime last_vision_publish_;
   geometry_msgs::Point local_position_;
   geometry_msgs::Point mocap_position_;
   std::string local_position_frame_id_;
   bool has_local_position_ = false;
   bool has_mocap_position_ = false;
-  std::atomic<bool> native_outputs_active_{false};
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;
@@ -265,7 +256,6 @@ private:
   ros::Subscriber local_setpoint_subscriber_;
   ros::Subscriber attitude_setpoint_subscriber_;
   ros::Subscriber timesync_subscriber_;
-  ros::Publisher vision_pose_publisher_;
 };
 
 } // namespace xgc_px4_multirotor_ros1_adapter

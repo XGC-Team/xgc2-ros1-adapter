@@ -100,7 +100,7 @@ const std::array<NativeChannelBinding, 9u> kNativeBindings{{
      "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.VelocityEstimate",
      false},
     {"vrpn.acceleration", "mecanum-ugv.vrpn-acceleration", "acceleration",
-     "geometry_msgs/TwistStamped",
+     "geometry_msgs/AccelStamped",
      "xgc.semantic.common.v1.AccelerationEstimate", false},
     {"vrpn.speed", "mecanum-ugv.vrpn-speed", "velocity",
      "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.SpeedEstimate",
@@ -384,11 +384,11 @@ double vrpnForwardSpeedMetersPerSecond(
 }
 
 xgc::semantic::common::v1::AccelerationEstimate
-vrpnAccelerationEstimate(const geometry_msgs::TwistStamped &message) {
+vrpnAccelerationEstimate(const geometry_msgs::AccelStamped &message) {
   xgc::semantic::common::v1::AccelerationEstimate payload;
   payload.set_frame_id(message.header.frame_id);
-  copyVector(message.twist.linear, payload.mutable_linear());
-  copyVector(message.twist.angular, payload.mutable_angular());
+  copyVector(message.accel.linear, payload.mutable_linear());
+  copyVector(message.accel.angular, payload.mutable_angular());
   return payload;
 }
 
@@ -825,9 +825,9 @@ bool RobotRuntime::install(std::string *error) {
           "vrpn.acceleration",
           channelStaleAfterSeconds(profile_id_, "vrpn.acceleration"));
       vrpn_acceleration_subscriber_ =
-          node_handle_.subscribe<geometry_msgs::TwistStamped>(
+          node_handle_.subscribe<geometry_msgs::AccelStamped>(
               vrpn_acceleration_endpoint_, 20,
-              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+              [weak_self](const geometry_msgs::AccelStamped::ConstPtr &message) {
                 if (const auto self = weak_self.lock()) {
                   self->vrpnAccelerationCallback(message);
                 }
@@ -1176,7 +1176,7 @@ void RobotRuntime::vrpnVelocityCallback(
 }
 
 void RobotRuntime::vrpnAccelerationCallback(
-    const geometry_msgs::TwistStamped::ConstPtr &message) {
+    const geometry_msgs::AccelStamped::ConstPtr &message) {
   CallbackGuard callback(this);
   if (!callback)
     return;

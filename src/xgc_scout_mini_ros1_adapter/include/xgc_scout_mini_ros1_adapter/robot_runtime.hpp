@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/AccelStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -50,7 +51,7 @@ double vrpnForwardSpeedMetersPerSecond(
 xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode);
 xgc::semantic::common::v1::AccelerationEstimate
-vrpnAccelerationEstimate(const geometry_msgs::TwistStamped &message);
+vrpnAccelerationEstimate(const geometry_msgs::AccelStamped &message);
 
 struct ScoutChassisState {
   unsigned control_mode = 0;
@@ -146,7 +147,7 @@ private:
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void vrpnAccelerationCallback(
-      const geometry_msgs::TwistStamped::ConstPtr &message);
+      const geometry_msgs::AccelStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);

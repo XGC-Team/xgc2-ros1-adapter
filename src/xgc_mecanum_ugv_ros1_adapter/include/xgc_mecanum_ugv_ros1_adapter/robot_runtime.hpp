@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/AccelStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -38,7 +39,7 @@ double vrpnForwardSpeedMetersPerSecond(
     double orientation_x, double orientation_y, double orientation_z,
     double orientation_w);
 xgc::semantic::common::v1::AccelerationEstimate
-vrpnAccelerationEstimate(const geometry_msgs::TwistStamped &message);
+vrpnAccelerationEstimate(const geometry_msgs::AccelStamped &message);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
@@ -124,7 +125,7 @@ private:
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void vrpnAccelerationCallback(
-      const geometry_msgs::TwistStamped::ConstPtr &message);
+      const geometry_msgs::AccelStamped::ConstPtr &message);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);

@@ -30,8 +30,9 @@ TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
 
 TEST(RosNames, BuildsNamespacedScoutTopics) {
   EXPECT_EQ("/scout1/cmd_vel", topicName("/scout1", "cmd_vel"));
-  EXPECT_EQ("/vrpn_client_node/Scout1/pose",
-            topicName("", "vrpn_client_node/Scout1/pose"));
+  EXPECT_EQ("/ugv1/pose", topicName("/ugv1", "pose"));
+  EXPECT_EQ("/ugv1/twist", topicName("/ugv1", "twist"));
+  EXPECT_EQ("/ugv1/accel", topicName("/ugv1", "accel"));
   EXPECT_EQ("/fleet/scout2/scout_status",
             topicName("/fleet/scout2", "/scout_status"));
   EXPECT_EQ("/fleet/scout2/PowerVoltage",
@@ -224,15 +225,15 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoTheSignedBodyXAxis) {
       vrpnForwardSpeedMetersPerSecond(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
-TEST(VrpnAccelerationProjection, PreservesFrameAndBothTwistVectors) {
-  geometry_msgs::TwistStamped source;
+TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
+  geometry_msgs::AccelStamped source;
   source.header.frame_id = "world";
-  source.twist.linear.x = 1.25;
-  source.twist.linear.y = -2.5;
-  source.twist.linear.z = 3.75;
-  source.twist.angular.x = -0.1;
-  source.twist.angular.y = 0.2;
-  source.twist.angular.z = -0.3;
+  source.accel.linear.x = 1.25;
+  source.accel.linear.y = -2.5;
+  source.accel.linear.z = 3.75;
+  source.accel.angular.x = -0.1;
+  source.accel.angular.y = 0.2;
+  source.accel.angular.z = -0.3;
 
   const auto estimate = vrpnAccelerationEstimate(source);
   EXPECT_EQ("world", estimate.frame_id());
@@ -330,63 +331,69 @@ TEST(ChassisProjection, MapsNativeScoutControlModes) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v7");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v8");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7", "vrpn.position",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.position",
                                         &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
   EXPECT_FALSE(
-      contract::channelMetadata("scout-mini.ros1.v7", "state.pose", &position));
+      contract::channelMetadata("scout-mini.ros1.v8", "state.pose", &position));
 
   contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7", "vrpn.velocity",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.velocity",
                                         &vrpn_velocity));
   EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
 
   contract::ChannelMetadata vrpn_acceleration;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
                                         "vrpn.acceleration",
                                         &vrpn_acceleration));
   EXPECT_EQ(2008u, vrpn_acceleration.output_message_id);
+  const auto *accel_endpoint = contract::channelEndpoint(
+      vrpn_acceleration, contract::EndpointKind::kInput, "acceleration");
+  ASSERT_NE(nullptr, accel_endpoint);
+  EXPECT_EQ("accel", std::string(accel_endpoint->name_template));
+  EXPECT_EQ("geometry_msgs/AccelStamped", std::string(accel_endpoint->ros_type));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, accel_endpoint->scope);
 
   contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7", "vrpn.speed",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.speed",
                                         &vrpn_speed));
   EXPECT_EQ(2006u, vrpn_speed.output_message_id);
 
   contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
                                         "command.velocity", &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
   contract::ChannelMetadata diagnostics;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
                                         "diagnostic.stream-health",
                                         &diagnostics));
   EXPECT_EQ(2011u, diagnostics.output_message_id);
   EXPECT_EQ("common.stream-health-report", std::string(diagnostics.processor));
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v7",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v8",
                                          "diagnostic.channel-health",
                                          &diagnostics));
 
   contract::ChannelMetadata health;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7", "state.health",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "state.health",
                                         &health));
   EXPECT_EQ(2005u, health.output_message_id);
   EXPECT_EQ(3u, health.observes_count);
   EXPECT_EQ(0u, health.policy_count);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v7", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v8", "operation.arm",
                                          &unknown));
 
   contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v7",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3205u, motion.input_message_id);
@@ -399,7 +406,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   std::size_t operation_count = 0u;
   const auto *operations =
-      contract::profileOperations("scout-mini.ros1.v7", &operation_count);
+      contract::profileOperations("scout-mini.ros1.v8", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));

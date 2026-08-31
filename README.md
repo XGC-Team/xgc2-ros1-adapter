@@ -9,9 +9,9 @@ Adapter Runtime application and is installed only on the Mocap Rotor Orin NX.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v7` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v7` |
-| `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v4` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v8` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v8` |
+| `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v5` |
 | `xgc_unitree_b2_ros1_adapter` | `ros-noetic-xgc2-unitree-b2-adapter` | `xgc2-unitree-b2-ros1-adapter` | `unitree.b2.v1` |
 | `xgc_mocap_rotor_ros1_adapter` | `ros-noetic-xgc2-mocap-rotor-adapter` | `xgc2-mocap-rotor-ros1-adapter` | `px4.mocap-rotor.ros1.v1` |
 | `xgc_mocap_rotor_zenoh_forwarder` | `ros-noetic-xgc2-mocap-rotor-forwarder` | `xgc2-mocap-rotor-link` | onboard process only |
@@ -51,19 +51,24 @@ from the same `policy.timeout_ms` used by its provider endpoint.
 ## Native mappings
 
 PX4 telemetry and diagnostics consume MAVROS topics under each configured
-robot namespace. Mocap samples from
-`/vrpn_client_node/{mocap_rigid_body}/pose` are relayed to
-`mavros/vision_pose/pose` without coordinate transformation, interpolation, or
-stale-sample repetition. Arm, flight-mode, and autopilot-reboot operations use
+robot namespace. Mocap pose, velocity, and speed consume the Experiment
+projection's canonical `/{namespace}/pose` and `/{namespace}/twist`. The PX4
+Adapter does not publish `/uavN/mavros/vision_pose/pose`; that topic has one
+publisher, the Experiment projection, after source selection and the unique
+XYZ offset. Raw `/vrpn_client_node/{body}` remains for diagnostics and rosbag
+only. Arm, flight-mode, and autopilot-reboot operations use
 typed MAVROS services. Flight modes are restricted by the source Profile's
 single native allowlist; reboot requires a known, fresh, connected, disarmed
 vehicle state.
 
-Scout Mini telemetry consumes the global
-`/vrpn_client_node/{mocap_rigid_body}/pose` and `twist` streams plus `cmd_vel`,
+Scout Mini telemetry consumes the namespaced Experiment projection
+`/{namespace}/pose` (`geometry_msgs/PoseStamped`), `/{namespace}/twist`
+(`geometry_msgs/TwistStamped`), and `/{namespace}/accel`
+(`geometry_msgs/AccelStamped`, the same type `xgc2_vrpn_relay` experiment
+projection publishes), plus `cmd_vel`,
 `imu/data_raw`, `PowerVoltage`, and `scout/chassis_state` under the configured namespace.
 `vrpn.position` records position and orientation, while `vrpn.velocity`
-retains the raw linear and angular vectors. The Adapter combines both VRPN
+retains the raw linear and angular vectors. The Adapter combines both projected
 streams to project world-frame linear velocity onto the signed body X axis;
 that processed scalar is `vrpn.speed`, so lateral slip is excluded.
 `command.velocity` separately records the commanded
@@ -99,13 +104,15 @@ both sources behind an explicit ROS command mux; competing publishers would
 otherwise interleave velocity commands.
 
 The Mecanum UGV profile carries `vrpn.position`, raw `vrpn.velocity`,
-processed `vrpn.speed`, `command.velocity`, on-board `state.imu` (`imu`),
+processed `vrpn.speed`, canonical `/{namespace}/accel`
+(`geometry_msgs/AccelStamped`, the same type as Scout and
+`xgc2_vrpn_relay` experiment projection), `command.velocity`, on-board `state.imu` (`imu`),
 `state.power` (`PowerVoltage`, `std_msgs/Float32`, the same topic and type
 as Scout), the existing longitudinal/yaw motion-intent operation, and
-channel diagnostics. Online state depends on a fresh IMU; VRPN pose gates
+channel diagnostics. Online state depends on a fresh IMU; projected pose gates
 readiness. It has no Scout status or odometry dependency. The scalar speed
-is computed in C++ by projecting the world-frame VRPN linear vector onto
-the body X axis from the VRPN pose quaternion, preserving reverse sign
+is computed in C++ by projecting the world-frame canonical linear vector onto
+the body X axis from the canonical pose quaternion, preserving reverse sign
 while excluding lateral slip. Motion intent keeps the existing
 protobuf contract (there is no lateral field) and maps its three gears to the
 deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately

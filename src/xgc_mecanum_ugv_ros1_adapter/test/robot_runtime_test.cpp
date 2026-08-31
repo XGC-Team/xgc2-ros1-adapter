@@ -30,8 +30,9 @@ TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
 
 TEST(RosNames, BuildsNamespacedMecanumTopics) {
   EXPECT_EQ("/ugv1/cmd_vel", topicName("/ugv1", "cmd_vel"));
-  EXPECT_EQ("/vrpn_client_node/Ugv1/pose",
-            topicName("", "vrpn_client_node/Ugv1/pose"));
+  EXPECT_EQ("/ugv1/pose", topicName("/ugv1", "pose"));
+  EXPECT_EQ("/ugv1/twist", topicName("/ugv1", "twist"));
+  EXPECT_EQ("/ugv1/accel", topicName("/ugv1", "accel"));
   EXPECT_EQ("/fleet/ugv2/twist", topicName("/fleet/ugv2", "/twist"));
   EXPECT_EQ("/ugv1/PowerVoltage", topicName("/ugv1", "PowerVoltage"));
 }
@@ -204,15 +205,15 @@ TEST(VrpnSpeedProjection, ProjectsWorldVelocityOntoSignedBodyXAxis) {
       1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
 }
 
-TEST(VrpnAccelerationProjection, PreservesFrameAndBothTwistVectors) {
-  geometry_msgs::TwistStamped source;
+TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
+  geometry_msgs::AccelStamped source;
   source.header.frame_id = "world";
-  source.twist.linear.x = 1.25;
-  source.twist.linear.y = -2.5;
-  source.twist.linear.z = 3.75;
-  source.twist.angular.x = -0.1;
-  source.twist.angular.y = 0.2;
-  source.twist.angular.z = -0.3;
+  source.accel.linear.x = 1.25;
+  source.accel.linear.y = -2.5;
+  source.accel.linear.z = 3.75;
+  source.accel.angular.x = -0.1;
+  source.accel.angular.y = 0.2;
+  source.accel.angular.z = -0.3;
 
   const auto estimate = vrpnAccelerationEstimate(source);
   EXPECT_EQ("world", estimate.frame_id());
@@ -227,7 +228,7 @@ TEST(VrpnAccelerationProjection, PreservesFrameAndBothTwistVectors) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v4", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v5", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =
@@ -265,6 +266,12 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   EXPECT_EQ(2001u, position.output_message_id);
   EXPECT_EQ(2002u, raw_velocity.output_message_id);
   EXPECT_EQ(2008u, acceleration.output_message_id);
+  const auto *accel_endpoint = contract::channelEndpoint(
+      acceleration, contract::EndpointKind::kInput, "acceleration");
+  ASSERT_NE(nullptr, accel_endpoint);
+  EXPECT_EQ("accel", std::string(accel_endpoint->name_template));
+  EXPECT_EQ("geometry_msgs/AccelStamped", std::string(accel_endpoint->ros_type));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, accel_endpoint->scope);
   EXPECT_EQ(2006u, speed.output_message_id);
   EXPECT_EQ(2002u, command.output_message_id);
 

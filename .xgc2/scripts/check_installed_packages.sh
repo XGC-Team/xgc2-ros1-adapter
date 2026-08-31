@@ -155,7 +155,7 @@ check_ros_package() {
 check_ros_package \
   "${PX4_ROS_PACKAGE}" \
   "px4_multirotor_ros1_adapter.launch" \
-  "px4-multirotor-ros1-v7.yaml" \
+  "px4-multirotor-ros1-v8.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-px4-multirotor-ros1-adapter"
 PX4_SERVICE_HELPER="${PREFIX}/lib/${PX4_ROS_PACKAGE}/${PX4_ROS_PACKAGE}_service_helper"
@@ -164,13 +164,13 @@ ldd "${PX4_SERVICE_HELPER}" | grep -q 'libroscpp'
 check_ros_package \
   "${SCOUT_ROS_PACKAGE}" \
   "scout_mini_ros1_adapter.launch" \
-  "scout-mini-ros1-v7.yaml" \
+  "scout-mini-ros1-v8.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-scout-mini-ros1-adapter"
 check_ros_package \
   "${MECANUM_ROS_PACKAGE}" \
   "mecanum_ugv_ros1_adapter.launch" \
-  "mecanum-ugv-ros1-v4.yaml" \
+  "mecanum-ugv-ros1-v5.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-mecanum-ugv-ros1-adapter"
 check_ros_package \

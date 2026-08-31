@@ -30,9 +30,9 @@ VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
-PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v7.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v7.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v4.yaml"
+PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v8.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v8.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v5.yaml"
 B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mocap-rotor-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
@@ -156,6 +156,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             },
         )
         self.assertEqual(profile["robotKind"], "px4_multirotor")
+        self.assertEqual(profile["profileId"], "px4.multirotor.ros1.v8")
         self.assertEqual(
             profile["parameters"]["namespace"],
             {
@@ -243,6 +244,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(SCOUT_PROFILE)
         )
         scout = scout_catalog["profiles"][0]
+        self.assertEqual(scout["profileId"], "scout-mini.ros1.v8")
         self.assertEqual(scout["robotKind"], "scout_mini")
         self.assertEqual(
             scout["semantics"]["operations"],
@@ -297,7 +299,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v4")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v5")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
@@ -396,7 +398,12 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         for legacy in (
             "profiles/schema/robot-adapter-profile-v{}.schema.json".format(2),
             "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(4),
+            "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(7),
             "profiles/ros1/scout-mini-ros1-v{}.yaml".format(2),
+            "profiles/ros1/scout-mini-ros1-v{}.yaml".format(6),
+            "profiles/ros1/scout-mini-ros1-v{}.yaml".format(7),
+            "profiles/ros1/mecanum-ugv-ros1-v{}.yaml".format(3),
+            "profiles/ros1/mecanum-ugv-ros1-v{}.yaml".format(4),
         ):
             self.assertFalse((REPOSITORY_ROOT / legacy).exists(), legacy)
 
@@ -791,8 +798,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-26")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-26")
+        self.assertEqual(product["version"], "0.5.0-27")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-27")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],

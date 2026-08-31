@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-26
+version: 0.5.0-27
 kind: ros1-apt
 summary: Robot-owned ROS1 semantic adapters plus the separate read-only Mocap Rotor onboard Zenoh forwarder.
 groups:
@@ -70,9 +70,9 @@ usage:
     test -x /opt/ros/noetic/lib/xgc_unitree_b2_ros1_adapter/xgc_unitree_b2_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mocap_rotor_ros1_adapter/xgc_mocap_rotor_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mocap_rotor_zenoh_forwarder/xgc_mocap_rotor_zenoh_forwarder_node
-    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v7.yaml
-    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v7.yaml
-    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v4.yaml
+    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v8.yaml
+    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v8.yaml
+    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v5.yaml
     test -f /opt/ros/noetic/share/xgc_unitree_b2_ros1_adapter/profiles/ros1/unitree-b2-v1.yaml
     test -f /opt/ros/noetic/share/xgc_mocap_rotor_ros1_adapter/profiles/ros1/mocap-rotor-ros1-v1.yaml
     test -f /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
@@ -137,4 +137,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-26
+    focal: 0.5.0-27

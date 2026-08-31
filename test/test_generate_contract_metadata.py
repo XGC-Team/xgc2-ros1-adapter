@@ -20,10 +20,10 @@ SCHEMA_PATH = (
     / "schema"
     / "robot-adapter-profile-v4.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v7.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v7.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v8.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v8.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v4.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v5.yaml"
 )
 B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE_PATH = (
@@ -210,7 +210,7 @@ class ContractGeneratorTest(unittest.TestCase):
             B2_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v7"]
+        px4 = px4_profiles["px4.multirotor.ros1.v8"]
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
@@ -269,18 +269,38 @@ class ContractGeneratorTest(unittest.TestCase):
             px4_channels["state.localization.error"]["stale_after_millis"], 500
         )
         self.assertEqual(
+            px4_channels["state.mocap.pose"]["processor"], "px4.mocap-pose"
+        )
+        self.assertEqual(len(px4_channels["state.mocap.pose"]["endpoints"]), 1)
+        self.assertFalse(px4_channels["state.mocap.pose"].get("policy"))
+        self.assertEqual(
             px4_channels["state.mocap.velocity"]["endpoints"][0]["name_template"],
-            "vrpn_client_node/{mocap_rigid_body}/twist",
+            "twist",
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.velocity"]["endpoints"][0]["scope"],
+            "robot_namespace",
+        )
+        self.assertEqual(
+            px4_channels["state.mocap.speed"]["endpoints"][0]["name_template"],
+            "twist",
         )
         self.assertEqual(
             px4_channels["state.mocap.pose"]["endpoints"][0],
             {
                 "kind": "input",
                 "role": "pose",
-                "name_template": "vrpn_client_node/{mocap_rigid_body}/pose",
+                "name_template": "pose",
                 "ros_type": "geometry_msgs/PoseStamped",
-                "scope": "global",
+                "scope": "robot_namespace",
             },
+        )
+        self.assertFalse(
+            any(
+                endpoint.get("name_template") == "mavros/vision_pose/pose"
+                for channel in px4["channels"]
+                for endpoint in channel.get("endpoints", [])
+            )
         )
         self.assertEqual(
             px4_channels["operation.autopilot-reboot"]["operation_contract"],
@@ -334,7 +354,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v7"]
+        scout = scout_profiles["scout-mini.ros1.v8"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -343,9 +363,9 @@ class ContractGeneratorTest(unittest.TestCase):
             {
                 "kind": "input",
                 "role": "pose",
-                "name_template": "vrpn_client_node/{mocap_rigid_body}/pose",
+                "name_template": "pose",
                 "ros_type": "geometry_msgs/PoseStamped",
-                "scope": "global",
+                "scope": "robot_namespace",
             },
         )
         self.assertEqual(
@@ -363,9 +383,9 @@ class ContractGeneratorTest(unittest.TestCase):
             {
                 "kind": "input",
                 "role": "velocity",
-                "name_template": "vrpn_client_node/{mocap_rigid_body}/twist",
+                "name_template": "twist",
                 "ros_type": "geometry_msgs/TwistStamped",
-                "scope": "global",
+                "scope": "robot_namespace",
             },
         )
         self.assertEqual(
@@ -373,13 +393,10 @@ class ContractGeneratorTest(unittest.TestCase):
             {
                 "kind": "input",
                 "role": "acceleration",
-                "name_template": "vrpn_client_node/{mocap_rigid_body}/accel",
-                "ros_type": "geometry_msgs/TwistStamped",
-                "scope": "global",
+                "name_template": "accel",
+                "ros_type": "geometry_msgs/AccelStamped",
+                "scope": "robot_namespace",
             },
-        )
-        self.assertEqual(
-            scout_channels["vrpn.acceleration"]["output_message_id"], 2008
         )
         self.assertEqual(
             scout_channels["state.power"]["endpoints"][0],
@@ -466,7 +483,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v4"]
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v5"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -521,8 +538,26 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertEqual(mecanum_channels["vrpn.velocity"]["output_message_id"], 2002)
         self.assertEqual(mecanum_channels["vrpn.acceleration"]["output_message_id"], 2008)
         self.assertEqual(
-            mecanum_channels["vrpn.acceleration"]["endpoints"][0]["name_template"],
-            "vrpn_client_node/{mocap_rigid_body}/accel",
+            mecanum_channels["vrpn.acceleration"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "acceleration",
+                "name_template": "accel",
+                "ros_type": "geometry_msgs/AccelStamped",
+                "scope": "robot_namespace",
+            },
+        )
+        self.assertEqual(
+            mecanum_channels["vrpn.acceleration"]["endpoints"][0]["ros_type"],
+            scout_channels["vrpn.acceleration"]["endpoints"][0]["ros_type"],
+        )
+        self.assertEqual(
+            mecanum_channels["vrpn.position"]["endpoints"][0]["name_template"],
+            "pose",
+        )
+        self.assertEqual(
+            mecanum_channels["vrpn.velocity"]["endpoints"][0]["name_template"],
+            "twist",
         )
         self.assertEqual(mecanum_channels["vrpn.speed"]["output_message_id"], 2006)
         self.assertEqual(mecanum_channels["command.velocity"]["output_message_id"], 2002)
@@ -578,8 +613,8 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v7")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v7"', header)
+        self.assertIn('if (profile_id == "px4.multirotor.ros1.v8")', header)
+        self.assertIn('kProfileId = "px4.multirotor.ros1.v8"', header)
         self.assertIn('"namespace", ParameterType::kString, true', header)
         self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
@@ -608,6 +643,16 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertIn('"set-motion-intent", 3205u, 1u, 0.0, 1000u, 0u', scout_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
         self.assertIn('"xgc.semantic.common.v1.RemoteControlIntentRequest"', scout_header)
+        self.assertIn(
+            'EndpointKind::kInput, "acceleration", "accel", '
+            '"geometry_msgs/AccelStamped"',
+            scout_header,
+        )
+        self.assertNotIn(
+            'EndpointKind::kInput, "acceleration", "accel", '
+            '"geometry_msgs/TwistStamped"',
+            scout_header,
+        )
 
         mecanum_header = GENERATOR.generate(
             self.registry_fingerprint,
@@ -616,9 +661,114 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v4"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v5"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
+        self.assertIn(
+            'EndpointKind::kInput, "acceleration", "accel", '
+            '"geometry_msgs/AccelStamped"',
+            mecanum_header,
+        )
+        self.assertNotIn(
+            'EndpointKind::kInput, "acceleration", "accel", '
+            '"geometry_msgs/TwistStamped"',
+            mecanum_header,
+        )
+
+    def test_ugv_accel_matches_experiment_projection_accel_stamped(self):
+        # Canonical /{namespace}/accel from xgc2-vrpn-relay experiment_projection
+        # is geometry_msgs/AccelStamped (message.accel.linear/angular). Adapter
+        # tests freeze that type here and must not import the sibling repo.
+        expected_endpoint = {
+            "kind": "input",
+            "role": "acceleration",
+            "name_template": "accel",
+            "ros_type": "geometry_msgs/AccelStamped",
+            "scope": "robot_namespace",
+        }
+        converter_signature = (
+            "vrpnAccelerationEstimate(const geometry_msgs::AccelStamped &message)"
+        )
+        converter_fields = (
+            "copyVector(message.accel.linear, payload.mutable_linear());\n"
+            "  copyVector(message.accel.angular, payload.mutable_angular());"
+        )
+        for profile_path, definition_id, package in (
+            (
+                SCOUT_PROFILE_PATH,
+                "xgc2-scout-mini-ros1-adapter",
+                "xgc_scout_mini_ros1_adapter",
+            ),
+            (
+                MECANUM_PROFILE_PATH,
+                MECANUM_DEFINITION_ID,
+                "xgc_mecanum_ugv_ros1_adapter",
+            ),
+        ):
+            with self.subTest(package=package):
+                profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+                accel = next(
+                    channel
+                    for channel in profile["channels"]
+                    if channel["id"] == "vrpn.acceleration"
+                )
+                self.assertEqual(accel["inputs"]["acceleration"]["name"], "accel")
+                self.assertEqual(
+                    accel["inputs"]["acceleration"]["type"],
+                    "geometry_msgs/AccelStamped",
+                )
+                loaded = GENERATOR.load_profile(
+                    profile_path, SCHEMA_PATH, self.messages
+                )
+                source_profile = next(iter(loaded.values()))
+                channels = {
+                    channel["id"]: channel for channel in source_profile["channels"]
+                }
+                self.assertEqual(
+                    channels["vrpn.acceleration"]["endpoints"][0],
+                    expected_endpoint,
+                )
+                header = GENERATOR.generate(
+                    self.registry_fingerprint,
+                    self.messages,
+                    loaded,
+                    definition_id,
+                    package,
+                )
+                self.assertIn(
+                    'EndpointKind::kInput, "acceleration", "accel", '
+                    '"geometry_msgs/AccelStamped"',
+                    header,
+                )
+                runtime = (
+                    REPOSITORY_ROOT / "src" / package / "src" / "robot_runtime.cpp"
+                ).read_text(encoding="utf-8")
+                self.assertIn(converter_signature, runtime)
+                self.assertIn(converter_fields, runtime)
+                self.assertIn(
+                    "subscribe<geometry_msgs::AccelStamped>",
+                    runtime,
+                )
+                binding_block = runtime.split("kNativeBindings")[1].split("}};")[0]
+                accel_start = binding_block.find('"vrpn.acceleration"')
+                self.assertNotEqual(accel_start, -1)
+                next_binding = binding_block.find('{"', accel_start + 1)
+                accel_binding = binding_block[accel_start:next_binding]
+                self.assertIn("geometry_msgs/AccelStamped", accel_binding)
+                self.assertNotIn("TwistStamped", accel_binding)
+                test_source = (
+                    REPOSITORY_ROOT
+                    / "src"
+                    / package
+                    / "test"
+                    / "robot_runtime_test.cpp"
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    "MapsCanonicalAccelStampedLinearAndAngular",
+                    test_source,
+                )
+                self.assertIn("source.accel.linear.x", test_source)
+                self.assertIn("source.accel.angular.z", test_source)
 
     def test_px4_native_operation_policies_are_explicit(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -893,11 +1043,11 @@ int main() {
 
     def test_profile_identity_and_parameters_have_exact_source_bounds(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["profile_id"] = "a" * 125 + ".v7"
+        profile["profile_id"] = "a" * 125 + ".v8"
         path = self.write_profile(profile)
         GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
-        profile["profile_id"] = "a" * 126 + ".v7"
+        profile["profile_id"] = "a" * 126 + ".v8"
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "schema validation failed"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
@@ -1206,7 +1356,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v7") {\n'
+            'if (profile_id == "scout-mini.ros1.v8") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1261,8 +1411,8 @@ int main() {
                 self.assertIn("contract::kProfileId", source)
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v7", source)
-                self.assertNotIn("scout-mini.ros1.v7", source)
+                self.assertNotIn("px4.multirotor.ros1.v8", source)
+                self.assertNotIn("scout-mini.ros1.v8", source)
 
         # Adapter Runtime applications consume a supervisor bootstrap. The
         # separately packaged onboard Mocap Rotor Forwarder is intentionally
@@ -1305,18 +1455,19 @@ int main() {
                 "scope": "global",
             }
         )
-        profile["channels"][1]["policy"]["source_timeout_ms"] = 321
-        next(
+        offboard = next(
             channel
             for channel in profile["channels"]
             if channel["id"] == "diagnostic.offboard-input"
-        )["observes"] = ["state.flight"]
+        )
+        offboard["policy"]["source_timeout_ms"] = 321
+        offboard["observes"] = ["state.flight"]
         path = self.write_profile(profile)
 
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v7"]["channels"]
+            for channel in profiles["px4.multirotor.ros1.v8"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],
@@ -1329,7 +1480,8 @@ int main() {
             },
         )
         self.assertEqual(
-            channels["state.mocap.pose"]["policy"]["source_timeout_ms"], 321
+            channels["diagnostic.offboard-input"]["policy"]["source_timeout_ms"],
+            321,
         )
         self.assertEqual(
             channels["diagnostic.offboard-input"]["observes"], ["state.flight"]
@@ -1371,7 +1523,11 @@ int main() {
 
     def test_typed_policy_values_must_be_cxx14_representable(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
-        profile["channels"][1]["policy"]["source_timeout_ms"] = 1 << 63
+        next(
+            channel
+            for channel in profile["channels"]
+            if channel["id"] == "diagnostic.offboard-input"
+        )["policy"]["source_timeout_ms"] = 1 << 63
         path = self.write_profile(profile)
         with self.assertRaisesRegex(ValueError, "outside int64"):
             GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)

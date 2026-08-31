@@ -1,9 +1,9 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: scout-mini.ros1.v7
-profile_version: 7
+profile_id: scout-mini.ros1.v8
+profile_version: 8
 native_protocol: ros1
 robot_kind: scout_mini
-description: Scout Mini VRPN pose, velocity and acceleration, chassis, IMU, command telemetry, and discrete motion control. Online follows the on-board IMU; VRPN localization gates operational readiness.
+description: Scout Mini canonical pose, velocity and acceleration, chassis, IMU, command telemetry, and discrete motion control. Online follows the on-board IMU; projected localization gates operational readiness.
 parameters:
   namespace:
     type: string
@@ -51,9 +51,8 @@ channels:
     output_rate_hz: 10
     inputs:
       pose:
-        name: vrpn_client_node/{mocap_rigid_body}/pose
+        name: pose
         type: geometry_msgs/PoseStamped
-        scope: global
 
   - id: command.velocity
     kind: stream_out
@@ -89,9 +88,8 @@ channels:
     output_rate_hz: 10
     inputs:
       velocity:
-        name: vrpn_client_node/{mocap_rigid_body}/twist
+        name: twist
         type: geometry_msgs/TwistStamped
-        scope: global
 
   - id: vrpn.acceleration
     kind: stream_out
@@ -100,9 +98,8 @@ channels:
     output_rate_hz: 10
     inputs:
       acceleration:
-        name: vrpn_client_node/{mocap_rigid_body}/accel
-        type: geometry_msgs/TwistStamped
-        scope: global
+        name: accel
+        type: geometry_msgs/AccelStamped
 
   - id: vrpn.speed
     kind: stream_out
@@ -111,13 +108,11 @@ channels:
     output_rate_hz: 10
     inputs:
       pose:
-        name: vrpn_client_node/{mocap_rigid_body}/pose
+        name: pose
         type: geometry_msgs/PoseStamped
-        scope: global
       velocity:
-        name: vrpn_client_node/{mocap_rigid_body}/twist
+        name: twist
         type: geometry_msgs/TwistStamped
-        scope: global
 
   - id: state.imu
     kind: stream_out
