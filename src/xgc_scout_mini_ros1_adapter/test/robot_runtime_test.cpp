@@ -245,36 +245,31 @@ TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
   EXPECT_DOUBLE_EQ(-0.3, estimate.angular().z());
 }
 
-TEST(BatteryProjection, UsesOnlyConfiguredCurvesAndKeepsMissingCurvesUnknown) {
+TEST(BatteryProjection, UsesTheFrozenScoutProfileCurve) {
   contract::ChannelMetadata power{};
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power",
                                         &power));
-  EXPECT_EQ(nullptr, contract::channelPolicy(
-                         power, "battery_voltage_percentage_curve"));
-
+  const char *const *entries = nullptr;
+  std::size_t count = 0u;
+  ASSERT_TRUE(contract::channelPolicyStringArray(
+      power, "battery_voltage_percentage_curve", &entries, &count));
+  ASSERT_EQ(2u, count);
   std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> curve;
-  double percentage = 0.0;
-  EXPECT_FALSE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 24.0, &percentage));
-
-  const char *entries[] = {"10.0=0.0", "11.0=0.4", "12.0=1.0"};
   std::string error;
   ASSERT_TRUE(xgc2_ros1_robot_adapter::parseBatteryCurve(
-      entries, 3u, &curve, &error)) << error;
+      entries, count, &curve, &error)) << error;
+  double percentage = 0.0;
   EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 9.0, &percentage));
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 24.0, &percentage));
   EXPECT_DOUBLE_EQ(0.0, percentage);
   EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 11.5, &percentage));
-  EXPECT_NEAR(0.7, percentage, 1e-12);
-  EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 13.0, &percentage));
+      xgc2_ros1_robot_adapter::batteryPercentage(curve, 28.765, &percentage));
+  EXPECT_NEAR(0.870408163265306, percentage, 1e-12);
+  EXPECT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(
+      curve, 30.0, &percentage));
   EXPECT_DOUBLE_EQ(1.0, percentage);
   EXPECT_FALSE(xgc2_ros1_robot_adapter::batteryPercentage(
       curve, std::numeric_limits<double>::quiet_NaN(), &percentage));
-  EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 11.0, &percentage));
-  EXPECT_DOUBLE_EQ(0.4, percentage);
 }
 
 TEST(PositioningHealth, DetectsXgc1RepeatFramesTimeoutAndRecovery) {
@@ -331,25 +326,25 @@ TEST(ChassisProjection, MapsNativeScoutControlModes) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v9");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v10");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.position",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10", "vrpn.position",
                                         &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
   EXPECT_FALSE(
-      contract::channelMetadata("scout-mini.ros1.v9", "state.pose", &position));
+      contract::channelMetadata("scout-mini.ros1.v10", "state.pose", &position));
 
   contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.velocity",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10", "vrpn.velocity",
                                         &vrpn_velocity));
   EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
 
   contract::ChannelMetadata vrpn_acceleration;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10",
                                         "vrpn.acceleration",
                                         &vrpn_acceleration));
   EXPECT_EQ(2008u, vrpn_acceleration.output_message_id);
@@ -366,39 +361,39 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(contract::EndpointScope::kRobotNamespace, canonical_accel->scope);
 
   contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.speed",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10", "vrpn.speed",
                                         &vrpn_speed));
   EXPECT_EQ(2006u, vrpn_speed.output_message_id);
 
   contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10",
                                         "command.velocity", &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
   contract::ChannelMetadata diagnostics;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10",
                                         "diagnostic.stream-health",
                                         &diagnostics));
   EXPECT_EQ(2011u, diagnostics.output_message_id);
   EXPECT_EQ("common.stream-health-report", std::string(diagnostics.processor));
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v9",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v10",
                                          "diagnostic.channel-health",
                                          &diagnostics));
 
   contract::ChannelMetadata health;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "state.health",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10", "state.health",
                                         &health));
   EXPECT_EQ(2005u, health.output_message_id);
   EXPECT_EQ(3u, health.observes_count);
   EXPECT_EQ(0u, health.policy_count);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v9", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v10", "operation.arm",
                                          &unknown));
 
   contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10",
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3205u, motion.input_message_id);
@@ -411,7 +406,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   std::size_t operation_count = 0u;
   const auto *operations =
-      contract::profileOperations("scout-mini.ros1.v9", &operation_count);
+      contract::profileOperations("scout-mini.ros1.v10", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));

@@ -336,6 +336,25 @@ channels:
       state_timeout_ms: 1000
       timeout_ms: 5000
 
+  - id: operation.force-disarm
+    kind: operation
+    operation_id: force-disarm
+    input_message_id: 3206
+    output_message_id: 1
+    processor: px4.force-disarm
+    operation_contract:
+      side_effect: non-idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    service:
+      name: mavros/cmd/command
+      type: mavros_msgs/CommandLong
+    policy:
+      mav_command: 400
+      force_disarm_param2: 21196
+      timeout_ms: 5000
+
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent

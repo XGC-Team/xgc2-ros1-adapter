@@ -25,6 +25,8 @@ namespace {
 
 constexpr std::uint16_t kAutopilotRebootCommand = 246u;
 constexpr float kNormalAutopilotReboot = 1.0F;
+constexpr std::uint16_t kForceDisarmCommand = 400u;
+constexpr float kForceDisarmParam2 = 21196.0F;
 constexpr int kHelperUsageExit = 64;
 constexpr int kHelperLifecycleExit = 70;
 
@@ -239,6 +241,23 @@ int runHelper(int socket_fd, const std::string &arm_endpoint,
       command.request.command = kAutopilotRebootCommand;
       command.request.confirmation = 0u;
       command.request.param1 = kNormalAutopilotReboot;
+      if (!command_client.call(command)) {
+        response = makePx4ServiceResponse(
+            request, Px4ServiceResponseStatus::kCallFailed);
+      } else {
+        response = makePx4ServiceResponse(
+            request, Px4ServiceResponseStatus::kCompleted,
+            command.response.success, true, command.response.result);
+      }
+      break;
+    }
+    case Px4ServiceOperation::kForceDisarm: {
+      mavros_msgs::CommandLong command;
+      command.request.broadcast = false;
+      command.request.command = kForceDisarmCommand;
+      command.request.confirmation = 0u;
+      command.request.param1 = 0.0F;
+      command.request.param2 = kForceDisarmParam2;
       if (!command_client.call(command)) {
         response = makePx4ServiceResponse(
             request, Px4ServiceResponseStatus::kCallFailed);

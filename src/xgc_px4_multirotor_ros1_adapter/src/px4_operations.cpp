@@ -601,6 +601,16 @@ mavros_msgs::CommandLong makeAutopilotRebootCommand() {
   return command;
 }
 
+mavros_msgs::CommandLong makeForceDisarmCommand() {
+  mavros_msgs::CommandLong command;
+  command.request.broadcast = false;
+  command.request.command = kPx4ForceDisarmMavCommand;
+  command.request.confirmation = 0u;
+  command.request.param1 = 0.0F;
+  command.request.param2 = kPx4ForceDisarmParam2;
+  return command;
+}
+
 OperationResult
 interpretArmResponse(bool requested_armed,
                      const mavros_msgs::CommandBool::Response &response) {
@@ -629,6 +639,13 @@ OperationResult interpretAutopilotRebootResponse(
   return nativeCommandResult(response.success, response.result,
                              "autopilot accepted reboot command",
                              "autopilot rejected reboot command");
+}
+
+OperationResult interpretForceDisarmResponse(
+    const mavros_msgs::CommandLong::Response &response) {
+  return nativeCommandResult(response.success, response.result,
+                             "autopilot accepted force-disarm command",
+                             "autopilot rejected force-disarm command");
 }
 
 Px4RebootReadiness evaluatePx4RebootReadiness(const Px4StateSnapshot &state,
@@ -930,6 +947,39 @@ Px4OperationExecutor::rebootAutopilot(const OperationTiming &timing) {
   native_response.success = response.logical_success != 0u;
   native_response.result = response.native_result;
   return interpretAutopilotRebootResponse(native_response);
+}
+
+OperationResult
+Px4OperationExecutor::forceDisarm(const OperationTiming &timing) {
+  const SteadyClock::time_point steady_started_at = SteadyClock::now();
+  const OperationWindow window = makeOperationWindow(
+      timing, ros::WallTime::now(), maximum_operation_timeout_seconds_);
+  if (!window.ready())
+    return operationWindowFailure(window);
+  const SteadyClock::time_point deadline =
+      steadyDeadline(window, steady_started_at);
+  std::unique_lock<std::timed_mutex> operation_lock(operation_mutex_,
+                                                    std::defer_lock);
+  if (!operation_lock.try_lock_until(deadline)) {
+    return OperationResult(
+        OperationOutcome::kTimedOut,
+        "MAVROS force-disarm command was not dispatched before the deadline "
+        "while waiting for another native operation");
+  }
+
+  if (next_request_id_ == 0u)
+    next_request_id_ = 1u;
+  const Px4ServiceRequestFrame request =
+      makePx4ForceDisarmRequest(next_request_id_++);
+  Px4ServiceResponseFrame response{};
+  OperationResult failure = callNativeService(
+      request, deadline, "MAVROS force-disarm command service", &response);
+  if (!failure.succeeded())
+    return failure;
+  mavros_msgs::CommandLong::Response native_response;
+  native_response.success = response.logical_success != 0u;
+  native_response.result = response.native_result;
+  return interpretForceDisarmResponse(native_response);
 }
 
 } // namespace xgc_px4_multirotor_ros1_adapter

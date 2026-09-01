@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: mecanum-ugv.ros1.v6
-profile_version: 6
+profile_id: mecanum-ugv.ros1.v7
+profile_version: 7
 native_protocol: ros1
 robot_kind: mecanum_ugv
 description: Mecanum UGV raw mocap projection, signed body-X speed, on-board IMU, command observation, and motion control. Online follows the on-board IMU; Adapter localization gates operational readiness.
@@ -150,6 +150,10 @@ channels:
       battery:
         name: PowerVoltage
         type: std_msgs/Float32
+    policy:
+      battery_voltage_percentage_curve:
+        - "10.5=0.0"
+        - "12.6=1.0"
 
   - id: state.health
     kind: stream_out

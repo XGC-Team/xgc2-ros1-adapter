@@ -21,9 +21,9 @@ SCHEMA_PATH = (
     / "robot-adapter-profile-v4.schema.json"
 )
 PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v9.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v9.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v10.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v6.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v7.yaml"
 )
 B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE_PATH = (
@@ -63,6 +63,7 @@ MESSAGE_ROLES = {
     3203: "request",
     3204: "request",
     3205: "request",
+    3206: "request",
     4001: "configuration",
     4002: "telemetry",
 }
@@ -78,6 +79,7 @@ TYPE_NAMES = {
     3104: "xgc.semantic.ground.v1.JointStateSet",
     3201: "xgc.semantic.aerial.v1.ArmRequest",
     3202: "xgc.semantic.aerial.v1.ModeRequest",
+    3206: "xgc.semantic.aerial.v1.ForceDisarmRequest",
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
     3204: "xgc.semantic.ground.v1.MotionIntentRequest",
     3205: "xgc.semantic.common.v1.RemoteControlIntentRequest",
@@ -235,6 +237,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "operation.arm",
                 "operation.mode",
                 "operation.autopilot-reboot",
+                "operation.force-disarm",
                 "operation.motion-intent",
             },
         )
@@ -246,6 +249,9 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertEqual(px4_channels["operation.mode"]["input_message_id"], 3202)
         self.assertEqual(
             px4_channels["operation.autopilot-reboot"]["input_message_id"], 3203
+        )
+        self.assertEqual(
+            px4_channels["operation.force-disarm"]["input_message_id"], 3206
         )
         self.assertEqual(px4_channels["state.pose"]["stale_after_millis"], 1000)
         self.assertEqual(
@@ -385,7 +391,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v9"]
+        scout = scout_profiles["scout-mini.ros1.v10"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -514,7 +520,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v6"]
+        mecanum = mecanum_profiles["mecanum-ugv.ros1.v7"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -692,7 +698,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v6"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.ros1.v7"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
         self.assertIn(
@@ -1398,7 +1404,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v9") {\n'
+            'if (profile_id == "scout-mini.ros1.v10") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1454,7 +1460,7 @@ int main() {
                 self.assertNotIn("contract::kNamespaceParameter", source)
                 self.assertIn('find("namespace")', source)
                 self.assertNotIn("px4.multirotor.ros1.v9", source)
-                self.assertNotIn("scout-mini.ros1.v9", source)
+                self.assertNotIn("scout-mini.ros1.v10", source)
 
         # Adapter Runtime applications consume a supervisor bootstrap. The
         # separately packaged onboard Mocap Rotor Forwarder is intentionally

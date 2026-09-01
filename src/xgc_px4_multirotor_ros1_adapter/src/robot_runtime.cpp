@@ -211,7 +211,7 @@ struct NativeChannelBinding {
   bool observes;
 };
 
-const std::array<NativeChannelBinding, 21u> kNativeBindings{{
+const std::array<NativeChannelBinding, 22u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
     {"state.mocap.pose", "px4.mocap-pose",
@@ -264,6 +264,8 @@ const std::array<NativeChannelBinding, 21u> kNativeBindings{{
      "xgc.v1.Empty", 1u, 2u, false},
     {"operation.autopilot-reboot", "px4.autopilot-reboot",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 8u, false},
+    {"operation.force-disarm", "px4.force-disarm",
+     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 1u, false},
     {"operation.motion-intent", "px4.set-motion-intent",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 5u, false},
 }};
@@ -578,6 +580,7 @@ bool BuildNativeProfileConfig(
   std::string flight_state_endpoint;
   std::string flight_extended_state_endpoint;
   std::string mocap_speed_endpoint;
+  std::string force_disarm_endpoint;
   const auto input = contract::EndpointKind::kInput;
   const auto output_kind = contract::EndpointKind::kOutput;
   const auto service = contract::EndpointKind::kService;
@@ -644,6 +647,9 @@ bool BuildNativeProfileConfig(
       !resolveEndpoint(config, "operation.autopilot-reboot", service, "service",
                        "mavros_msgs/CommandLong",
                        &candidate.reboot_service_endpoint, error) ||
+      !resolveEndpoint(config, "operation.force-disarm", service, "service",
+                       "mavros_msgs/CommandLong", &force_disarm_endpoint,
+                       error) ||
       !resolveRemoteControlTopic(config, &candidate.remote_control_endpoint,
                                  error)) {
     return false;
@@ -652,6 +658,10 @@ bool BuildNativeProfileConfig(
       flight_extended_state_endpoint != candidate.extended_state_endpoint) {
     return fail(error,
                 "PX4 health and flight channels must share state inputs");
+  }
+  if (force_disarm_endpoint != candidate.reboot_service_endpoint) {
+    return fail(error,
+                "PX4 force-disarm and reboot must share mavros/cmd/command");
   }
   candidate.localization = localization;
   candidate.mocap_endpoint = topicName(localization.source_root, candidate.mocap_endpoint);

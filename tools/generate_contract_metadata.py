@@ -40,6 +40,7 @@ OPERATION_INPUT_TYPES = {
     "arm": "xgc.semantic.aerial.v1.ArmRequest",
     "set-flight-mode": "xgc.semantic.aerial.v1.ModeRequest",
     "reboot-autopilot": "xgc.semantic.aerial.v1.AutopilotRebootRequest",
+    "force-disarm": "xgc.semantic.aerial.v1.ForceDisarmRequest",
     "set-motion-intent": "xgc.semantic.common.v1.RemoteControlIntentRequest",
 }
 

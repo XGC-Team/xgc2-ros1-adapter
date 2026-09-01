@@ -17,6 +17,7 @@ enum class Px4ServiceOperation : std::uint16_t {
   kSetArmed = 1u,
   kSetMode = 2u,
   kRebootAutopilot = 3u,
+  kForceDisarm = 4u,
 };
 
 enum class Px4ServiceResponseStatus : std::uint16_t {
@@ -127,6 +128,16 @@ inline Px4ServiceRequestFrame makePx4RebootRequest(std::uint64_t request_id) {
   return frame;
 }
 
+inline Px4ServiceRequestFrame makePx4ForceDisarmRequest(std::uint64_t request_id) {
+  Px4ServiceRequestFrame frame{};
+  frame.magic = kPx4ServiceProtocolMagic;
+  frame.version = kPx4ServiceProtocolVersion;
+  frame.operation =
+      static_cast<std::uint16_t>(Px4ServiceOperation::kForceDisarm);
+  frame.request_id = request_id;
+  return frame;
+}
+
 inline bool validatePx4ServiceRequest(const Px4ServiceRequestFrame &frame) {
   if (frame.magic != kPx4ServiceProtocolMagic ||
       frame.version != kPx4ServiceProtocolVersion || frame.request_id == 0u ||
@@ -147,6 +158,7 @@ inline bool validatePx4ServiceRequest(const Px4ServiceRequestFrame &frame) {
     return px4ServiceStringIsCanonical(frame.mode.data(), frame.mode.size());
   }
   case Px4ServiceOperation::kRebootAutopilot:
+  case Px4ServiceOperation::kForceDisarm:
     return frame.armed == 0u &&
            px4ServiceCharsAreZero(frame.mode.data(), frame.mode.size());
   }
@@ -204,7 +216,8 @@ inline bool validatePx4ServiceResponse(const Px4ServiceResponseFrame &frame,
   if (operation == Px4ServiceOperation::kSetMode)
     return !has_native_result && frame.native_result == 0u;
   return (operation == Px4ServiceOperation::kSetArmed ||
-          operation == Px4ServiceOperation::kRebootAutopilot) &&
+          operation == Px4ServiceOperation::kRebootAutopilot ||
+          operation == Px4ServiceOperation::kForceDisarm) &&
          has_native_result;
 }
 

@@ -11,9 +11,9 @@
 
 namespace xgc_mecanum_ugv_ros1_adapter {
 
-// Preserve the deployed swarm-sync-sim Mecanum contract. These are not Scout
-// chassis limits.
-constexpr double kMecanumMaximumLinearVelocityMetersPerSecond = 1.5;
+// Wheeltec Mecanum chassis linear capability. These are not Scout SDK limits
+// and not the old swarm-sync-sim 1.5 m/s remote scale.
+constexpr double kMecanumMaximumLinearVelocityMetersPerSecond = 1.0;
 constexpr double kMecanumMaximumAngularVelocityRadiansPerSecond =
     1.5707963267948966;
 

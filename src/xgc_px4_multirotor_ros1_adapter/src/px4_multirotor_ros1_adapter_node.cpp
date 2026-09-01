@@ -1114,6 +1114,15 @@ private:
                         "AutopilotRebootRequest is malformed");
       }
       native = operations->rebootAutopilot(timing);
+    } else if (processor == "px4.force-disarm") {
+      if (operation.input_schema.type_name !=
+          "xgc.semantic.aerial.v1.ForceDisarmRequest") {
+        return xgc2::adapter_runtime::OperationResult::Failure(
+            xgc::adapter::v1::ERROR_CLASS_PERMANENT,
+            "operation-contract-invalid",
+            "PX4 force-disarm processor input schema drifted");
+      }
+      native = operations->forceDisarm(timing);
     } else if (processor == "px4.set-motion-intent") {
       xgc::semantic::common::v1::RemoteControlIntentRequest input;
       if (operation.input_schema.type_name !=

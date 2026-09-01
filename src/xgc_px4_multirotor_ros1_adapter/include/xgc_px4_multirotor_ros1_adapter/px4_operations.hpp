@@ -21,6 +21,8 @@ constexpr double kDefaultOperationTimeoutSeconds = 5.0;
 constexpr double kDefaultPx4StateTimeoutSeconds = 1.0;
 constexpr std::uint16_t kPx4RebootMavCommand = 246u;
 constexpr float kPx4NormalRebootParam1 = 1.0F;
+constexpr std::uint16_t kPx4ForceDisarmMavCommand = 400u;
+constexpr float kPx4ForceDisarmParam2 = 21196.0F;
 
 enum class OperationOutcome {
   kSucceeded,
@@ -89,6 +91,7 @@ const char *mavResultName(std::uint8_t result);
 mavros_msgs::CommandBool makeArmCommand(bool armed);
 mavros_msgs::SetMode makeModeCommand(const std::string &mode);
 mavros_msgs::CommandLong makeAutopilotRebootCommand();
+mavros_msgs::CommandLong makeForceDisarmCommand();
 
 OperationResult
 interpretArmResponse(bool requested_armed,
@@ -97,6 +100,8 @@ OperationResult
 interpretModeResponse(const std::string &requested_mode,
                       const mavros_msgs::SetMode::Response &response);
 OperationResult interpretAutopilotRebootResponse(
+    const mavros_msgs::CommandLong::Response &response);
+OperationResult interpretForceDisarmResponse(
     const mavros_msgs::CommandLong::Response &response);
 
 struct Px4StateSnapshot {
@@ -143,6 +148,8 @@ public:
                           const OperationTiming &timing = OperationTiming());
   OperationResult
   rebootAutopilot(const OperationTiming &timing = OperationTiming());
+  OperationResult
+  forceDisarm(const OperationTiming &timing = OperationTiming());
 
   Px4StateSnapshot stateSnapshot() const;
 

@@ -27,6 +27,13 @@ TEST(Px4OperationMapping, BuildsTypedMavrosRequests) {
   EXPECT_FLOAT_EQ(kPx4NormalRebootParam1, reboot.request.param1);
   EXPECT_FLOAT_EQ(0.0F, reboot.request.param2);
   EXPECT_FLOAT_EQ(0.0F, reboot.request.param7);
+
+  const mavros_msgs::CommandLong kill = makeForceDisarmCommand();
+  EXPECT_FALSE(kill.request.broadcast);
+  EXPECT_EQ(kPx4ForceDisarmMavCommand, kill.request.command);
+  EXPECT_EQ(0u, kill.request.confirmation);
+  EXPECT_FLOAT_EQ(0.0F, kill.request.param1);
+  EXPECT_FLOAT_EQ(kPx4ForceDisarmParam2, kill.request.param2);
 }
 
 TEST(Px4OperationPolicy, AllowsOnlyTheProfileModeAllowlist) {
@@ -67,6 +74,11 @@ TEST(Px4ServiceProtocol, RoundTripsTypedFixedSizeFrames) {
 
   const Px4ServiceRequestFrame reboot = makePx4RebootRequest(43u);
   EXPECT_TRUE(validatePx4ServiceRequest(reboot));
+
+  const Px4ServiceRequestFrame kill = makePx4ForceDisarmRequest(44u);
+  EXPECT_TRUE(validatePx4ServiceRequest(kill));
+  EXPECT_EQ(static_cast<std::uint16_t>(Px4ServiceOperation::kForceDisarm),
+            kill.operation);
 
   const Px4ServiceResponseFrame arm_response = makePx4ServiceResponse(
       arm, Px4ServiceResponseStatus::kCompleted, true, true, 0u);

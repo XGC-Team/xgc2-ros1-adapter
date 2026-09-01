@@ -248,6 +248,7 @@
             "arm",
             "set-flight-mode",
             "reboot-autopilot",
+            "force-disarm",
             "set-motion-intent"
           ]
         },
@@ -387,6 +388,18 @@
           "then": {
             "properties": {
               "input_message_id": {"const": 3203},
+              "output_message_id": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "force-disarm"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3206},
               "output_message_id": {"const": 1}
             }
           }

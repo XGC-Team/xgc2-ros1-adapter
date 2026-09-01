@@ -37,16 +37,23 @@ TEST(RosNames, BuildsNamespacedMecanumTopics) {
   EXPECT_EQ("/ugv1/PowerVoltage", topicName("/ugv1", "PowerVoltage"));
 }
 
-TEST(BatteryProjection, LeavesPercentageUnknownWithoutAnAuthoritativeCurve) {
+TEST(BatteryProjection, UsesTheFrozenMecanumProfileCurve) {
   contract::ChannelMetadata power{};
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power",
                                         &power));
-  EXPECT_EQ(nullptr, contract::channelPolicy(
-                         power, "battery_voltage_percentage_curve"));
+  const char *const *entries = nullptr;
+  std::size_t count = 0u;
+  ASSERT_TRUE(contract::channelPolicyStringArray(
+      power, "battery_voltage_percentage_curve", &entries, &count));
+  ASSERT_EQ(2u, count);
   std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> curve;
+  std::string error;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::parseBatteryCurve(
+      entries, count, &curve, &error)) << error;
   double percentage = 0.0;
-  EXPECT_FALSE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 12.0, &percentage));
+  EXPECT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(
+      curve, 12.348, &percentage));
+  EXPECT_NEAR(0.88, percentage, 1e-12);
 }
 
 TEST(RosNames, AcceptsOnlyCanonicalAbsoluteRobotNamespaces) {
@@ -92,13 +99,16 @@ TEST(MotionIntent, MapsThreeGearsToTheDeployedSssLimits) {
   std::string error;
 
   ASSERT_TRUE(motionIntentCommand(1, 1, 1, 1, &command, &error)) << error;
-  EXPECT_DOUBLE_EQ(0.5, command.linear.x);
+  EXPECT_DOUBLE_EQ(kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   command.linear.x);
   EXPECT_NEAR(0.5235987755982988, command.angular.z, 1e-15);
-  EXPECT_DOUBLE_EQ(0.5, command.linear.y);
+  EXPECT_DOUBLE_EQ(kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   command.linear.y);
   EXPECT_DOUBLE_EQ(0.0, command.angular.x);
 
   ASSERT_TRUE(motionIntentCommand(2, -1, 0, -1, &command, &error)) << error;
-  EXPECT_DOUBLE_EQ(-1.0, command.linear.x);
+  EXPECT_DOUBLE_EQ(-2.0 * kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   command.linear.x);
   EXPECT_NEAR(-1.0471975511965976, command.angular.z, 1e-15);
 
   ASSERT_TRUE(motionIntentCommand(3, 1, 0, 1, &command, &error)) << error;
@@ -137,12 +147,14 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   std::string error;
   ASSERT_TRUE(publisher.SetIntent(2, 1, 0, -1, &error)) << error;
   ASSERT_EQ(1u, published.size());
-  EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
+  EXPECT_DOUBLE_EQ(2.0 * kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   published.back().linear.x);
   EXPECT_NEAR(-1.0471975511965976, published.back().angular.z, 1e-15);
 
   publisher.PublishPeriodic();
   ASSERT_EQ(2u, published.size());
-  EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
+  EXPECT_DOUBLE_EQ(2.0 * kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   published.back().linear.x);
 
   publisher.Stop();
   ASSERT_EQ(3u, published.size());
@@ -157,7 +169,7 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
   std::vector<geometry_msgs::Twist> published;
   MotionCommandPublisher publisher(
       [&published](const geometry_msgs::Twist &command) {
-        if (command.linear.x == 1.5)
+        if (command.linear.x == kMecanumMaximumLinearVelocityMetersPerSecond)
           throw std::runtime_error("injected publication failure");
         published.push_back(command);
       });
@@ -169,7 +181,8 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
 
   publisher.PublishPeriodic();
   ASSERT_EQ(2u, published.size());
-  EXPECT_DOUBLE_EQ(0.5, published.back().linear.x);
+  EXPECT_DOUBLE_EQ(kMecanumMaximumLinearVelocityMetersPerSecond / 3.0,
+                   published.back().linear.x);
 }
 
 TEST(StreamRateEstimate, RetainsCredibleRatesAcrossFreshEmptyWindows) {
@@ -269,7 +282,7 @@ TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v6", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v7", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =

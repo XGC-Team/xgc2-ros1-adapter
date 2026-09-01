@@ -31,8 +31,8 @@ VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
 PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v9.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v9.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v6.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v10.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v7.yaml"
 B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mocap-rotor-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
@@ -74,6 +74,7 @@ MESSAGE_ROLES = {
     3203: "request",
     3204: "request",
     3205: "request",
+    3206: "request",
     4001: "configuration",
     4002: "telemetry",
 }
@@ -92,6 +93,7 @@ TYPE_NAMES = {
     3203: "xgc.semantic.aerial.v1.AutopilotRebootRequest",
     3204: "xgc.semantic.ground.v1.MotionIntentRequest",
     3205: "xgc.semantic.common.v1.RemoteControlIntentRequest",
+    3206: "xgc.semantic.aerial.v1.ForceDisarmRequest",
     4001: "xgc.robot.v1.RobotAdapterSpec",
     4002: "xgc.robot.v1.RobotMessage",
 }
@@ -180,6 +182,17 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                     },
                 },
                 {
+                    "id": "force-disarm",
+                    "channelId": "operation.force-disarm",
+                    "timeoutMillis": 5000,
+                    "parameterSchema": {
+                        "type": "object",
+                        "required": [],
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                },
+                {
                     "id": "reboot-autopilot",
                     "channelId": "operation.autopilot-reboot",
                     "timeoutMillis": 5000,
@@ -244,7 +257,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(SCOUT_PROFILE)
         )
         scout = scout_catalog["profiles"][0]
-        self.assertEqual(scout["profileId"], "scout-mini.ros1.v9")
+        self.assertEqual(scout["profileId"], "scout-mini.ros1.v10")
         self.assertEqual(scout["robotKind"], "scout_mini")
         self.assertEqual(
             scout["semantics"]["operations"],
@@ -299,7 +312,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v6")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v7")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
@@ -476,6 +489,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             },
             {
                 "arm": (5000, 5000),
+                "force-disarm": (5000, 5000),
                 "reboot-autopilot": (5000, 5000),
                 "set-flight-mode": (5000, 5000),
                 "set-motion-intent": (1000, 1000),
@@ -801,8 +815,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-29")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-29")
+        self.assertEqual(product["version"], "0.5.0-30")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-30")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],

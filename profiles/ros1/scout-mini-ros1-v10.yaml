@@ -1,6 +1,6 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: scout-mini.ros1.v9
-profile_version: 9
+profile_id: scout-mini.ros1.v10
+profile_version: 10
 native_protocol: ros1
 robot_kind: scout_mini
 description: Scout Mini raw mocap projection, chassis, IMU, command telemetry, and discrete motion control. Online follows the on-board IMU; Adapter localization gates operational readiness.
@@ -167,6 +167,10 @@ channels:
       battery:
         name: PowerVoltage
         type: std_msgs/Float32
+    policy:
+      battery_voltage_percentage_curve:
+        - "24.5=0.0"
+        - "29.4=1.0"
 
   - id: state.health
     kind: stream_out
