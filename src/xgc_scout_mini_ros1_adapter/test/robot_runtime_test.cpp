@@ -331,69 +331,74 @@ TEST(ChassisProjection, MapsNativeScoutControlModes) {
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  const char *digest = contract::profileDigest("scout-mini.ros1.v8");
+  const char *digest = contract::profileDigest("scout-mini.ros1.v9");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata position;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.position",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.position",
                                         &position));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, position.kind);
   EXPECT_EQ(2001u, position.output_message_id);
   EXPECT_FALSE(
-      contract::channelMetadata("scout-mini.ros1.v8", "state.pose", &position));
+      contract::channelMetadata("scout-mini.ros1.v9", "state.pose", &position));
 
   contract::ChannelMetadata vrpn_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.velocity",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.velocity",
                                         &vrpn_velocity));
   EXPECT_EQ(2002u, vrpn_velocity.output_message_id);
 
   contract::ChannelMetadata vrpn_acceleration;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
                                         "vrpn.acceleration",
                                         &vrpn_acceleration));
   EXPECT_EQ(2008u, vrpn_acceleration.output_message_id);
   const auto *accel_endpoint = contract::channelEndpoint(
       vrpn_acceleration, contract::EndpointKind::kInput, "acceleration");
   ASSERT_NE(nullptr, accel_endpoint);
-  EXPECT_EQ("accel", std::string(accel_endpoint->name_template));
+  EXPECT_EQ("{mocap_rigid_body}/accel", std::string(accel_endpoint->name_template));
   EXPECT_EQ("geometry_msgs/AccelStamped", std::string(accel_endpoint->ros_type));
-  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, accel_endpoint->scope);
+  EXPECT_EQ(contract::EndpointScope::kGlobal, accel_endpoint->scope);
+  const auto *canonical_accel = contract::channelEndpoint(
+      vrpn_acceleration, contract::EndpointKind::kOutput, "output");
+  ASSERT_NE(nullptr, canonical_accel);
+  EXPECT_EQ("accel", std::string(canonical_accel->name_template));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, canonical_accel->scope);
 
   contract::ChannelMetadata vrpn_speed;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "vrpn.speed",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "vrpn.speed",
                                         &vrpn_speed));
   EXPECT_EQ(2006u, vrpn_speed.output_message_id);
 
   contract::ChannelMetadata command_velocity;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
                                         "command.velocity", &command_velocity));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, command_velocity.kind);
   EXPECT_EQ(2002u, command_velocity.output_message_id);
 
   contract::ChannelMetadata diagnostics;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
                                         "diagnostic.stream-health",
                                         &diagnostics));
   EXPECT_EQ(2011u, diagnostics.output_message_id);
   EXPECT_EQ("common.stream-health-report", std::string(diagnostics.processor));
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v8",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v9",
                                          "diagnostic.channel-health",
                                          &diagnostics));
 
   contract::ChannelMetadata health;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8", "state.health",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9", "state.health",
                                         &health));
   EXPECT_EQ(2005u, health.output_message_id);
   EXPECT_EQ(3u, health.observes_count);
   EXPECT_EQ(0u, health.policy_count);
 
   contract::ChannelMetadata unknown;
-  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v8", "operation.arm",
+  EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v9", "operation.arm",
                                          &unknown));
 
   contract::ChannelMetadata motion;
-  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v8",
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v9",
                                         "operation.motion-intent", &motion));
   EXPECT_EQ(contract::ChannelKind::kOperation, motion.kind);
   EXPECT_EQ(3205u, motion.input_message_id);
@@ -406,7 +411,7 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
   std::size_t operation_count = 0u;
   const auto *operations =
-      contract::profileOperations("scout-mini.ros1.v8", &operation_count);
+      contract::profileOperations("scout-mini.ros1.v9", &operation_count);
   ASSERT_NE(nullptr, operations);
   ASSERT_EQ(1u, operation_count);
   EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));

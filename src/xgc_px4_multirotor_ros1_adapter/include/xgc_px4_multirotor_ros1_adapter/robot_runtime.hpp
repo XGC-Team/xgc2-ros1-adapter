@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/AccelStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/AttitudeTarget.h>
@@ -22,8 +23,10 @@
 #include <sensor_msgs/Imu.h>
 
 #include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/common/v1/acceleration.pb.h"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
+#include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
@@ -36,7 +39,12 @@ struct NativeProfileConfig {
   std::string state_endpoint;
   std::string extended_state_endpoint;
   std::string mocap_endpoint;
+  std::string vision_pose_endpoint;
   std::string mocap_velocity_endpoint;
+  std::string mocap_acceleration_endpoint;
+  std::string canonical_pose_endpoint;
+  std::string canonical_velocity_endpoint;
+  std::string canonical_acceleration_endpoint;
   std::string local_setpoint_endpoint;
   std::string attitude_setpoint_endpoint;
   std::string timesync_endpoint;
@@ -51,6 +59,7 @@ struct NativeProfileConfig {
   double remote_control_altitude_meters = 0.0;
   double remote_control_maximum_linear_velocity_mps = 0.0;
   double remote_control_maximum_yaw_rate_rps = 0.0;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   std::vector<std::string> allowed_modes;
 };
 
@@ -172,6 +181,8 @@ private:
   void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
   void mocapVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
+  void mocapAccelerationCallback(
+      const geometry_msgs::AccelStamped::ConstPtr &message);
   void
   px4VelocityCallback(const geometry_msgs::TwistStamped::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
@@ -213,7 +224,12 @@ private:
   const std::string state_endpoint_;
   const std::string extended_state_endpoint_;
   const std::string mocap_endpoint_;
+  const std::string vision_pose_endpoint_;
   const std::string mocap_velocity_endpoint_;
+  const std::string mocap_acceleration_endpoint_;
+  const std::string canonical_pose_endpoint_;
+  const std::string canonical_velocity_endpoint_;
+  const std::string canonical_acceleration_endpoint_;
   const std::string local_setpoint_endpoint_;
   const std::string attitude_setpoint_endpoint_;
   const std::string timesync_endpoint_;
@@ -244,10 +260,13 @@ private:
   std::string local_position_frame_id_;
   bool has_local_position_ = false;
   bool has_mocap_position_ = false;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
+  xgc2_ros1_robot_adapter::VisionPublishCadence vision_publish_cadence_;
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;
   ros::Subscriber mocap_velocity_subscriber_;
+  ros::Subscriber mocap_acceleration_subscriber_;
   ros::Subscriber velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber power_subscriber_;
@@ -256,6 +275,10 @@ private:
   ros::Subscriber local_setpoint_subscriber_;
   ros::Subscriber attitude_setpoint_subscriber_;
   ros::Subscriber timesync_subscriber_;
+  ros::Publisher canonical_pose_publisher_;
+  ros::Publisher canonical_velocity_publisher_;
+  ros::Publisher canonical_acceleration_publisher_;
+  ros::Publisher vision_pose_publisher_;
 };
 
 } // namespace xgc_px4_multirotor_ros1_adapter

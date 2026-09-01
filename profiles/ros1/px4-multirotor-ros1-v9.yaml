@@ -1,9 +1,9 @@
 schema: xgc.robot.adapter-profile/v4
-profile_id: px4.multirotor.ros1.v8
-profile_version: 8
+profile_id: px4.multirotor.ros1.v9
+profile_version: 9
 native_protocol: ros1
 robot_kind: px4_multirotor
-description: PX4 multirotor telemetry, canonical mocap consumption, diagnostics, and native commands through MAVROS.
+description: PX4 multirotor raw mocap projection, fused telemetry, vision injection, diagnostics, and native commands through MAVROS.
 parameters:
   namespace:
     type: string
@@ -16,6 +16,26 @@ parameters:
     delivery: target_binding
     pattern: "^[A-Za-z][A-Za-z0-9_]*$"
     description: VRPN rigid-body name assigned by the robot-domain instance specification.
+  mocap_source_root:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Run-frozen raw VRPN source root injected by Robot runtime.
+  localization_offset_x:
+    type: number
+    required: false
+    delivery: target_binding
+    description: Run-frozen Experiment world X translation injected by Robot runtime.
+  localization_offset_y:
+    type: number
+    required: false
+    delivery: target_binding
+    description: Run-frozen Experiment world Y translation injected by Robot runtime.
+  localization_offset_z:
+    type: number
+    required: false
+    delivery: target_binding
+    description: Run-frozen Experiment world Z translation injected by Robot runtime.
   positioning_frame_number:
     type: integer
     required: true
@@ -31,7 +51,9 @@ semantic_traits:
   channel_stale_after_ms:
     state.pose: 1000
     state.mocap.pose: 500
+    state.vision.pose: 500
     state.mocap.velocity: 500
+    state.mocap.acceleration: 500
     state.mocap.speed: 500
     state.localization.error: 500
   online_conditions:
@@ -61,8 +83,23 @@ channels:
     output_rate_hz: 10
     inputs:
       pose:
-        name: pose
+        name: "{mocap_rigid_body}/pose"
         type: geometry_msgs/PoseStamped
+        scope: global
+    output:
+      name: pose
+      type: geometry_msgs/PoseStamped
+
+  - id: state.vision.pose
+    kind: stream_out
+    output_message_id: 2001
+    processor: px4.vision-pose
+    output_rate_hz: 1
+    observes:
+      - state.mocap.pose
+    output:
+      name: mavros/vision_pose/pose
+      type: geometry_msgs/PoseStamped
 
   - id: state.velocity
     kind: stream_out
@@ -81,8 +118,26 @@ channels:
     output_rate_hz: 10
     inputs:
       velocity:
-        name: twist
+        name: "{mocap_rigid_body}/twist"
         type: geometry_msgs/TwistStamped
+        scope: global
+    output:
+      name: twist
+      type: geometry_msgs/TwistStamped
+
+  - id: state.mocap.acceleration
+    kind: stream_out
+    output_message_id: 2008
+    processor: px4.mocap-acceleration
+    output_rate_hz: 10
+    inputs:
+      acceleration:
+        name: "{mocap_rigid_body}/accel"
+        type: geometry_msgs/AccelStamped
+        scope: global
+    output:
+      name: accel
+      type: geometry_msgs/AccelStamped
 
   - id: state.mocap.speed
     kind: stream_out
@@ -91,8 +146,9 @@ channels:
     output_rate_hz: 10
     inputs:
       velocity:
-        name: twist
+        name: "{mocap_rigid_body}/twist"
         type: geometry_msgs/TwistStamped
+        scope: global
 
   - id: state.localization.error
     kind: stream_out
@@ -202,7 +258,9 @@ channels:
     observes:
       - state.pose
       - state.mocap.pose
+      - state.vision.pose
       - state.mocap.velocity
+      - state.mocap.acceleration
       - state.mocap.speed
       - state.localization.error
       - state.velocity

@@ -5,10 +5,69 @@
 
 #include "xgc/semantic/aerial/v1/control.pb.h"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
+#include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/runtime_support.hpp"
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
+
+TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig config;
+  config.source_root = "/vrpn_client_node_physical";
+  config.offset_x = 1.0;
+  config.offset_y = -2.0;
+  config.offset_z = 0.25;
+  geometry_msgs::PoseStamped source;
+  source.header.frame_id = "world";
+  source.header.stamp = ros::Time(7, 8);
+  source.pose.position.x = 3.0;
+  source.pose.position.y = 4.0;
+  source.pose.position.z = 5.0;
+  source.pose.orientation.x = 0.1;
+  source.pose.orientation.w = 0.9;
+  geometry_msgs::PoseStamped projected;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::projectLocalizationPose(source, config,
+                                                               &projected));
+  EXPECT_DOUBLE_EQ(projected.pose.position.x, 4.0);
+  EXPECT_DOUBLE_EQ(projected.pose.position.y, 2.0);
+  EXPECT_DOUBLE_EQ(projected.pose.position.z, 5.25);
+  EXPECT_EQ(projected.header, source.header);
+  EXPECT_EQ(projected.pose.orientation, source.pose.orientation);
+}
+
+TEST(LocalizationProjection, ParsesStrictRunScopedParameters) {
+  std::map<std::string, std::string> parameters{
+      {"mocap_source_root", "/vrpn_client_node_simulation"},
+      {"localization_offset_x", "0"},
+      {"localization_offset_y", "-1.25"},
+      {"localization_offset_z", "2.5"},
+  };
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig config;
+  std::string error;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+      parameters, &config, &error))
+      << error;
+  EXPECT_EQ(config.source_root, "/vrpn_client_node_simulation");
+  EXPECT_DOUBLE_EQ(config.offset_y, -1.25);
+  parameters["mocap_source_root"] = "vrpn_client_node";
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+      parameters, &config, &error));
+  parameters["mocap_source_root"] = "/vrpn_client_node";
+  parameters["localization_offset_x"] = "nan";
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+      parameters, &config, &error));
+}
+
+TEST(LocalizationProjection, VisionCadenceUsesActualCallbackEmits) {
+  xgc2_ros1_robot_adapter::VisionPublishCadence cadence(30.0, 5u);
+  int emits = 0;
+  for (int index = 0; index < 120; ++index) {
+    if (cadence.take(static_cast<double>(index) / 120.0))
+      ++emits;
+  }
+  EXPECT_EQ(emits, 30);
+  EXPECT_FALSE(cadence.take(119.5 / 120.0));
+}
 
 constexpr const char *kProfileDigest =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -35,7 +94,7 @@ xgc::adapter::v1::AdapterInstanceSpec makeValidInstanceSpec() {
   robot_spec.set_robot_selection_digest(kRobotSelectionDigest);
   auto *robot = robot_spec.add_robots();
   robot->set_robot_id("px4-01");
-  robot->set_profile_id("px4.multirotor.ros1.v8");
+  robot->set_profile_id("px4.multirotor.ros1.v9");
   robot->set_profile_digest(kProfileDigest);
   (*robot->mutable_parameters())["namespace"] = "/uav1";
   (*robot->mutable_parameters())["mocap_rigid_body"] = "px4_01";

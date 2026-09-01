@@ -269,7 +269,7 @@ TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v5", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.ros1.v6", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =
@@ -310,9 +310,14 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   const auto *accel_endpoint = contract::channelEndpoint(
       acceleration, contract::EndpointKind::kInput, "acceleration");
   ASSERT_NE(nullptr, accel_endpoint);
-  EXPECT_EQ("accel", std::string(accel_endpoint->name_template));
+  EXPECT_EQ("{mocap_rigid_body}/accel", std::string(accel_endpoint->name_template));
   EXPECT_EQ("geometry_msgs/AccelStamped", std::string(accel_endpoint->ros_type));
-  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, accel_endpoint->scope);
+  EXPECT_EQ(contract::EndpointScope::kGlobal, accel_endpoint->scope);
+  const auto *canonical_accel = contract::channelEndpoint(
+      acceleration, contract::EndpointKind::kOutput, "output");
+  ASSERT_NE(nullptr, canonical_accel);
+  EXPECT_EQ("accel", std::string(canonical_accel->name_template));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, canonical_accel->scope);
   EXPECT_EQ(2006u, speed.output_message_id);
   EXPECT_EQ(2002u, command.output_message_id);
 

@@ -335,23 +335,29 @@ private:
       *error = "profile digest mismatch for robot " + robot.robot_id;
       return false;
     }
-    if (robot.parameters.size() != 4 ||
+    if (robot.parameters.size() != 8 ||
         robot.parameters.find("namespace") == robot.parameters.end() ||
         robot.parameters.find("mocap_rigid_body") == robot.parameters.end() ||
+        robot.parameters.find("mocap_source_root") == robot.parameters.end() ||
+        robot.parameters.find("localization_offset_x") == robot.parameters.end() ||
+        robot.parameters.find("localization_offset_y") == robot.parameters.end() ||
+        robot.parameters.find("localization_offset_z") == robot.parameters.end() ||
         robot.parameters.find("positioning_frame_number") == robot.parameters.end() ||
         robot.parameters.find("positioning_comparison_threshold_m") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly namespace, mocap_rigid_body, "
-               "positioning_frame_number, and positioning_comparison_threshold_m";
+               " must contain exactly the Adapter localization and positioning parameters";
       return false;
     }
     std::string native_error;
     xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config;
+    xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
     if (!validRobotNamespace(robot.parameters.at("namespace"), &native_error) ||
         !validMocapRigidBodyName(robot.parameters.at("mocap_rigid_body"),
                                  &native_error) ||
         !xgc2_ros1_robot_adapter::parsePositioningHealthConfig(
-            robot.parameters, &positioning_config, &native_error)) {
+            robot.parameters, &positioning_config, &native_error) ||
+        !xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+            robot.parameters, &localization, &native_error)) {
       *error = "invalid native configuration for robot " + robot.robot_id +
                ": " + native_error;
       return false;

@@ -341,7 +341,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
-  "px4-multirotor-ros1-v8.yaml" \
+  "px4-multirotor-ros1-v9.yaml" \
   "xgc2-px4-multirotor-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc_px4_multirotor_ros1_adapter_service_helper"
@@ -352,7 +352,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "scout-mini-ros1-v8.yaml" \
+  "scout-mini-ros1-v9.yaml" \
   "xgc2-scout-mini-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 
@@ -362,7 +362,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
   "XGC2 Mecanum UGV ROS1 semantic adapter" \
   "Provides Mecanum UGV VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "mecanum-ugv-ros1-v5.yaml" \
+  "mecanum-ugv-ros1-v6.yaml" \
   "xgc2-mecanum-ugv-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 

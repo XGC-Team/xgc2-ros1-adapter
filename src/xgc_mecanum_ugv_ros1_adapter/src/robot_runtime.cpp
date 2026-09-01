@@ -434,11 +434,23 @@ bool validateNativeProfileContract(std::string *error) {
   contract::ParameterMetadata robot_namespace{};
   contract::ParameterMetadata frames{};
   contract::ParameterMetadata threshold{};
-  if (parameters == nullptr || parameter_count != 4u ||
+  contract::ParameterMetadata source_root{};
+  contract::ParameterMetadata offset_x{};
+  contract::ParameterMetadata offset_y{};
+  contract::ParameterMetadata offset_z{};
+  if (parameters == nullptr || parameter_count != 8u ||
       !contract::parameterMetadata(contract::kProfileId, "mocap_rigid_body", &mocap) ||
       mocap.type != contract::ParameterType::kString || !mocap.required ||
       !contract::parameterMetadata(contract::kProfileId, "namespace", &robot_namespace) ||
       robot_namespace.type != contract::ParameterType::kString || !robot_namespace.required ||
+      !contract::parameterMetadata(contract::kProfileId, "mocap_source_root", &source_root) ||
+      source_root.type != contract::ParameterType::kString || source_root.required ||
+      !contract::parameterMetadata(contract::kProfileId, "localization_offset_x", &offset_x) ||
+      offset_x.type != contract::ParameterType::kNumber || offset_x.required ||
+      !contract::parameterMetadata(contract::kProfileId, "localization_offset_y", &offset_y) ||
+      offset_y.type != contract::ParameterType::kNumber || offset_y.required ||
+      !contract::parameterMetadata(contract::kProfileId, "localization_offset_z", &offset_z) ||
+      offset_z.type != contract::ParameterType::kNumber || offset_z.required ||
       !contract::parameterMetadata(contract::kProfileId, "positioning_frame_number", &frames) ||
       frames.type != contract::ParameterType::kInteger || !frames.required ||
       !contract::parameterMetadata(contract::kProfileId, "positioning_comparison_threshold_m", &threshold) ||
@@ -515,10 +527,22 @@ bool validateNativeProfileContract(std::string *error) {
       }
     } else {
       const bool fused_speed = std::string(binding.channel_id) == "vrpn.speed";
-      if (channel.endpoint_count != (fused_speed ? 2u : 1u) ||
+      const bool localization_projection = channel_id == "vrpn.position" ||
+                                           channel_id == "vrpn.velocity" ||
+                                           channel_id == "vrpn.acceleration";
+      if (channel.endpoint_count != (fused_speed ? 2u : localization_projection ? 2u : 1u) ||
           channel.observes_count != 0u) {
         return fail(error, std::string("Mecanum endpoint binding drifted: ") +
                                binding.channel_id);
+      }
+      if (localization_projection) {
+        const auto *projection_output = contract::channelEndpoint(
+            channel, contract::EndpointKind::kOutput, "output");
+        if (projection_output == nullptr ||
+            projection_output->scope != contract::EndpointScope::kRobotNamespace ||
+            std::string(projection_output->ros_type) != binding.ros_type) {
+          return fail(error, "Mecanum localization output binding drifted");
+        }
       }
       const auto *endpoint = contract::channelEndpoint(
           channel, contract::EndpointKind::kInput, binding.endpoint_role);
@@ -654,6 +678,9 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string pose_endpoint;
   std::string vrpn_velocity_endpoint;
   std::string vrpn_acceleration_endpoint;
+  std::string canonical_pose_endpoint;
+  std::string canonical_velocity_endpoint;
+  std::string canonical_acceleration_endpoint;
   std::string speed_endpoint;
   std::string speed_pose_endpoint;
   std::string command_velocity_endpoint;
@@ -665,6 +692,12 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &vrpn_velocity_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.acceleration", "acceleration",
                             &vrpn_acceleration_endpoint, error) ||
+      !resolveOutputEndpoint(config, "vrpn.position", &canonical_pose_endpoint,
+                             error) ||
+      !resolveOutputEndpoint(config, "vrpn.velocity", &canonical_velocity_endpoint,
+                             error) ||
+      !resolveOutputEndpoint(config, "vrpn.acceleration",
+                             &canonical_acceleration_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.speed", "velocity",
                             &speed_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.speed", "pose",
@@ -677,6 +710,15 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &voltage_endpoint, error)) {
     return nullptr;
   }
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  if (!xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+          config.parameters, &localization, error))
+    return nullptr;
+  pose_endpoint = topicName(localization.source_root, pose_endpoint);
+  vrpn_velocity_endpoint = topicName(localization.source_root, vrpn_velocity_endpoint);
+  vrpn_acceleration_endpoint = topicName(localization.source_root, vrpn_acceleration_endpoint);
+  speed_endpoint = topicName(localization.source_root, speed_endpoint);
+  speed_pose_endpoint = topicName(localization.source_root, speed_pose_endpoint);
   if (vrpn_velocity_endpoint != speed_endpoint ||
       pose_endpoint != speed_pose_endpoint) {
     fail(error,
@@ -700,6 +742,10 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        mocap_it->second, std::move(pose_endpoint),
                        std::move(vrpn_velocity_endpoint),
                        std::move(vrpn_acceleration_endpoint),
+                       std::move(canonical_pose_endpoint),
+                       std::move(canonical_velocity_endpoint),
+                       std::move(canonical_acceleration_endpoint),
+                       localization,
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint), std::move(voltage_endpoint),
                        positioning_config, std::move(battery_curve),
@@ -725,6 +771,10 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string pose_endpoint,
                            std::string vrpn_velocity_endpoint,
                            std::string vrpn_acceleration_endpoint,
+                           std::string canonical_pose_endpoint,
+                           std::string canonical_velocity_endpoint,
+                           std::string canonical_acceleration_endpoint,
+                           xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
@@ -744,9 +794,13 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       pose_endpoint_(std::move(pose_endpoint)),
       vrpn_velocity_endpoint_(std::move(vrpn_velocity_endpoint)),
       vrpn_acceleration_endpoint_(std::move(vrpn_acceleration_endpoint)),
+      canonical_pose_endpoint_(std::move(canonical_pose_endpoint)),
+      canonical_velocity_endpoint_(std::move(canonical_velocity_endpoint)),
+      canonical_acceleration_endpoint_(std::move(canonical_acceleration_endpoint)),
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
       voltage_endpoint_(std::move(voltage_endpoint)),
+      localization_(std::move(localization)),
       positioning_health_(positioning_config),
       battery_curve_(std::move(battery_curve)) {}
 
@@ -796,6 +850,12 @@ void RobotRuntime::Stop() {
   {
     std::unique_lock<std::mutex> lock(mutex_);
     callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0; });
+  }
+  canonical_pose_publisher_.shutdown();
+  canonical_velocity_publisher_.shutdown();
+  canonical_acceleration_publisher_.shutdown();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
     stop_complete_ = true;
   }
   callbacks_idle_.notify_all();
@@ -814,6 +874,16 @@ bool RobotRuntime::install(std::string *error) {
   }
 
   const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
+  canonical_pose_publisher_ =
+      node_handle_.advertise<geometry_msgs::PoseStamped>(canonical_pose_endpoint_, 20, false);
+  canonical_velocity_publisher_ =
+      node_handle_.advertise<geometry_msgs::TwistStamped>(canonical_velocity_endpoint_, 20, false);
+  canonical_acceleration_publisher_ =
+      node_handle_.advertise<geometry_msgs::AccelStamped>(canonical_acceleration_endpoint_, 20, false);
+  if (!requireRosRegistration(canonical_pose_publisher_, canonical_pose_endpoint_, error) ||
+      !requireRosRegistration(canonical_velocity_publisher_, canonical_velocity_endpoint_, error) ||
+      !requireRosRegistration(canonical_acceleration_publisher_, canonical_acceleration_endpoint_, error))
+    return false;
   {
     // AsyncSpinner callbacks may start immediately after subscribe(). Keep
     // tracking state and subscriber registration behind the callback mutex.
@@ -1037,29 +1107,34 @@ void RobotRuntime::poseCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
+  geometry_msgs::PoseStamped projected;
+  if (!xgc2_ros1_robot_adapter::projectLocalizationPose(
+          *message, localization_, &projected))
+    return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    vrpn_orientation_ = message->pose.orientation;
+    vrpn_orientation_ = projected.pose.orientation;
     has_vrpn_orientation_ = true;
     positioning_health_.recordPose(
-        now.toSec(), message->pose.position.x, message->pose.position.y,
-        message->pose.position.z);
+        now.toSec(), projected.pose.position.x, projected.pose.position.y,
+        projected.pose.position.z);
     recordSourceLocked("vrpn.position", now);
     if (channelEnabled("vrpn.position") &&
         shouldEmitLocked("vrpn.position", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
-      payload.set_frame_id(message->header.frame_id);
+      payload.set_frame_id(projected.header.frame_id);
       payload.set_child_frame_id(mocap_rigid_body_);
-      copyVector(message->pose.position, payload.mutable_position());
-      copyQuaternion(message->pose.orientation,
+      copyVector(projected.pose.position, payload.mutable_position());
+      copyQuaternion(projected.pose.orientation,
                      payload.mutable_orientation());
       output.push_back(makeEnvelopeLocked("vrpn.position",
-                                          message->header.stamp, payload));
+                                          projected.header.stamp, payload));
       recordOutputLocked("vrpn.position");
     } else if (channelEnabled("vrpn.position")) {
       ++sources_["vrpn.position"].dropped_samples;
     }
   }
+  canonical_pose_publisher_.publish(projected);
   emit(std::move(output));
 }
 
@@ -1165,6 +1240,8 @@ void RobotRuntime::vrpnVelocityCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
+  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message))
+    return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (required_channels_.count("vrpn.velocity") != 0u)
@@ -1206,6 +1283,7 @@ void RobotRuntime::vrpnVelocityCallback(
       ++sources_["vrpn.speed"].dropped_samples;
     }
   }
+  canonical_velocity_publisher_.publish(*message);
   emit(std::move(output));
 }
 
@@ -1216,6 +1294,8 @@ void RobotRuntime::vrpnAccelerationCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
+  if (!xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message))
+    return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("vrpn.acceleration", now);
@@ -1229,6 +1309,7 @@ void RobotRuntime::vrpnAccelerationCallback(
       ++sources_["vrpn.acceleration"].dropped_samples;
     }
   }
+  canonical_acceleration_publisher_.publish(*message);
   emit(std::move(output));
 }
 

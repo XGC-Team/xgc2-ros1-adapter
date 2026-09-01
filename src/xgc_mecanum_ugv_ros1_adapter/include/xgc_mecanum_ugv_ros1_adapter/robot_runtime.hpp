@@ -21,6 +21,7 @@
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/common/v1/acceleration.pb.h"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
+#include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_mecanum_ugv_ros1_adapter {
@@ -113,6 +114,10 @@ private:
                std::string mocap_rigid_body, std::string pose_endpoint,
                std::string vrpn_velocity_endpoint,
                std::string vrpn_acceleration_endpoint,
+               std::string canonical_pose_endpoint,
+               std::string canonical_velocity_endpoint,
+               std::string canonical_acceleration_endpoint,
+               xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint,
                xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
@@ -165,9 +170,13 @@ private:
   const std::string pose_endpoint_;
   const std::string vrpn_velocity_endpoint_;
   const std::string vrpn_acceleration_endpoint_;
+  const std::string canonical_pose_endpoint_;
+  const std::string canonical_velocity_endpoint_;
+  const std::string canonical_acceleration_endpoint_;
   const std::string command_velocity_endpoint_;
   const std::string imu_endpoint_;
   const std::string voltage_endpoint_;
+  const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
 
@@ -189,6 +198,9 @@ private:
   ros::Subscriber command_velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber voltage_subscriber_;
+  ros::Publisher canonical_pose_publisher_;
+  ros::Publisher canonical_velocity_publisher_;
+  ros::Publisher canonical_acceleration_publisher_;
 };
 
 } // namespace xgc_mecanum_ugv_ros1_adapter
