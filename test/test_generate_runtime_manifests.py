@@ -800,7 +800,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "708116a954f4965f9fbadc075edd93050d89d091",
+            "c236786f0256caf404905d83f9334411c90d12ec",
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
