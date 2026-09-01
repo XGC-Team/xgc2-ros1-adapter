@@ -34,6 +34,24 @@ bool resolveMotionCommandTopic(
     std::string *error);
 bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
                    double stale_after_seconds);
+// stream-health itself emits at 10 Hz. Closing the rate window on every emit
+// turns a 1 Hz PowerVoltage sample into a 5–10 Hz spike and a 0 Hz gap.
+// Accumulate at least one second before publishing a new rate.
+constexpr double kStreamRateWindowSeconds = 1.0;
+struct StreamRateEstimate {
+  double source_rate_hz = 0.0;
+  double output_rate_hz = 0.0;
+};
+StreamRateEstimate updateStreamRateEstimate(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh);
+struct StreamRateWindow {
+  StreamRateEstimate rates;
+  bool close = false;
+};
+StreamRateWindow updateStreamRateWindow(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh);
 double vrpnForwardSpeedMetersPerSecond(
     double velocity_x, double velocity_y, double velocity_z,
     double orientation_x, double orientation_y, double orientation_z,

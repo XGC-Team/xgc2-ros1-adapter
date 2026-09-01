@@ -61,6 +61,9 @@ RemoteControlPublisher::RemoteControlPublisher(
       maximum_linear_velocity_mps_(maximum_linear_velocity_mps),
       maximum_yaw_rate_rps_(maximum_yaw_rate_rps) {
   target_.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+  // Match xgc1 XMinidroneRemoteControlSubRosModule: ignore PX/PY/VZ/AF*/YAW,
+  // hold altitude, stream velocity + yaw_rate. Zero intent is still this
+  // stream so OFFBOARD does not starve.
   target_.type_mask =
       mavros_msgs::PositionTarget::IGNORE_PX |
       mavros_msgs::PositionTarget::IGNORE_PY |
@@ -68,11 +71,10 @@ RemoteControlPublisher::RemoteControlPublisher(
       mavros_msgs::PositionTarget::IGNORE_AFX |
       mavros_msgs::PositionTarget::IGNORE_AFY |
       mavros_msgs::PositionTarget::IGNORE_AFZ |
-      mavros_msgs::PositionTarget::FORCE |
       mavros_msgs::PositionTarget::IGNORE_YAW;
   // MAVROS exposes local position to ROS in ENU and performs the native NED
   // transform in the setpoint plugin. The operator contract therefore uses
-  // positive-up one metre here.
+  // positive-up one metre here, same as xgc1 position.z = 1.
   target_.position.z = altitude_meters_;
 }
 

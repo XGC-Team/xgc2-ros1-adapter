@@ -172,6 +172,47 @@ TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
   EXPECT_DOUBLE_EQ(0.5, published.back().linear.x);
 }
 
+TEST(StreamRateEstimate, RetainsCredibleRatesAcrossFreshEmptyWindows) {
+  const auto observed = updateStreamRateEstimate({}, 1u, 1u, 1.1, true);
+  EXPECT_NEAR(0.909, observed.source_rate_hz, 0.001);
+  EXPECT_NEAR(0.909, observed.output_rate_hz, 0.001);
+
+  const auto empty =
+      updateStreamRateEstimate(observed, 0u, 0u, 1.0, true);
+  EXPECT_DOUBLE_EQ(observed.source_rate_hz, empty.source_rate_hz);
+  EXPECT_DOUBLE_EQ(observed.output_rate_hz, empty.output_rate_hz);
+}
+
+TEST(StreamRateEstimate, ClearsRetainedRatesWhenTheSourceIsStale) {
+  const StreamRateEstimate previous{0.9, 1.0};
+  const auto stale =
+      updateStreamRateEstimate(previous, 0u, 0u, 1.0, false);
+  EXPECT_DOUBLE_EQ(0.0, stale.source_rate_hz);
+  EXPECT_DOUBLE_EQ(0.0, stale.output_rate_hz);
+}
+
+TEST(StreamRateWindow, DoesNotQuantizeAOneHertzTopicOnATenHertzHealthEmit) {
+  const auto spike =
+      updateStreamRateWindow({}, 1u, 1u, 0.1, true);
+  EXPECT_DOUBLE_EQ(0.0, spike.rates.source_rate_hz);
+  EXPECT_FALSE(spike.close);
+
+  const auto closed =
+      updateStreamRateWindow({}, 1u, 1u, 1.0, true);
+  EXPECT_NEAR(1.0, closed.rates.source_rate_hz, 1e-12);
+  EXPECT_TRUE(closed.close);
+
+  const auto empty =
+      updateStreamRateWindow(closed.rates, 0u, 0u, 1.0, true);
+  EXPECT_DOUBLE_EQ(closed.rates.source_rate_hz, empty.rates.source_rate_hz);
+  EXPECT_TRUE(empty.close);
+
+  const auto stale =
+      updateStreamRateWindow(closed.rates, 0u, 0u, 0.1, false);
+  EXPECT_DOUBLE_EQ(0.0, stale.rates.source_rate_hz);
+  EXPECT_TRUE(stale.close);
+}
+
 TEST(Freshness, AppliesTheVrpnPositionBoundary) {
   const ros::WallTime now(10, 0);
   contract::ChannelMetadata position{};
