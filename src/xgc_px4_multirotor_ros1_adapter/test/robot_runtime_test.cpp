@@ -306,6 +306,7 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
   EXPECT_TRUE(contract::messageMetadata(3201, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3202, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3203, &metadata));
+  EXPECT_TRUE(contract::messageMetadata(3206, &metadata));
   EXPECT_FALSE(contract::messageMetadata(5001, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3002, &metadata));
   EXPECT_TRUE(contract::messageMetadata(3003, &metadata));
@@ -316,7 +317,7 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
 }
 
 TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
-  EXPECT_EQ(4520586543673728191ULL, contract::kRegistryFingerprint);
+  EXPECT_EQ(8700786239600703076ULL, contract::kRegistryFingerprint);
 
   contract::MessageMetadata metadata;
   ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));

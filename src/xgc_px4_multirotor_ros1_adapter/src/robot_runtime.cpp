@@ -265,7 +265,7 @@ const std::array<NativeChannelBinding, 22u> kNativeBindings{{
     {"operation.autopilot-reboot", "px4.autopilot-reboot",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 8u, false},
     {"operation.force-disarm", "px4.force-disarm",
-     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 1u, false},
+     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 3u, false},
     {"operation.motion-intent", "px4.set-motion-intent",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 5u, false},
 }};
@@ -553,7 +553,8 @@ bool BuildNativeProfileConfig(
                                binding.id);
       }
       const std::string expected_side_effect =
-          std::string(binding.id) == "operation.autopilot-reboot"
+          (std::string(binding.id) == "operation.autopilot-reboot" ||
+           std::string(binding.id) == "operation.force-disarm")
               ? "non-idempotent"
               : "idempotent";
       if (channel.operation_contract.side_effect != expected_side_effect)
