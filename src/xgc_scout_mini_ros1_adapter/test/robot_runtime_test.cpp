@@ -153,12 +153,14 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   publisher.PublishPeriodic();
   EXPECT_EQ(6u, published.size());
 
+  // Close already published the last zero and released the stream. Stop()
+  // must not emit a second zero.
   publisher.Stop();
-  ASSERT_EQ(7u, published.size());
+  ASSERT_EQ(6u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
-  EXPECT_EQ(7u, published.size());
+  EXPECT_EQ(6u, published.size());
   EXPECT_FALSE(publisher.SetIntent(1, 1, 0, 0, &error));
 }
 
