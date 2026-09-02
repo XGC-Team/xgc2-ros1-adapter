@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-30
+version: 0.5.0-31
 kind: ros1-apt
 summary: Robot-owned ROS1 semantic adapters plus the separate read-only Mocap Rotor onboard Zenoh forwarder.
 groups:
@@ -137,4 +137,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-30
+    focal: 0.5.0-31

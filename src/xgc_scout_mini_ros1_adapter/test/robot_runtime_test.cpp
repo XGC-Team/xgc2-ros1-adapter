@@ -139,13 +139,26 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   ASSERT_EQ(3u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
+  publisher.PublishPeriodic();
+  EXPECT_EQ(3u, published.size());
+
+  ASSERT_TRUE(publisher.SetIntent(2, 1, 0, 0, &error)) << error;
+  ASSERT_EQ(4u, published.size());
+  publisher.PublishPeriodic();
+  ASSERT_EQ(5u, published.size());
+  EXPECT_DOUBLE_EQ(1.0, published.back().linear.x);
+
+  ASSERT_TRUE(publisher.SetIntent(1, 0, 0, 0, &error)) << error;
+  ASSERT_EQ(6u, published.size());
+  publisher.PublishPeriodic();
+  EXPECT_EQ(6u, published.size());
 
   publisher.Stop();
-  ASSERT_EQ(4u, published.size());
+  ASSERT_EQ(7u, published.size());
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
-  EXPECT_EQ(4u, published.size());
+  EXPECT_EQ(7u, published.size());
   EXPECT_FALSE(publisher.SetIntent(1, 1, 0, 0, &error));
 }
 
