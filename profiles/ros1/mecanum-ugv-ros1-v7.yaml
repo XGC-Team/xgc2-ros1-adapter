@@ -57,6 +57,7 @@ semantic_traits:
     command.velocity: 1000
     state.power: 5000
     state.health: 2000
+    state.controller: 2000
   online_conditions:
     - channel_id: state.imu
       maximum_age_ms: 1000
@@ -164,6 +165,17 @@ channels:
       - vrpn.position
       - vrpn.velocity
       - state.imu
+
+  - id: state.controller
+    kind: stream_out
+    output_message_id: 2012
+    processor: mecanum-ugv.controller-status
+    output_rate_hz: 5
+    inputs:
+      status:
+        name: custom/statustext
+        type: std_msgs/String
+
   - id: operation.motion-intent
     kind: operation
     operation_id: set-motion-intent
@@ -211,3 +223,4 @@ channels:
       - state.imu
       - command.velocity
       - state.power
+      - state.controller

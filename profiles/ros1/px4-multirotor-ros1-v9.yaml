@@ -94,12 +94,14 @@ channels:
     kind: stream_out
     output_message_id: 2001
     processor: px4.vision-pose
-    output_rate_hz: 1
+    output_rate_hz: 1  # Core/SSE observe throttle, not MAVLink
     observes:
       - state.mocap.pose
     output:
       name: mavros/vision_pose/pose
       type: geometry_msgs/PoseStamped
+    policy:
+      publish_rate_hz: 30  # Adapter vision_pose air; fail-closed == 30
 
   - id: state.velocity
     kind: stream_out
@@ -207,6 +209,16 @@ channels:
         name: mavros/extended_state
         type: mavros_msgs/ExtendedState
 
+  - id: state.controller
+    kind: stream_out
+    output_message_id: 2012
+    processor: px4.controller-status
+    output_rate_hz: 5
+    inputs:
+      status:
+        name: custom/statustext
+        type: std_msgs/String
+
   - id: setpoint.local
     kind: stream_out
     output_message_id: 3002
@@ -268,6 +280,7 @@ channels:
       - state.power
       - state.health
       - state.flight
+      - state.controller
       - setpoint.local
       - setpoint.attitude
       - diagnostic.fcu-link

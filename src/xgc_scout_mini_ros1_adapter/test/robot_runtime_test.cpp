@@ -409,6 +409,13 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
   EXPECT_EQ(3u, health.observes_count);
   EXPECT_EQ(0u, health.policy_count);
 
+  contract::ChannelMetadata controller;
+  ASSERT_TRUE(contract::channelMetadata("scout-mini.ros1.v10", "state.controller",
+                                        &controller));
+  EXPECT_EQ(2012u, controller.output_message_id);
+  EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
+  EXPECT_EQ("scout-mini.controller-status", std::string(controller.processor));
+
   contract::ChannelMetadata unknown;
   EXPECT_FALSE(contract::channelMetadata("scout-mini.ros1.v10", "operation.arm",
                                          &unknown));

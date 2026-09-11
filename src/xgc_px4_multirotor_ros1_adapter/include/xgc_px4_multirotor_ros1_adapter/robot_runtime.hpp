@@ -21,6 +21,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
 #include <sensor_msgs/Imu.h>
+#include <std_msgs/String.h>
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/common/v1/acceleration.pb.h"
@@ -36,6 +37,7 @@ struct NativeProfileConfig {
   std::string velocity_endpoint;
   std::string imu_endpoint;
   std::string power_endpoint;
+  std::string controller_status_endpoint;
   std::string state_endpoint;
   std::string extended_state_endpoint;
   std::string mocap_endpoint;
@@ -59,6 +61,7 @@ struct NativeProfileConfig {
   double remote_control_altitude_meters = 0.0;
   double remote_control_maximum_linear_velocity_mps = 0.0;
   double remote_control_maximum_yaw_rate_rps = 0.0;
+  double vision_publish_rate_hz = 30.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   std::vector<std::string> allowed_modes;
 };
@@ -187,6 +190,7 @@ private:
   px4VelocityCallback(const geometry_msgs::TwistStamped::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void batteryCallback(const sensor_msgs::BatteryState::ConstPtr &message);
+  void controllerStatusCallback(const std_msgs::String::ConstPtr &message);
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr &message);
   void mavrosExtendedStateCallback(
       const mavros_msgs::ExtendedState::ConstPtr &message);
@@ -221,6 +225,7 @@ private:
   const std::string velocity_endpoint_;
   const std::string imu_endpoint_;
   const std::string power_endpoint_;
+  const std::string controller_status_endpoint_;
   const std::string state_endpoint_;
   const std::string extended_state_endpoint_;
   const std::string mocap_endpoint_;
@@ -270,6 +275,7 @@ private:
   ros::Subscriber velocity_subscriber_;
   ros::Subscriber imu_subscriber_;
   ros::Subscriber power_subscriber_;
+  ros::Subscriber controller_status_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber extended_state_subscriber_;
   ros::Subscriber local_setpoint_subscriber_;

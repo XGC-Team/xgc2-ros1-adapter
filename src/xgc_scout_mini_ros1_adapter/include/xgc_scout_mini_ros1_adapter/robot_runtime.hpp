@@ -17,6 +17,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Float32.h>
+#include <std_msgs/String.h>
 #include <std_msgs/UInt32.h>
 
 #include "xgc/robot/v1/message.pb.h"
@@ -124,6 +125,7 @@ private:
                xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint, std::string chassis_state_endpoint,
+               std::string controller_status_endpoint,
                xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
                std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve,
                EnvelopeEmitter emitter);
@@ -157,6 +159,7 @@ private:
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);
   void chassisStateCallback(const std_msgs::UInt32::ConstPtr &message);
+  void controllerStatusCallback(const std_msgs::String::ConstPtr &message);
   void emitHealthLocked(const ros::WallTime &now,
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitStreamHealthLocked(const ros::WallTime &now,
@@ -182,6 +185,7 @@ private:
   const std::string imu_endpoint_;
   const std::string voltage_endpoint_;
   const std::string chassis_state_endpoint_;
+  const std::string controller_status_endpoint_;
   const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
@@ -208,6 +212,7 @@ private:
   ros::Subscriber imu_subscriber_;
   ros::Subscriber voltage_subscriber_;
   ros::Subscriber chassis_state_subscriber_;
+  ros::Subscriber controller_status_subscriber_;
   ros::Publisher canonical_pose_publisher_;
   ros::Publisher canonical_velocity_publisher_;
   ros::Publisher canonical_acceleration_publisher_;

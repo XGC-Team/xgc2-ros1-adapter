@@ -57,6 +57,7 @@ semantic_traits:
     state.power: 5000
     state.health: 2000
     state.chassis: 2000
+    state.controller: 2000
   online_conditions:
     - channel_id: state.imu
       maximum_age_ms: 1000
@@ -212,6 +213,16 @@ channels:
         name: scout/chassis_state
         type: std_msgs/UInt32
 
+  - id: state.controller
+    kind: stream_out
+    output_message_id: 2012
+    processor: scout-mini.controller-status
+    output_rate_hz: 5
+    inputs:
+      status:
+        name: custom/statustext
+        type: std_msgs/String
+
   - id: diagnostic.stream-health
     kind: stream_out
     output_message_id: 2011
@@ -227,3 +238,4 @@ channels:
       - state.power
       - state.health
       - state.chassis
+      - state.controller

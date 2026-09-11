@@ -304,7 +304,7 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
   ASSERT_NE(nullptr, channels);
-  ASSERT_EQ(10u, channel_count);
+  ASSERT_EQ(12u, channel_count);
 
   const std::vector<std::string> streams{
       "vrpn.position", "vrpn.velocity", "vrpn.acceleration", "vrpn.speed",
@@ -365,6 +365,13 @@ TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   EXPECT_DOUBLE_EQ(1.0, health.output_rate_hz);
   EXPECT_EQ(3u, health.observes_count);
   EXPECT_EQ(0u, health.policy_count);
+
+  contract::ChannelMetadata controller{};
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.controller",
+                                        &controller));
+  EXPECT_EQ(2012u, controller.output_message_id);
+  EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
+  EXPECT_EQ("mecanum-ugv.controller-status", std::string(controller.processor));
 
   contract::ChannelMetadata forbidden{};
   EXPECT_FALSE(contract::channelMetadata(contract::kProfileId, "state.odom",

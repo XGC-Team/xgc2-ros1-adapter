@@ -74,6 +74,7 @@ MESSAGE_ROLES = {
     2008: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
+    2012: "telemetry",
     3001: "telemetry",
     3002: "telemetry",
     3003: "telemetry",
@@ -97,6 +98,7 @@ TYPE_NAMES = {
     2006: "xgc.semantic.common.v1.SpeedEstimate",
     2007: "xgc.semantic.common.v1.DistanceEstimate",
     2008: "xgc.semantic.common.v1.AccelerationEstimate",
+    2012: "xgc.semantic.common.v1.ControllerStatus",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3103: "xgc.semantic.ground.v1.LocomotionStatus",
@@ -253,6 +255,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "state.power",
                 "state.health",
                 "state.flight",
+                "state.controller",
                 "setpoint.local",
                 "setpoint.attitude",
                 "diagnostic.fcu-link",
@@ -323,6 +326,12 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         self.assertEqual(
             px4_channels["state.vision.pose"]["processor"], "px4.vision-pose"
+        )
+        self.assertEqual(
+            px4_channels["state.vision.pose"]["output_rate_hz"], 1
+        )
+        self.assertEqual(
+            px4_channels["state.vision.pose"]["policy"]["publish_rate_hz"], 30
         )
         self.assertEqual(
             px4_channels["state.vision.pose"]["endpoints"][0],
@@ -480,6 +489,18 @@ class ContractGeneratorTest(unittest.TestCase):
                 "scope": "robot_namespace",
             },
         )
+        self.assertEqual(scout_channels["state.controller"]["output_message_id"], 2012)
+        self.assertEqual(scout_channels["state.controller"]["output_rate_hz"], 5)
+        self.assertEqual(
+            scout_channels["state.controller"]["endpoints"][0],
+            {
+                "kind": "input",
+                "role": "status",
+                "name_template": "custom/statustext",
+                "ros_type": "std_msgs/String",
+                "scope": "robot_namespace",
+            },
+        )
         self.assertEqual(
             scout_channels["vrpn.speed"]["output_message_id"], 2006
         )
@@ -543,6 +564,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "state.imu",
                 "state.power",
                 "state.health",
+                "state.controller",
                 "operation.motion-intent",
                 "operation.motion-intent-release",
                 "diagnostic.stream-health",

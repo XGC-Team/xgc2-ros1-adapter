@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <string>
@@ -215,10 +216,12 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   EXPECT_EQ("/uav1/mavros/cmd/arming", native.arm_service_endpoint);
   EXPECT_EQ("/uav1/mavros/set_mode", native.mode_service_endpoint);
   EXPECT_EQ("/uav1/mavros/cmd/command", native.reboot_service_endpoint);
+  EXPECT_EQ("/uav1/custom/statustext", native.controller_status_endpoint);
   EXPECT_DOUBLE_EQ(0.5, native.offboard_source_timeout_seconds);
   EXPECT_DOUBLE_EQ(2.5, native.offboard_minimum_rate_hz);
   EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
   EXPECT_DOUBLE_EQ(5.0, native.maximum_operation_timeout_seconds);
+  EXPECT_DOUBLE_EQ(30.0, native.vision_publish_rate_hz);
   EXPECT_EQ(
       (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
       native.allowed_modes);
@@ -235,6 +238,11 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
                                         &vision_pose));
   EXPECT_STREQ("px4.vision-pose", vision_pose.processor);
   EXPECT_EQ(1u, vision_pose.endpoint_count);
+  EXPECT_EQ(1u, vision_pose.policy_count);
+  std::int64_t vision_publish_rate = 0;
+  ASSERT_TRUE(contract::channelPolicyInteger(vision_pose, "publish_rate_hz",
+                                            &vision_publish_rate));
+  EXPECT_EQ(30, vision_publish_rate);
 }
 
 TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
@@ -285,6 +293,13 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
       contract::channelMetadata("px4.multirotor.ros1.v9", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
+
+  contract::ChannelMetadata controller;
+  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v9",
+                                        "state.controller", &controller));
+  EXPECT_EQ(2012u, controller.output_message_id);
+  EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
+  EXPECT_EQ("px4.controller-status", std::string(controller.processor));
 
   contract::ChannelMetadata arm;
   ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v9",

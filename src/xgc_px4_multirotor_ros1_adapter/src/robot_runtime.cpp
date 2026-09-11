@@ -211,7 +211,7 @@ struct NativeChannelBinding {
   bool observes;
 };
 
-const std::array<NativeChannelBinding, 23u> kNativeBindings{{
+const std::array<NativeChannelBinding, 24u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
     {"state.mocap.pose", "px4.mocap-pose",
@@ -219,7 +219,7 @@ const std::array<NativeChannelBinding, 23u> kNativeBindings{{
      2u, 0u, false},
     {"state.vision.pose", "px4.vision-pose",
      contract::ChannelKind::kStreamOut, "xgc.semantic.common.v1.PoseEstimate",
-     1u, 0u, true},
+     1u, 1u, true},
     {"state.velocity", "px4.velocity-estimate",
      contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.VelocityEstimate", 1u, 0u, false},
@@ -243,6 +243,9 @@ const std::array<NativeChannelBinding, 23u> kNativeBindings{{
      "xgc.semantic.common.v1.VehicleHealth", 2u, 0u, true},
     {"state.flight", "px4.flight-status", contract::ChannelKind::kStreamOut,
      "xgc.semantic.aerial.v1.FlightStatus", 2u, 0u, false},
+    {"state.controller", "px4.controller-status",
+     contract::ChannelKind::kStreamOut,
+     "xgc.semantic.common.v1.ControllerStatus", 1u, 0u, false},
     {"setpoint.local", "px4.local-trajectory-setpoint",
      contract::ChannelKind::kStreamOut,
      "xgc.semantic.aerial.v1.LocalTrajectorySetpoint", 1u, 0u, false},
@@ -622,6 +625,9 @@ bool BuildNativeProfileConfig(
       !resolveEndpoint(config, "state.power", input, "battery",
                        "sensor_msgs/BatteryState", &candidate.power_endpoint,
                        error) ||
+      !resolveEndpoint(config, "state.controller", input, "status",
+                       "std_msgs/String",
+                       &candidate.controller_status_endpoint, error) ||
       !resolveEndpoint(config, "state.health", input, "state",
                        "mavros_msgs/State", &candidate.state_endpoint, error) ||
       !resolveEndpoint(config, "state.health", input, "extended_state",
@@ -683,6 +689,7 @@ bool BuildNativeProfileConfig(
   contract::ChannelMetadata mode{};
   contract::ChannelMetadata reboot{};
   contract::ChannelMetadata remote{};
+  contract::ChannelMetadata vision{};
   contract::channelMetadata(config.profile_id, "diagnostic.offboard-input",
                             &offboard);
   contract::channelMetadata(config.profile_id, "operation.arm", &arm);
@@ -691,6 +698,7 @@ bool BuildNativeProfileConfig(
                             &reboot);
   contract::channelMetadata(config.profile_id, "operation.motion-intent",
                             &remote);
+  contract::channelMetadata(config.profile_id, "state.vision.pose", &vision);
   double offboard_rate = 0.0;
   std::int64_t offboard_timeout = 0;
   const char *const *allowed_modes = nullptr;
@@ -710,6 +718,7 @@ bool BuildNativeProfileConfig(
   double remote_yaw = 0.0;
   std::int64_t remote_publish_rate = 0;
   std::int64_t remote_timeout = 0;
+  std::int64_t vision_publish_rate = 0;
   if (!contract::channelPolicyNumber(offboard, "minimum_rate_hz",
                                      &offboard_rate) ||
       !contract::channelPolicyInteger(offboard, "source_timeout_ms",
@@ -743,10 +752,13 @@ bool BuildNativeProfileConfig(
       !contract::channelPolicyInteger(remote, "publish_rate_hz",
                                       &remote_publish_rate) ||
       !contract::channelPolicyInteger(remote, "timeout_ms", &remote_timeout) ||
+      !contract::channelPolicyInteger(vision, "publish_rate_hz",
+                                      &vision_publish_rate) ||
       mav_command != 246 || reboot_param != 1 || !require_known ||
       !require_fresh || !require_connected || !require_disarmed ||
       remote_altitude != 1.0 || remote_linear <= 0.0 || remote_yaw <= 0.0 ||
-      remote_publish_rate != 10 || remote_timeout != 1000) {
+      remote_publish_rate != 10 || remote_timeout != 1000 ||
+      vision_publish_rate != 30) {
     return fail(error, "PX4 native policy binding is incomplete or unsafe");
   }
   candidate.offboard_source_timeout_seconds =
@@ -764,6 +776,8 @@ bool BuildNativeProfileConfig(
   candidate.remote_control_altitude_meters = remote_altitude;
   candidate.remote_control_maximum_linear_velocity_mps = remote_linear;
   candidate.remote_control_maximum_yaw_rate_rps = remote_yaw;
+  candidate.vision_publish_rate_hz =
+      static_cast<double>(vision_publish_rate);
   candidate.allowed_modes.reserve(allowed_mode_count);
   std::set<std::string> unique_modes;
   for (std::size_t index = 0u; index < allowed_mode_count; ++index) {
@@ -893,6 +907,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       velocity_endpoint_(std::move(native_profile.velocity_endpoint)),
       imu_endpoint_(std::move(native_profile.imu_endpoint)),
       power_endpoint_(std::move(native_profile.power_endpoint)),
+      controller_status_endpoint_(
+          std::move(native_profile.controller_status_endpoint)),
       state_endpoint_(std::move(native_profile.state_endpoint)),
       extended_state_endpoint_(
           std::move(native_profile.extended_state_endpoint)),
@@ -913,7 +929,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       attitude_setpoint_endpoint_(
           std::move(native_profile.attitude_setpoint_endpoint)),
       timesync_endpoint_(std::move(native_profile.timesync_endpoint)),
-      localization_(native_profile.localization), vision_publish_cadence_(30.0, 5u) {}
+      localization_(native_profile.localization),
+      vision_publish_cadence_(native_profile.vision_publish_rate_hz, 5u) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -964,6 +981,7 @@ void RobotRuntime::Stop() {
   velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
   power_subscriber_.shutdown();
+  controller_status_subscriber_.shutdown();
   state_subscriber_.shutdown();
   extended_state_subscriber_.shutdown();
   local_setpoint_subscriber_.shutdown();
@@ -1138,6 +1156,20 @@ bool RobotRuntime::installPx4(std::string *error) {
             self->batteryCallback(message);
         });
     if (!requireRosRegistration(power_subscriber_, power_endpoint_, error))
+      return false;
+  }
+  if (channelRequired("state.controller")) {
+    ensureSourceLocked(
+        "state.controller",
+        channelStaleAfterSeconds(profile_id_, "state.controller"));
+    controller_status_subscriber_ = node_handle_.subscribe<std_msgs::String>(
+        controller_status_endpoint_, 10,
+        [weak_self](const std_msgs::String::ConstPtr &message) {
+          if (const auto self = weak_self.lock())
+            self->controllerStatusCallback(message);
+        });
+    if (!requireRosRegistration(controller_status_subscriber_,
+                                controller_status_endpoint_, error))
       return false;
   }
   if (channelRequired("state.health")) {
@@ -1691,6 +1723,30 @@ void RobotRuntime::batteryCallback(
       recordOutputLocked("state.power");
     } else if (channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::controllerStatusCallback(
+    const std_msgs::String::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  const ros::Time stamp = ros::Time::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("state.controller", now);
+    if (channelEnabled("state.controller") &&
+        shouldEmitLocked("state.controller", now)) {
+      xgc::semantic::common::v1::ControllerStatus payload;
+      payload.set_text(message->data);
+      output.push_back(makeEnvelopeLocked("state.controller", stamp, payload));
+      recordOutputLocked("state.controller");
+    } else if (channelEnabled("state.controller")) {
+      ++sources_["state.controller"].dropped_samples;
     }
   }
   emit(std::move(output));

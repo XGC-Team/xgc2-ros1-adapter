@@ -85,6 +85,7 @@ MESSAGE_ROLES = {
     2008: "telemetry",
     2010: "diagnostic",
     2011: "diagnostic",
+    2012: "telemetry",
     3001: "telemetry",
     3002: "telemetry",
     3003: "telemetry",
@@ -108,6 +109,7 @@ TYPE_NAMES = {
     2006: "xgc.semantic.common.v1.SpeedEstimate",
     2007: "xgc.semantic.common.v1.DistanceEstimate",
     2008: "xgc.semantic.common.v1.AccelerationEstimate",
+    2012: "xgc.semantic.common.v1.ControllerStatus",
     3001: "xgc.semantic.aerial.v1.FlightStatus",
     3102: "xgc.semantic.ground.v1.ChassisStatus",
     3103: "xgc.semantic.ground.v1.LocomotionStatus",
@@ -309,6 +311,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "diagnostic.stream-health",
                 "operation.motion-intent",
                 "operation.motion-intent-release",
+                "state.controller",
                 "state.health",
                 "state.imu",
                 "state.power",
@@ -774,7 +777,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertEqual(bootstrap_contract.count(retired_literal), 0)
         self.assertIn(
-            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-14~focal}"',
+            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-17~focal}"',
             docker_build,
         )
         self.assertIn(
@@ -782,7 +785,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "c236786f0256caf404905d83f9334411c90d12ec",
+            "cd0b18754f6fb4d66fcd99b5d95032f693c391b4",
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
@@ -797,8 +800,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-32")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-32")
+        self.assertEqual(product["version"], "0.5.0-33")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-33")
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],

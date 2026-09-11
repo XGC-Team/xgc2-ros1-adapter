@@ -93,7 +93,7 @@ struct NativeChannelBinding {
   bool observes_channels;
 };
 
-const std::array<NativeChannelBinding, 9u> kNativeBindings{{
+const std::array<NativeChannelBinding, 10u> kNativeBindings{{
     {"vrpn.position", "mecanum-ugv.vrpn-pose", "pose",
      "geometry_msgs/PoseStamped", "xgc.semantic.common.v1.PoseEstimate", false},
     {"vrpn.velocity", "mecanum-ugv.vrpn-velocity", "velocity",
@@ -113,6 +113,8 @@ const std::array<NativeChannelBinding, 9u> kNativeBindings{{
      "xgc.semantic.common.v1.PowerStatus", false},
     {"state.health", "mecanum-ugv.vehicle-health", nullptr, nullptr,
      "xgc.semantic.common.v1.VehicleHealth", true},
+    {"state.controller", "mecanum-ugv.controller-status", "status",
+     "std_msgs/String", "xgc.semantic.common.v1.ControllerStatus", false},
     {"diagnostic.stream-health", "common.stream-health-report", nullptr,
      nullptr, "xgc.semantic.common.v1.StreamHealthReport", true},
 }};
@@ -715,6 +717,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string command_velocity_endpoint;
   std::string imu_endpoint;
   std::string voltage_endpoint;
+  std::string controller_status_endpoint;
   if (!resolveInputEndpoint(config, "vrpn.position", "pose",
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
@@ -736,7 +739,9 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
       !resolveInputEndpoint(config, "state.imu", "imu", &imu_endpoint,
                             error) ||
       !resolveInputEndpoint(config, "state.power", "battery",
-                            &voltage_endpoint, error)) {
+                            &voltage_endpoint, error) ||
+      !resolveInputEndpoint(config, "state.controller", "status",
+                            &controller_status_endpoint, error)) {
     return nullptr;
   }
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
@@ -777,6 +782,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        localization,
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint), std::move(voltage_endpoint),
+                       std::move(controller_status_endpoint),
                        positioning_config, std::move(battery_curve),
                        std::move(emitter)));
   try {
@@ -807,6 +813,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
+                           std::string controller_status_endpoint,
                            xgc2_ros1_robot_adapter::PositioningHealthConfig
                                positioning_config,
                            std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint>
@@ -829,6 +836,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       command_velocity_endpoint_(std::move(command_velocity_endpoint)),
       imu_endpoint_(std::move(imu_endpoint)),
       voltage_endpoint_(std::move(voltage_endpoint)),
+      controller_status_endpoint_(std::move(controller_status_endpoint)),
       localization_(std::move(localization)),
       positioning_health_(positioning_config),
       battery_curve_(std::move(battery_curve)) {}
@@ -875,6 +883,7 @@ void RobotRuntime::Stop() {
   command_velocity_subscriber_.shutdown();
   imu_subscriber_.shutdown();
   voltage_subscriber_.shutdown();
+  controller_status_subscriber_.shutdown();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1011,6 +1020,21 @@ bool RobotRuntime::install(std::string *error) {
           });
       if (!requireRosRegistration(voltage_subscriber_, voltage_endpoint_,
                                   error))
+        return false;
+    }
+    if (required_channels_.count("state.controller") != 0u) {
+      ensureSourceLocked(
+          "state.controller",
+          channelStaleAfterSeconds(profile_id_, "state.controller"));
+      controller_status_subscriber_ = node_handle_.subscribe<std_msgs::String>(
+          controller_status_endpoint_, 10,
+          [weak_self](const std_msgs::String::ConstPtr &message) {
+            if (const auto self = weak_self.lock()) {
+              self->controllerStatusCallback(message);
+            }
+          });
+      if (!requireRosRegistration(controller_status_subscriber_,
+                                    controller_status_endpoint_, error))
         return false;
     }
   }
@@ -1257,6 +1281,30 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
       recordOutputLocked("state.power");
     } else if (channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
+    }
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::controllerStatusCallback(
+    const std_msgs::String::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  const ros::WallTime now = ros::WallTime::now();
+  const ros::Time stamp = ros::Time::now();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recordSourceLocked("state.controller", now);
+    if (channelEnabled("state.controller") &&
+        shouldEmitLocked("state.controller", now)) {
+      xgc::semantic::common::v1::ControllerStatus payload;
+      payload.set_text(message->data);
+      output.push_back(makeEnvelopeLocked("state.controller", stamp, payload));
+      recordOutputLocked("state.controller");
+    } else if (channelEnabled("state.controller")) {
+      ++sources_["state.controller"].dropped_samples;
     }
   }
   emit(std::move(output));
