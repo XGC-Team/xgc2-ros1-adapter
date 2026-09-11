@@ -375,3 +375,20 @@ channels:
       maximum_yaw_rate_rps: 1.0
       publish_rate_hz: 10
       timeout_ms: 1000
+
+  - id: operation.motion-intent-release
+    kind: operation
+    operation_id: release-motion-intent
+    input_message_id: 3205
+    output_message_id: 1
+    processor: px4.release-motion-intent
+    operation_contract:
+      side_effect: idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    output:
+      name: mavros/setpoint_raw/local
+      type: mavros_msgs/PositionTarget
+    policy:
+      timeout_ms: 1000

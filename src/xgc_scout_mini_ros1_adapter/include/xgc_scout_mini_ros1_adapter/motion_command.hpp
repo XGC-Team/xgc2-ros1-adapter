@@ -19,11 +19,11 @@ bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
                          geometry_msgs::Twist *command,
                          std::string *error);
 
-// Holds the last discrete operator intent and republishes a non-zero Twist
-// locally at 10 Hz. A zero intent publishes once and releases the stream so
-// close/Stop does not keep /cmd_vel alive. Stop() while the stream is still
-// active serializes a final zero; after an idle zero it does not publish
-// again.
+// Holds the last discrete operator intent and republishes it locally at 10 Hz,
+// including a zero Twist while the remote window is open and latched on Stop.
+// Release() publishes one last zero and ends the stream so close / leaving the
+// Experiment does not keep /cmd_vel alive. Stop() while the stream is still
+// active serializes a final zero; after Release() it does not publish again.
 class MotionCommandPublisher {
 public:
   using PublishFunction =
@@ -41,6 +41,7 @@ public:
 
   bool SetIntent(std::uint32_t gear, std::int32_t longitudinal,
                  std::int32_t lateral, std::int32_t yaw, std::string *error);
+  bool Release(std::string *error);
   void PublishPeriodic();
   void Stop() noexcept;
 

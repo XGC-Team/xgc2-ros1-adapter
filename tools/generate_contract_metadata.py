@@ -42,6 +42,7 @@ OPERATION_INPUT_TYPES = {
     "reboot-autopilot": "xgc.semantic.aerial.v1.AutopilotRebootRequest",
     "force-disarm": "xgc.semantic.aerial.v1.ForceDisarmRequest",
     "set-motion-intent": "xgc.semantic.common.v1.RemoteControlIntentRequest",
+    "release-motion-intent": "xgc.semantic.common.v1.RemoteControlIntentRequest",
 }
 
 KIND_ENUM = {
@@ -245,7 +246,7 @@ def operation_parameter_schema(profile_path, channel, messages):
         properties = {
             "mode": {"type": "string", "enum": list(allowed_modes)}
         }
-    elif operation_id == "set-motion-intent":
+    elif operation_id in ("set-motion-intent", "release-motion-intent"):
         properties = {
             "gear": {"type": "integer", "minimum": 1, "maximum": 3},
             "longitudinal": {

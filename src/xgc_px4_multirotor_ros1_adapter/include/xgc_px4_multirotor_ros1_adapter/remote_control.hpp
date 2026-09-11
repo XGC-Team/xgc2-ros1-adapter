@@ -28,6 +28,7 @@ public:
 
   bool SetIntent(std::uint32_t gear, std::int32_t longitudinal,
                  std::int32_t lateral, std::int32_t yaw, std::string *error);
+  bool Release(std::string *error);
   void PublishPeriodic();
   void Stop() noexcept;
 

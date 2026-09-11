@@ -181,6 +181,23 @@ channels:
     policy:
       timeout_ms: 1000
 
+  - id: operation.motion-intent-release
+    kind: operation
+    operation_id: release-motion-intent
+    input_message_id: 3205
+    output_message_id: 1
+    processor: mecanum-ugv.release-motion-intent
+    operation_contract:
+      side_effect: idempotent
+      idempotency: required
+      cancellation_supported: false
+      deadline_required: true
+    output:
+      name: cmd_vel
+      type: geometry_msgs/Twist
+    policy:
+      timeout_ms: 1000
+
   - id: diagnostic.stream-health
     kind: stream_out
     output_message_id: 2011

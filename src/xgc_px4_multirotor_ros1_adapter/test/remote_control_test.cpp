@@ -37,6 +37,10 @@ TEST(RemoteControlPublisher, ZeroIntentHoldsAltitudeForOffboard) {
   ASSERT_EQ(2u, published.size());
   EXPECT_DOUBLE_EQ(1.0, published.back().position.z);
   EXPECT_DOUBLE_EQ(0.0, published.back().velocity.x);
+
+  ASSERT_TRUE(publisher.Release(&error)) << error;
+  publisher.PublishPeriodic();
+  EXPECT_EQ(2u, published.size());
 }
 
 TEST(RemoteControlPublisher, MapsDiscreteIntentAndStopsWithOneMetreHold) {

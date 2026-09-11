@@ -211,7 +211,7 @@ struct NativeChannelBinding {
   bool observes;
 };
 
-const std::array<NativeChannelBinding, 22u> kNativeBindings{{
+const std::array<NativeChannelBinding, 23u> kNativeBindings{{
     {"state.pose", "px4.pose-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.PoseEstimate", 1u, 0u, false},
     {"state.mocap.pose", "px4.mocap-pose",
@@ -268,6 +268,8 @@ const std::array<NativeChannelBinding, 22u> kNativeBindings{{
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 3u, false},
     {"operation.motion-intent", "px4.set-motion-intent",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 5u, false},
+    {"operation.motion-intent-release", "px4.release-motion-intent",
+     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 1u, false},
 }};
 
 bool resolveEndpointTemplate(const contract::EndpointMetadata &endpoint,

@@ -62,8 +62,8 @@ RemoteControlPublisher::RemoteControlPublisher(
       maximum_yaw_rate_rps_(maximum_yaw_rate_rps) {
   target_.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
   // Match xgc1 XMinidroneRemoteControlSubRosModule: ignore PX/PY/VZ/AF*/YAW,
-  // hold altitude, stream velocity + yaw_rate. Zero intent is still this
-  // stream so OFFBOARD does not starve.
+  // hold altitude, stream velocity + yaw_rate. An open-window zero intent is
+  // still this stream so OFFBOARD does not starve. Close calls Release().
   target_.type_mask =
       mavros_msgs::PositionTarget::IGNORE_PX |
       mavros_msgs::PositionTarget::IGNORE_PY |
@@ -103,6 +103,19 @@ bool RemoteControlPublisher::SetIntent(
             maximum_yaw_rate_rps_);
   active_ = true;
   return publishLocked(error);
+}
+
+bool RemoteControlPublisher::Release(std::string *error) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_)
+    return fail(error, "PX4 remote-control publisher is stopped");
+  target_.velocity.x = 0.0;
+  target_.velocity.y = 0.0;
+  target_.yaw_rate = 0.0;
+  active_ = false;
+  if (error != nullptr)
+    error->clear();
+  return true;
 }
 
 bool RemoteControlPublisher::publishLocked(std::string *error) {

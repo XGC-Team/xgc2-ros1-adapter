@@ -17,12 +17,6 @@ double clamp(double value, double limit) {
   return std::max(-limit, std::min(limit, value));
 }
 
-bool twistHoldsTheCommandStream(const geometry_msgs::Twist &command) {
-  return command.linear.x != 0.0 || command.linear.y != 0.0 ||
-         command.linear.z != 0.0 || command.angular.x != 0.0 ||
-         command.angular.y != 0.0 || command.angular.z != 0.0;
-}
-
 } // namespace
 
 bool motionIntentCommand(std::uint32_t gear, std::int32_t longitudinal,
@@ -141,14 +135,24 @@ bool MotionCommandPublisher::SetIntent(std::uint32_t gear,
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopped_)
     return fail(error, "motion command publisher is stopped");
-  // Publish every state change immediately. In particular, stop does not wait
-  // for the next 10 Hz local timer tick. A zero Twist is the operator
-  // releasing the remote (close or Stop): one last zero, then the 10 Hz
-  // stream ends so /cmd_vel goes quiet.
+  // Publish every state change immediately, including a latched Stop zero.
+  // The 10 Hz stream stays up while the remote window is open.
   if (!publishLocked(command, error))
     return false;
   command_ = command;
-  active_ = twistHoldsTheCommandStream(command);
+  active_ = true;
+  return true;
+}
+
+bool MotionCommandPublisher::Release(std::string *error) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_)
+    return fail(error, "motion command publisher is stopped");
+  geometry_msgs::Twist stop;
+  if (!publishLocked(stop, error))
+    return false;
+  command_ = stop;
+  active_ = false;
   return true;
 }
 

@@ -49,6 +49,30 @@ ROS_NOETIC_ENVIRONMENT = {
     "ROS_VERSION": "1",
 }
 
+MOTION_INTENT_PARAMETER_SCHEMA = {
+    "type": "object",
+    "required": ["gear", "lateral", "longitudinal", "yaw"],
+    "properties": {
+        "gear": {"type": "integer", "minimum": 1, "maximum": 3},
+        "longitudinal": {"type": "integer", "minimum": -1, "maximum": 1},
+        "lateral": {"type": "integer", "minimum": -1, "maximum": 1},
+        "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
+    },
+    "additionalProperties": False,
+}
+RELEASE_MOTION_INTENT_OPERATION = {
+    "id": "release-motion-intent",
+    "channelId": "operation.motion-intent-release",
+    "timeoutMillis": 1000,
+    "parameterSchema": MOTION_INTENT_PARAMETER_SCHEMA,
+}
+SET_MOTION_INTENT_OPERATION = {
+    "id": "set-motion-intent",
+    "channelId": "operation.motion-intent",
+    "timeoutMillis": 1000,
+    "parameterSchema": MOTION_INTENT_PARAMETER_SCHEMA,
+}
+
 MESSAGE_ROLES = {
     1: "request",
     2001: "telemetry",
@@ -203,6 +227,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                         "additionalProperties": False,
                     },
                 },
+                RELEASE_MOTION_INTENT_OPERATION,
                 {
                     "id": "set-flight-mode",
                     "channelId": "operation.mode",
@@ -224,22 +249,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                         "additionalProperties": False,
                     },
                 },
-                {
-                    "id": "set-motion-intent",
-                    "channelId": "operation.motion-intent",
-                    "timeoutMillis": 1000,
-                    "parameterSchema": {
-                        "type": "object",
-                        "required": ["gear", "lateral", "longitudinal", "yaw"],
-                        "properties": {
-                            "gear": {"type": "integer", "minimum": 1, "maximum": 3},
-                            "longitudinal": {"type": "integer", "minimum": -1, "maximum": 1},
-                            "lateral": {"type": "integer", "minimum": -1, "maximum": 1},
-                            "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
-                        },
-                        "additionalProperties": False,
-                    },
-                },
+                SET_MOTION_INTENT_OPERATION,
             ],
         )
         self.assertEqual(
@@ -262,38 +272,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(
             scout["semantics"]["operations"],
             [
-                {
-                    "id": "set-motion-intent",
-                    "channelId": "operation.motion-intent",
-                    "timeoutMillis": 1000,
-                    "parameterSchema": {
-                        "type": "object",
-                        "required": ["gear", "lateral", "longitudinal", "yaw"],
-                        "properties": {
-                            "gear": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 3,
-                            },
-                            "longitudinal": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                            "lateral": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                            "yaw": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                        },
-                        "additionalProperties": False,
-                    },
-                }
+                RELEASE_MOTION_INTENT_OPERATION,
+                SET_MOTION_INTENT_OPERATION,
             ],
         )
         # Online and localized are separate facts and a robot is ready only when
@@ -328,6 +308,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "command.velocity",
                 "diagnostic.stream-health",
                 "operation.motion-intent",
+                "operation.motion-intent-release",
                 "state.health",
                 "state.imu",
                 "state.power",
@@ -493,6 +474,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
                 "reboot-autopilot": (5000, 5000),
                 "set-flight-mode": (5000, 5000),
                 "set-motion-intent": (1000, 1000),
+                "release-motion-intent": (1000, 1000),
             },
         )
         endpoints = {
@@ -556,17 +538,17 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             ]["capabilities"]
             if capability["ref"]["id"] == "xgc.robot.command"
         )
-        self.assertEqual(len(scout_command["endpoints"]), 1)
         self.assertEqual(
-            scout_command["endpoints"][0]["endpointId"],
-            "set-motion-intent",
+            {endpoint["endpointId"] for endpoint in scout_command["endpoints"]},
+            {"release-motion-intent", "set-motion-intent"},
         )
-        self.assertEqual(
-            scout_command["endpoints"][0]["inputSchema"]["messageId"], 3205
+        set_motion = next(
+            endpoint
+            for endpoint in scout_command["endpoints"]
+            if endpoint["endpointId"] == "set-motion-intent"
         )
-        self.assertEqual(
-            scout_command["endpoints"][0]["defaultTimeoutMillis"], 1000
-        )
+        self.assertEqual(set_motion["inputSchema"]["messageId"], 3205)
+        self.assertEqual(set_motion["defaultTimeoutMillis"], 1000)
         self.assertEqual(
             scout_process["definitions"][0]["command"]["env"],
             ROS_NOETIC_ENVIRONMENT,

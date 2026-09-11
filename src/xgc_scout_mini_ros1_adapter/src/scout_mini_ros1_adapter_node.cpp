@@ -588,7 +588,8 @@ private:
       return rejectSource(xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
                           "robot-native-source-open-failed", native_error);
     }
-    if (channelEnabled(robot, "operation.motion-intent")) {
+    if (channelEnabled(robot, "operation.motion-intent") ||
+        channelEnabled(robot, "operation.motion-intent-release")) {
       std::string command_topic;
       if (!resolveMotionCommandTopic(robot, &command_topic, &native_error)) {
         detachSource(robot_id, context.work_id(), source_generation);
@@ -816,7 +817,9 @@ private:
     }
 
     const std::string processor(operation.channel.processor);
-    if (processor != "scout-mini.set-motion-intent") {
+    const bool set_intent = processor == "scout-mini.set-motion-intent";
+    const bool release_intent = processor == "scout-mini.release-motion-intent";
+    if (!set_intent && !release_intent) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_PERMANENT,
           "operation-contract-invalid",
@@ -844,8 +847,16 @@ private:
     }
     if (cancellation.IsCancellationRequested())
       return xgc2::adapter_runtime::OperationResult::Cancelled();
-    if (!motion->SetIntent(input.gear(), input.longitudinal(), input.lateral(),
-                           input.yaw(), &error)) {
+    if (!motion) {
+      return rejectOperation("command-disabled",
+                             "Scout remote control is disabled by robot spec");
+    }
+    const bool published =
+        release_intent
+            ? motion->Release(&error)
+            : motion->SetIntent(input.gear(), input.longitudinal(),
+                                input.lateral(), input.yaw(), &error);
+    if (!published) {
       return xgc2::adapter_runtime::OperationResult::Failure(
           xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
           "motion-command-publication-failed", error);

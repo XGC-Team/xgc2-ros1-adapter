@@ -37,6 +37,30 @@ SPEC = importlib.util.spec_from_file_location("contract_generator", GENERATOR_PA
 GENERATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GENERATOR)
 
+MOTION_INTENT_PARAMETER_SCHEMA = {
+    "type": "object",
+    "required": ["gear", "lateral", "longitudinal", "yaw"],
+    "properties": {
+        "gear": {"type": "integer", "minimum": 1, "maximum": 3},
+        "longitudinal": {"type": "integer", "minimum": -1, "maximum": 1},
+        "lateral": {"type": "integer", "minimum": -1, "maximum": 1},
+        "yaw": {"type": "integer", "minimum": -1, "maximum": 1},
+    },
+    "additionalProperties": False,
+}
+RELEASE_MOTION_INTENT_OPERATION = {
+    "id": "release-motion-intent",
+    "channelId": "operation.motion-intent-release",
+    "timeoutMillis": 1000,
+    "parameterSchema": MOTION_INTENT_PARAMETER_SCHEMA,
+}
+SET_MOTION_INTENT_OPERATION = {
+    "id": "set-motion-intent",
+    "channelId": "operation.motion-intent",
+    "timeoutMillis": 1000,
+    "parameterSchema": MOTION_INTENT_PARAMETER_SCHEMA,
+}
+
 
 MESSAGE_ROLES = {
     1: "request",
@@ -239,6 +263,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "operation.autopilot-reboot",
                 "operation.force-disarm",
                 "operation.motion-intent",
+                "operation.motion-intent-release",
             },
         )
         self.assertEqual(px4_channels["operation.arm"]["input_message_id"], 3201)
@@ -485,38 +510,8 @@ class ContractGeneratorTest(unittest.TestCase):
         self.assertEqual(
             scout_body["semantics"]["operations"],
             [
-                {
-                    "id": "set-motion-intent",
-                    "channelId": "operation.motion-intent",
-                    "timeoutMillis": 1000,
-                    "parameterSchema": {
-                        "type": "object",
-                        "required": ["gear", "lateral", "longitudinal", "yaw"],
-                        "properties": {
-                            "gear": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 3,
-                            },
-                            "longitudinal": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                            "lateral": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                            "yaw": {
-                                "type": "integer",
-                                "minimum": -1,
-                                "maximum": 1,
-                            },
-                        },
-                        "additionalProperties": False,
-                    },
-                }
+                RELEASE_MOTION_INTENT_OPERATION,
+                SET_MOTION_INTENT_OPERATION,
             ],
         )
 
@@ -549,6 +544,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 "state.power",
                 "state.health",
                 "operation.motion-intent",
+                "operation.motion-intent-release",
                 "diagnostic.stream-health",
             },
         )
@@ -678,6 +674,8 @@ class ContractGeneratorTest(unittest.TestCase):
             "xgc_scout_mini_ros1_adapter",
         )
         self.assertIn('"set-motion-intent", 3205u, 1u, 0.0, 1000u, 0u', scout_header)
+        self.assertIn('"release-motion-intent", 3205u, 1u, 0.0, 1000u, 0u', scout_header)
+        self.assertIn('"scout-mini.release-motion-intent"', scout_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', scout_header)
         self.assertIn('"xgc.semantic.common.v1.RemoteControlIntentRequest"', scout_header)
         self.assertIn(

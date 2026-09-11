@@ -461,7 +461,7 @@ bool validateNativeProfileContract(std::string *error) {
   std::size_t channel_count = 0u;
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
-  if (channels == nullptr || channel_count != kNativeBindings.size() + 1u)
+  if (channels == nullptr || channel_count != kNativeBindings.size() + 2u)
     return fail(error, "Mecanum UGV native channel binding is not exhaustive");
 
   for (const auto &binding : kNativeBindings) {
@@ -601,6 +601,35 @@ bool validateNativeProfileContract(std::string *error) {
       std::string(motion_endpoint->ros_type) != "geometry_msgs/Twist" ||
       motion_endpoint->scope != contract::EndpointScope::kRobotNamespace) {
     return fail(error, "Mecanum motion-intent output topic binding drifted");
+  }
+  contract::ChannelMetadata release{};
+  contract::MessageMetadata release_input{};
+  if (!contract::channelMetadata(contract::kProfileId,
+                                 "operation.motion-intent-release", &release) ||
+      release.kind != contract::ChannelKind::kOperation ||
+      std::string(release.processor) != "mecanum-ugv.release-motion-intent" ||
+      std::string(release.operation_id) != "release-motion-intent" ||
+      release.input_message_id != 3205u || release.output_message_id != 1u ||
+      release.output_rate_hz != 0.0 ||
+      release.operation_timeout_millis != 1000u ||
+      release.stale_after_millis != 0u || release.endpoint_count != 1u ||
+      release.observes_count != 0u || release.policy_count != 1u ||
+      std::string(release.operation_contract.side_effect) != "idempotent" ||
+      std::string(release.operation_contract.idempotency) != "required" ||
+      release.operation_contract.cancellation_supported ||
+      !release.operation_contract.deadline_required ||
+      !contract::messageMetadata(release.input_message_id, &release_input) ||
+      std::string(release_input.type_name) !=
+          "xgc.semantic.common.v1.RemoteControlIntentRequest") {
+    return fail(error, "Mecanum motion-intent-release operation binding drifted");
+  }
+  const auto *release_endpoint = contract::channelEndpoint(
+      release, contract::EndpointKind::kOutput, "output");
+  if (release_endpoint == nullptr ||
+      std::string(release_endpoint->name_template) != "cmd_vel" ||
+      std::string(release_endpoint->ros_type) != "geometry_msgs/Twist" ||
+      release_endpoint->scope != contract::EndpointScope::kRobotNamespace) {
+    return fail(error, "Mecanum motion-intent-release output topic binding drifted");
   }
   std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve;
   if (!loadBatteryCurve(contract::kProfileId, &battery_curve, error)) {

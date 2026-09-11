@@ -867,7 +867,8 @@ private:
       operations =
           std::shared_ptr<Px4OperationExecutor>(std::move(unique_operations));
     }
-    if (channelEnabled(robot, "operation.motion-intent")) {
+    if (channelEnabled(robot, "operation.motion-intent") ||
+        channelEnabled(robot, "operation.motion-intent-release")) {
       remote_control = RemoteControlPublisher::Create(
           node_handle_, native_profile.remote_control_endpoint,
           native_profile.remote_control_altitude_meters,
@@ -1123,7 +1124,8 @@ private:
             "PX4 force-disarm processor input schema drifted");
       }
       native = operations->forceDisarm(timing);
-    } else if (processor == "px4.set-motion-intent") {
+    } else if (processor == "px4.set-motion-intent" ||
+               processor == "px4.release-motion-intent") {
       xgc::semantic::common::v1::RemoteControlIntentRequest input;
       if (operation.input_schema.type_name !=
           input.GetDescriptor()->full_name()) {
@@ -1138,8 +1140,13 @@ private:
       if (!remote_control)
         return rejected("command-disabled",
                         "PX4 remote control is disabled by robot spec");
-      if (!remote_control->SetIntent(input.gear(), input.longitudinal(),
-                                     input.lateral(), input.yaw(), &error)) {
+      const bool published =
+          processor == "px4.release-motion-intent"
+              ? remote_control->Release(&error)
+              : remote_control->SetIntent(input.gear(), input.longitudinal(),
+                                          input.lateral(), input.yaw(),
+                                          &error);
+      if (!published) {
         return xgc2::adapter_runtime::OperationResult::Failure(
             xgc::adapter::v1::ERROR_CLASS_TRANSIENT,
             "motion-command-publication-failed", error);

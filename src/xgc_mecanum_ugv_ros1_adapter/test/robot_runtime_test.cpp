@@ -134,7 +134,7 @@ TEST(MotionIntent, RejectsValuesOutsideTheClosedExistingContract) {
   EXPECT_FALSE(motionIntentCommand(1, 0, 0, 0, nullptr, &error));
 }
 
-TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
+TEST(MotionPublisher, HoldsZeroUntilRelease) {
   std::vector<geometry_msgs::Twist> published;
   MotionCommandPublisher publisher(
       [&published](const geometry_msgs::Twist &command) {
@@ -162,20 +162,23 @@ TEST(MotionPublisher, StartsPassiveThenRepublishesAndStopsWithZero) {
   EXPECT_DOUBLE_EQ(0.0, published.back().linear.y);
   EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
-  EXPECT_EQ(3u, published.size());
+  ASSERT_EQ(4u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
 
   ASSERT_TRUE(publisher.SetIntent(2, 1, 0, 0, &error)) << error;
-  ASSERT_EQ(4u, published.size());
-  publisher.PublishPeriodic();
   ASSERT_EQ(5u, published.size());
-
-  publisher.Stop();
-  ASSERT_EQ(6u, published.size());
-  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
-  EXPECT_DOUBLE_EQ(0.0, published.back().angular.z);
   publisher.PublishPeriodic();
-  EXPECT_EQ(6u, published.size());
+  ASSERT_EQ(6u, published.size());
+
+  ASSERT_TRUE(publisher.Release(&error)) << error;
+  ASSERT_EQ(7u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().linear.x);
+  publisher.PublishPeriodic();
+  EXPECT_EQ(7u, published.size());
+  publisher.Stop();
+  ASSERT_EQ(7u, published.size());
   EXPECT_FALSE(publisher.SetIntent(1, 1, 0, 0, &error));
+  EXPECT_FALSE(publisher.Release(&error));
 }
 
 TEST(MotionPublisher, FailedPublicationDoesNotCommitTheNewIntent) {
@@ -388,8 +391,9 @@ TEST(InstalledProfile, KeepsTheExistingLongitudinalYawOperation) {
   const auto *operations =
       contract::profileOperations(contract::kProfileId, &operation_count);
   ASSERT_NE(nullptr, operations);
-  ASSERT_EQ(1u, operation_count);
-  EXPECT_EQ("set-motion-intent", std::string(operations[0].operation_id));
+  ASSERT_EQ(2u, operation_count);
+  EXPECT_EQ("release-motion-intent", std::string(operations[0].operation_id));
+  EXPECT_EQ("set-motion-intent", std::string(operations[1].operation_id));
 }
 
 TEST(TelemetryBatch, BindsItemsToAnExactQueuePrefix) {

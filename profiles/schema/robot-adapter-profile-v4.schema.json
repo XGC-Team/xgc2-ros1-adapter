@@ -249,7 +249,8 @@
             "set-flight-mode",
             "reboot-autopilot",
             "force-disarm",
-            "set-motion-intent"
+            "set-motion-intent",
+            "release-motion-intent"
           ]
         },
         "operation_contract": {
@@ -408,6 +409,18 @@
           "if": {
             "required": ["operation_id"],
             "properties": {"operation_id": {"const": "set-motion-intent"}}
+          },
+          "then": {
+            "properties": {
+              "input_message_id": {"const": 3205},
+              "output_message_id": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["operation_id"],
+            "properties": {"operation_id": {"const": "release-motion-intent"}}
           },
           "then": {
             "properties": {
