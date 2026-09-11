@@ -133,7 +133,12 @@ check_ros_package() {
   test -f "${PREFIX}/share/${ros_package}/launch/${launch_file}"
   test -f "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}"
   test -f "${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}"
-  test ! -e "${PREFIX}/include/${ros_package}"
+  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" ]]; then
+    test -f "${PREFIX}/include/${ros_package}/px4_operations.hpp"
+    test -f "${PREFIX}/lib/lib${ros_package}_operations.a"
+  else
+    test ! -e "${PREFIX}/include/${ros_package}"
+  fi
   test -x "${executable}"
   ldd "${executable}" | grep -q 'libxgc2_adapter_runtime_client'
   test -f "/usr/share/xgc2/adapter-definitions/${definition_id}.json"
