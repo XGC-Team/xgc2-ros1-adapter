@@ -1763,8 +1763,11 @@ void RobotRuntime::mavrosStateCallback(
   mavros_state_last_seen_ = ros::WallTime::now();
   if (channelRequired("state.health"))
     recordStateSourceLocked("state.health", true);
+  // FlightStatus MODE/ARM only need /mavros/state. Do not wait on
+  // extended_state via recordStateSourceLocked — that left last_seen
+  // at zero and advertised state.flight stale while the payload was live.
   if (channelRequired("state.flight"))
-    recordStateSourceLocked("state.flight", true);
+    recordSourceLocked("state.flight", mavros_state_last_seen_);
 }
 
 void RobotRuntime::mavrosExtendedStateCallback(
@@ -1776,10 +1779,10 @@ void RobotRuntime::mavrosExtendedStateCallback(
   mavros_extended_state_ = *message;
   has_mavros_extended_state_ = true;
   mavros_extended_state_last_seen_ = ros::WallTime::now();
+  // landed_state freshness is flight_extended_fresh on the payload.
+  // Do not bump state.flight last_seen here.
   if (channelRequired("state.health"))
     recordStateSourceLocked("state.health", false);
-  if (channelRequired("state.flight"))
-    recordStateSourceLocked("state.flight", false);
 }
 
 void RobotRuntime::localSetpointCallback(
