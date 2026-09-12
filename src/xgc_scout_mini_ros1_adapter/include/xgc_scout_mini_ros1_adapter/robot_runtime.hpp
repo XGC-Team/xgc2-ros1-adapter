@@ -189,6 +189,7 @@ private:
   const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
+  xgc2_ros1_robot_adapter::BatteryVoltageFilter battery_voltage_filter_;
 
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;

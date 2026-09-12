@@ -74,12 +74,23 @@ streams to project world-frame linear velocity onto the signed body X axis;
 that processed scalar is `vrpn.speed`, so lateral slip is excluded.
 `command.velocity` separately records the commanded
 linear and angular velocity; the Adapter does not consume odometry. `state.power.voltageV`
-retains the measured chassis voltage. `state.power.percentage` remains
-`PERCENTAGE_STATE_UNAVAILABLE` because the profile intentionally has no
-`battery_voltage_percentage_curve`: the manual's protection, warning, and
-full-charge voltages do not define state of charge under load. The exact pack
-identity and a manufacturer or measured voltage-to-SOC curve are required
-before the Adapter may publish a percentage.
+retains the measured chassis voltage. `state.power.percentage` uses
+`PERCENTAGE_STATE_AVAILABLE` for a **voltage-only estimate**, shown with an
+approximation sign and explicit label in the UI. The original 24 V / 15 Ah NMC
+pack is modeled as 7S, inferred from its chemistry and ~29.2 V full-charge
+voltage in the [Scout Mini manual](https://agilexrobotics.gitbook.io/scout_mini/3-shi-yong-yu-kai-fa-getting-started).
+The profile's nonlinear interior points sample the 25 C NMC reference-cell OCV
+polynomial in [Nejad & Gladwin, Eq. (1)](https://doi.org/10.1109/TIE.2019.2921280)
+at 10..90% SOC. The 3.0 V/cell zero and 29.2 V pack full endpoints are heuristic
+extensions. This is **not a characterized Scout cell or pack SOC curve**.
+At 24.4 V it gives approximately 10%, rather than the old 0% clamp or 45% from
+protection-to-full linear interpolation. Load, temperature, imbalance and
+aging can bias this approximation; no accuracy bound has been measured.
+A three-sample median and 10-second exponential voltage filter damp brief sag
+and quantization. Gaps over five seconds reset the filter; zero/non-finite
+samples leave percentage unavailable. Raw voltage and chassis low-voltage
+alarms remain independent of the filter. No current, IR compensation,
+coulomb count or available runtime is inferred from voltage alone.
 
 Scout Mini also exposes the idempotent `set-motion-intent` operation with a
 three-field `xgc.semantic.ground.v1.MotionIntentRequest`: `gear` is 1, 2, or 3,
@@ -119,7 +130,7 @@ deployed SSS Mecanum limits: 0.5/1.0/1.5 m/s longitudinal and approximately
 0.5236/1.0472/1.5708 rad/s yaw. Before the first accepted intent, the adapter
 publishes no `cmd_vel`; afterward it republishes the latest intent at 10 Hz and
 sends a final zero on shutdown. `state.power.voltageV` retains the measured
-voltage, while `state.power.percentage` remains
+voltage, while `state.power.percentage` uses
 `PERCENTAGE_STATE_UNAVAILABLE`. The physical `mini_mec` mode is not proof of an
 exact WheelTec battery SKU, and the profile has no authoritative
 voltage-to-SOC curve.

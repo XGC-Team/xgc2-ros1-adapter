@@ -186,9 +186,23 @@ channels:
         name: PowerVoltage
         type: std_msgs/Float32
     policy:
+      # Approximate 7S NMC voltage estimate, not BMS SOC. Interior points:
+      # Nejad & Gladwin, IEEE TIE 2020, doi:10.1109/TIE.2019.2921280,
+      # Eq. (1), 25 C / 3.6 Ah NMC reference cell, sampled only at 10..90%.
+      # 7S is inferred from the original NMC pack and ~29.2 V full charge.
+      # Endpoint extensions are engineering approximations; no Scout pack fit.
       battery_voltage_percentage_curve:
-        - "24.5=0.0"
-        - "29.4=1.0"
+        - "21.0=0.0"
+        - "24.497039=0.1"
+        - "24.986199=0.2"
+        - "25.275751=0.3"
+        - "25.470546=0.4"
+        - "25.772414=0.5"
+        - "26.261955=0.6"
+        - "26.844188=0.7"
+        - "27.434662=0.8"
+        - "28.177746=0.9"
+        - "29.2=1.0"
 
   - id: state.health
     kind: stream_out

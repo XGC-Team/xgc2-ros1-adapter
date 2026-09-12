@@ -266,31 +266,47 @@ TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
   EXPECT_DOUBLE_EQ(-0.3, estimate.angular().z());
 }
 
-TEST(BatteryProjection, UsesTheFrozenScoutProfileCurve) {
+TEST(BatteryProjection, UsesNonlinearNmcEstimateForOriginalScoutPack) {
   contract::ChannelMetadata power{};
-  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power",
-                                        &power));
+  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.power", &power));
   const char *const *entries = nullptr;
   std::size_t count = 0u;
   ASSERT_TRUE(contract::channelPolicyStringArray(
       power, "battery_voltage_percentage_curve", &entries, &count));
-  ASSERT_EQ(2u, count);
   std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> curve;
   std::string error;
-  ASSERT_TRUE(xgc2_ros1_robot_adapter::parseBatteryCurve(
-      entries, count, &curve, &error)) << error;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::parseBatteryCurve(entries, count, &curve, &error));
   double percentage = 0.0;
-  EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 24.0, &percentage));
-  EXPECT_DOUBLE_EQ(0.0, percentage);
-  EXPECT_TRUE(
-      xgc2_ros1_robot_adapter::batteryPercentage(curve, 28.765, &percentage));
-  EXPECT_NEAR(0.870408163265306, percentage, 1e-12);
-  EXPECT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(
-      curve, 30.0, &percentage));
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(curve, 24.4f, &percentage));
+  EXPECT_GT(percentage, 0.09);
+  EXPECT_LT(percentage, 0.10); // Field voltage, not 0% or the linear model's 45%.
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(curve, 25.772414, &percentage));
+  EXPECT_NEAR(0.5, percentage, 1e-6);
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(curve, 29.2, &percentage));
   EXPECT_DOUBLE_EQ(1.0, percentage);
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::batteryPercentage(curve, 20.5, &percentage));
+  EXPECT_DOUBLE_EQ(0.0, percentage);
   EXPECT_FALSE(xgc2_ros1_robot_adapter::batteryPercentage(
       curve, std::numeric_limits<double>::quiet_NaN(), &percentage));
+}
+
+TEST(BatteryProjection, FiltersTransientSagButTracksSustainedDischargeAndReconnect) {
+  xgc2_ros1_robot_adapter::BatteryVoltageFilter filter;
+  double voltage = 0.0;
+  ASSERT_TRUE(filter.update(26.0, 10.0, &voltage));
+  EXPECT_DOUBLE_EQ(26.0, voltage);
+  ASSERT_TRUE(filter.update(26.0, 11.0, &voltage));
+  ASSERT_TRUE(filter.update(23.0, 12.0, &voltage));
+  EXPECT_DOUBLE_EQ(26.0, voltage);
+  ASSERT_TRUE(filter.update(26.0, 13.0, &voltage));
+  EXPECT_DOUBLE_EQ(26.0, voltage);
+  for (int time = 14; time < 75; ++time) ASSERT_TRUE(filter.update(24.4, time, &voltage));
+  EXPECT_NEAR(24.4, voltage, 0.01);
+  ASSERT_TRUE(filter.update(28.0, 100.0, &voltage));
+  EXPECT_DOUBLE_EQ(28.0, voltage);
+  EXPECT_FALSE(filter.update(0.0, 101.0, &voltage));
+  ASSERT_TRUE(filter.update(25.0, 102.0, &voltage));
+  EXPECT_DOUBLE_EQ(25.0, voltage);
 }
 
 TEST(PositioningHealth, DetectsXgc1RepeatFramesTimeoutAndRecovery) {
@@ -337,10 +353,10 @@ TEST(ChassisState, PacksAndUnpacksModeBaseAndFault) {
 
 TEST(ChassisProjection, MapsNativeScoutControlModes) {
   using Status = xgc::semantic::ground::v1::ChassisStatus;
+  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_CAN, scoutControlMode(0));
   EXPECT_EQ(Status::CONTROL_MODE_COMMAND_CAN, scoutControlMode(1));
+  EXPECT_EQ(Status::CONTROL_MODE_COMMAND_UART, scoutControlMode(2));
   EXPECT_EQ(Status::CONTROL_MODE_REMOTE, scoutControlMode(3));
-  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(0));
-  EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(2));
   EXPECT_EQ(Status::CONTROL_MODE_UNSPECIFIED, scoutControlMode(255));
 }
 

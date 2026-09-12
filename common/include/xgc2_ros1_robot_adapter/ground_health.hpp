@@ -21,6 +21,16 @@ bool parseBatteryCurve(const char *const *entries, std::size_t count,
 bool batteryPercentage(const std::vector<BatteryCurvePoint> &curve,
                        double voltage_v, double *percentage);
 
+// Voltage-only display smoothing. Does not estimate current, IR drop or BMS SOC.
+class BatteryVoltageFilter {
+public:
+  bool update(double voltage_v, double monotonic_seconds, double *filtered_v);
+private:
+  std::deque<double> samples_;
+  double last_seconds_ = 0.0;
+  double filtered_v_ = 0.0;
+};
+
 enum class PositioningHealthState {
   kUnspecified,
   kWarmingUp,

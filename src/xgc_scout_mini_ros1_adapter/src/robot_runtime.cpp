@@ -434,8 +434,11 @@ xgc::semantic::ground::v1::ChassisStatus::ControlMode
 scoutControlMode(std::uint8_t native_mode) {
   using Status = xgc::semantic::ground::v1::ChassisStatus;
   switch (native_mode) {
+  case 0u:
   case 1u:
     return Status::CONTROL_MODE_COMMAND_CAN;
+  case 2u:
+    return Status::CONTROL_MODE_COMMAND_UART;
   case 3u:
     return Status::CONTROL_MODE_REMOTE;
   default:
@@ -1385,6 +1388,9 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("state.power", now);
+    double filtered_voltage = 0.0;
+    const bool estimate_valid = battery_voltage_filter_.update(
+        voltage, ros::SteadyTime::now().toSec(), &filtered_voltage);
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
       payload.set_percentage_state(
@@ -1392,8 +1398,8 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
       if (std::isfinite(voltage)) {
         payload.set_voltage_v(voltage);
         double percentage = 0.0;
-        if (xgc2_ros1_robot_adapter::batteryPercentage(
-                battery_curve_, voltage, &percentage)) {
+        if (estimate_valid && xgc2_ros1_robot_adapter::batteryPercentage(
+                battery_curve_, filtered_voltage, &percentage)) {
           payload.set_percentage(percentage);
           payload.set_percentage_state(
               xgc::semantic::common::v1::PowerStatus::

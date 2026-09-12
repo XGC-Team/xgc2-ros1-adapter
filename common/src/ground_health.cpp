@@ -115,6 +115,31 @@ bool batteryPercentage(const std::vector<BatteryCurvePoint> &curve,
   return false;
 }
 
+bool BatteryVoltageFilter::update(double voltage_v, double now, double *output) {
+  if (output == nullptr || !std::isfinite(voltage_v) || voltage_v <= 0.0 ||
+      !std::isfinite(now)) {
+    samples_.clear();
+    return false;
+  }
+  // Forget an old pack/readout after a source gap or clock discontinuity.
+  if (samples_.empty() || now <= last_seconds_ || now - last_seconds_ > 5.0) {
+    samples_.clear();
+    filtered_v_ = voltage_v;
+  }
+  samples_.push_back(voltage_v);
+  if (samples_.size() > 3u) samples_.pop_front();
+  auto sorted = samples_;
+  std::sort(sorted.begin(), sorted.end());
+  const double median = sorted[sorted.size() / 2u];
+  if (samples_.size() > 1u) {
+    const double alpha = -std::expm1(-(now - last_seconds_) / 10.0);
+    filtered_v_ += alpha * (median - filtered_v_);
+  }
+  last_seconds_ = now;
+  *output = filtered_v_;
+  return true;
+}
+
 bool validPositioningHealthConfig(const PositioningHealthConfig &config,
                                   std::string *error) {
   if (config.frame_number < 1u || config.frame_number > 999u)

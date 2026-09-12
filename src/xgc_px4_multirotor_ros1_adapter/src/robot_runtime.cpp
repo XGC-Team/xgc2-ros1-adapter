@@ -1362,12 +1362,15 @@ void RobotRuntime::recordStateSourceLocked(const std::string &channel_id,
   }
   if (count_sample)
     ++source.source_samples;
+  const bool flight_state_only = channel_id == "state.flight";
   if (mavros_state_last_seen_.isZero() ||
-      mavros_extended_state_last_seen_.isZero()) {
+      (!flight_state_only && mavros_extended_state_last_seen_.isZero())) {
     return;
   }
   const ros::WallTime complete_input_time =
-      std::min(mavros_state_last_seen_, mavros_extended_state_last_seen_);
+      flight_state_only
+          ? mavros_state_last_seen_
+          : std::min(mavros_state_last_seen_, mavros_extended_state_last_seen_);
   if (!source.last_seen.isZero() && complete_input_time > source.last_seen) {
     const double instantaneous_rate =
         1.0 / (complete_input_time - source.last_seen).toSec();
@@ -1778,8 +1781,6 @@ void RobotRuntime::mavrosExtendedStateCallback(
   mavros_extended_state_last_seen_ = ros::WallTime::now();
   if (channelRequired("state.health"))
     recordStateSourceLocked("state.health", false);
-  if (channelRequired("state.flight"))
-    recordStateSourceLocked("state.flight", false);
 }
 
 void RobotRuntime::localSetpointCallback(
