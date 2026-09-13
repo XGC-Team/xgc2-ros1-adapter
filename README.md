@@ -295,6 +295,6 @@ helper paths are rejected. Command acceptance is not fresh FCU state confirmatio
 a dispatched timeout is uncertain and must not be retried blindly. Callers own
 intent authorization, admission bounds, and absolute enqueue deadlines.
 
-The 0.5.0-33 package installs the narrow headers, static operations archive and
+The package installs the narrow headers, static operations archive and
 catkin/pkg-config export. The operations archive links ROS/MAVROS only; it does
 not expose the Adapter Runtime SDK as a downstream controller dependency.
