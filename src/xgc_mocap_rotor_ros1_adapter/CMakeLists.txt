@@ -63,12 +63,14 @@ if(CATKIN_ENABLE_TESTING)
   endif()
   add_rostest_gtest(${PROJECT_NAME}_runtime_test
     test/robot_runtime.test
-    test/robot_runtime_test.cpp src/robot_runtime.cpp src/wire_contract.cpp)
+    test/robot_runtime_test.cpp src/robot_runtime.cpp src/wire_contract.cpp
+    src/zenoh_subscriber.cpp)
   if(TARGET ${PROJECT_NAME}_runtime_test)
     add_dependencies(${PROJECT_NAME}_runtime_test
       ${PROJECT_NAME}_contract_metadata ${catkin_EXPORTED_TARGETS})
+    target_include_directories(${PROJECT_NAME}_runtime_test PRIVATE include)
     target_link_libraries(${PROJECT_NAME}_runtime_test
-      ${PROJECT_NAME}_runtime_support ${catkin_LIBRARIES})
+      ${PROJECT_NAME}_runtime_support ${catkin_LIBRARIES} zenohc::static)
   endif()
   catkin_add_gtest(${PROJECT_NAME}_zenoh_subscriber_test
     test/zenoh_subscriber_test.cpp

@@ -38,6 +38,7 @@ semantic_traits:
     state.power: 3000
     state.health: 3000
     state.flight: 3000
+    state.controller: 3000
     diagnostic.link: 3000
     diagnostic.stream-health: 3000
   online_conditions:
@@ -119,6 +120,17 @@ channels:
     output_rate_hz: 2
     inputs: *flight_state_input
 
+  - id: state.controller
+    kind: stream_out
+    output_message_id: 2012
+    processor: mocap-rotor.controller-status
+    output_rate_hz: 1
+    inputs:
+      wire:
+        name: xgc2/{robot_id}/up/forwarder_hb
+        type: xgc2_mocap_rotor_link/ForwarderHeartbeatV1
+        scope: global
+
   - id: diagnostic.link
     kind: stream_out
     output_message_id: 2010
@@ -143,4 +155,5 @@ channels:
       - state.power
       - state.health
       - state.flight
+      - state.controller
       - diagnostic.link

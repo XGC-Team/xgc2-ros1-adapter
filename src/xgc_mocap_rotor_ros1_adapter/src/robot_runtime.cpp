@@ -109,17 +109,45 @@ void copyQuaternion(const Json &source,
 }
 
 template <typename RepeatedField>
-void copyCovariance(const Json &source, RepeatedField *semantic,
-                    boost::array<double, 9u> *ros_covariance) {
+void applyCovariance(const Json &source, RepeatedField *semantic,
+                     boost::array<double, 9u> *ros_covariance) {
+  ros_covariance->fill(0.0);
+  (*ros_covariance)[0] = -1.0;
+  if (source.is_null())
+    return;
   if (!source.is_array() || source.size() != 9u)
-    throw std::runtime_error("IMU covariance must contain exactly 9 values");
-  for (std::size_t index = 0; index < source.size(); ++index) {
+    throw std::runtime_error(
+        "IMU covariance must be null or exactly 9 finite values");
+  std::array<double, 9u> values{};
+  bool nonzero = false;
+  for (std::size_t index = 0; index < values.size(); ++index) {
     const double value = source.at(index).get<double>();
     if (!std::isfinite(value))
       throw std::runtime_error("IMU covariance values must be finite");
-    semantic->Add(value);
-    (*ros_covariance)[index] = value;
+    values[index] = value;
+    nonzero = nonzero || value != 0.0;
   }
+  if (!nonzero || values[0] < 0.0)
+    return;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    semantic->Add(values[index]);
+    (*ros_covariance)[index] = values[index];
+  }
+}
+
+bool controllerStateText(const std::string &text) {
+  if (text.empty() || text.size() > 48u)
+    return false;
+  const auto *bytes = reinterpret_cast<const unsigned char *>(text.data());
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const unsigned char byte = bytes[index];
+    if (byte < 0x20u || byte == 0x7fu)
+      return false;
+    if (byte == 0xC2u && index + 1 < text.size() && bytes[index + 1] >= 0x80u &&
+        bytes[index + 1] <= 0x9fu)
+      return false;
+  }
+  return true;
 }
 
 std::int64_t sourceTimeMillis(const Json &value) {
@@ -230,9 +258,9 @@ bool ValidateNativeProfileContract(std::string *error) {
   std::size_t channel_count = 0u;
   const auto *channels =
       contract::profileChannels(contract::kProfileId, &channel_count);
-  if (channels == nullptr || channel_count != 9u)
+  if (channels == nullptr || channel_count != 10u)
     return fail(error,
-                "Mocap Rotor profile must expose nine read-only channels");
+                "Mocap Rotor profile must expose ten read-only channels");
   for (std::size_t index = 0u; index < channel_count; ++index) {
     if (channels[index].kind != contract::ChannelKind::kStreamOut ||
         channels[index].output_message_id == 0u ||
@@ -299,9 +327,10 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
       enabled.insert(channel.channel_id);
   }
   static const std::set<std::string> baseline{
-      "state.pose",   "state.velocity",  "state.speed",
-      "state.imu",    "state.power",     "state.health",
-      "state.flight", "diagnostic.link", "diagnostic.stream-health"};
+      "state.pose",       "state.velocity", "state.speed",
+      "state.imu",        "state.power",    "state.health",
+      "state.flight",     "state.controller", "diagnostic.link",
+      "diagnostic.stream-health"};
   for (const auto &channel : baseline) {
     if (enabled.count(channel) == 0u)
       return fail(error,
@@ -489,8 +518,11 @@ bool RobotRuntime::handleVelocity(const ros::WallTime &received,
   semantic_velocity.set_frame_id(frame);
   copyVector(body.at("linear"), semantic_velocity.mutable_linear(),
              &velocity.twist.linear);
-  copyVector(body.at("angular"), semantic_velocity.mutable_angular(),
-             &velocity.twist.angular);
+  const auto &angular = body.at("angular");
+  if (!angular.is_null()) {
+    copyVector(angular, semantic_velocity.mutable_angular(),
+               &velocity.twist.angular);
+  }
   const double speed =
       std::sqrt(velocity.twist.linear.x * velocity.twist.linear.x +
                 velocity.twist.linear.y * velocity.twist.linear.y +
@@ -543,8 +575,11 @@ bool RobotRuntime::handleImu(const ros::WallTime &received,
   message.header.frame_id = frame;
   xgc::semantic::common::v1::ImuEstimate semantic;
   semantic.set_frame_id(frame);
-  copyQuaternion(body.at("orientation"), semantic.mutable_orientation(),
-                 &message.orientation);
+  const auto &orientation = body.at("orientation");
+  if (!orientation.is_null()) {
+    copyQuaternion(orientation, semantic.mutable_orientation(),
+                   &message.orientation);
+  }
   copyVector(body.at("angular_velocity"), semantic.mutable_angular_velocity(),
              &message.angular_velocity);
   copyVector(body.at("linear_acceleration"),
@@ -552,15 +587,15 @@ bool RobotRuntime::handleImu(const ros::WallTime &received,
              &message.linear_acceleration);
   const auto &covariance = body.at("covariance");
   requireObjectSize(covariance, 3u, "IMU covariance");
-  copyCovariance(covariance.at("orientation"),
-                 semantic.mutable_orientation_covariance(),
-                 &message.orientation_covariance);
-  copyCovariance(covariance.at("angular_velocity"),
-                 semantic.mutable_angular_velocity_covariance(),
-                 &message.angular_velocity_covariance);
-  copyCovariance(covariance.at("linear_acceleration"),
-                 semantic.mutable_linear_acceleration_covariance(),
-                 &message.linear_acceleration_covariance);
+  applyCovariance(covariance.at("orientation"),
+                  semantic.mutable_orientation_covariance(),
+                  &message.orientation_covariance);
+  applyCovariance(covariance.at("angular_velocity"),
+                  semantic.mutable_angular_velocity_covariance(),
+                  &message.angular_velocity_covariance);
+  applyCovariance(covariance.at("linear_acceleration"),
+                  semantic.mutable_linear_acceleration_covariance(),
+                  &message.linear_acceleration_covariance);
 
   std::vector<xgc::robot::v1::RobotMessage> output;
   {
@@ -594,17 +629,25 @@ bool RobotRuntime::handlePower(const ros::WallTime &received,
   semantic.set_voltage_v(nullableFiniteNumber(body, "voltage_v"));
   semantic.set_current_a(nullableFiniteNumber(body, "current_a"));
   semantic.set_temperature_c(nullableFiniteNumber(body, "temperature_c"));
-  semantic.set_charging(required<bool>(body, "charging"));
+  const auto &charging_item = body.at("charging");
   sensor_msgs::BatteryState message;
   message.header.stamp = rosStamp(source_ms);
   message.percentage = static_cast<float>(semantic.percentage());
   message.voltage = static_cast<float>(semantic.voltage_v());
   message.current = static_cast<float>(semantic.current_a());
   message.temperature = static_cast<float>(semantic.temperature_c());
-  message.power_supply_status =
-      semantic.charging()
-          ? sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_CHARGING
-          : sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+  if (charging_item.is_null()) {
+    message.power_supply_status =
+        sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_UNKNOWN;
+  } else if (!charging_item.is_boolean()) {
+    throw std::runtime_error("charging must be a bool or null");
+  } else {
+    const bool charging = charging_item.get<bool>();
+    semantic.set_charging(charging);
+    message.power_supply_status =
+        charging ? sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_CHARGING
+                 : sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+  }
 
   std::vector<xgc::robot::v1::RobotMessage> output;
   {
@@ -639,7 +682,10 @@ bool RobotRuntime::handleFlightState(const ros::WallTime &received,
   if (mode.size() > 64u)
     throw std::runtime_error("flight mode exceeds 64 bytes");
   const auto system_status = required<std::uint32_t>(body, "system_status");
-  const auto landed_state = required<std::uint32_t>(body, "landed_state");
+  const auto &landed_item = body.at("landed_state");
+  const bool has_landed_state = !landed_item.is_null();
+  const auto landed_state =
+      has_landed_state ? landed_item.get<std::uint32_t>() : 0u;
   const auto &faults = body.at("faults");
   if (!faults.is_array() || faults.size() > kMaximumFaults)
     throw std::runtime_error("flight faults must be a bounded array");
@@ -661,7 +707,8 @@ bool RobotRuntime::handleFlightState(const ros::WallTime &received,
   semantic.set_armed(armed);
   semantic.set_mode(mode);
   semantic.set_system_status(system_status);
-  semantic.set_landed_state(landed_state);
+  if (has_landed_state)
+    semantic.set_landed_state(landed_state);
 
   std::vector<xgc::robot::v1::RobotMessage> output;
   {
@@ -710,6 +757,21 @@ bool RobotRuntime::handleHeartbeat(const ros::WallTime &received,
       stats.size() > 64u) {
     throw std::runtime_error("heartbeat channels/stats are not bounded");
   }
+  std::string controller_text;
+  for (const auto &channel : channels) {
+    if (!channel.is_object() || !channel.contains("id"))
+      throw std::runtime_error("heartbeat channel is missing its id");
+    if (channel.at("id").get<std::string>() != "controller" ||
+        !channel.contains("text") || channel.at("text").is_null())
+      continue;
+    if (!channel.at("text").is_string())
+      throw std::runtime_error("controller status text must be a string");
+    const std::string text = channel.at("text").get<std::string>();
+    if (!controllerStateText(text))
+      throw std::runtime_error(
+          "controller status text must be 1 to 48 bytes without C0, DEL, or C1 controls");
+    controller_text = text;
+  }
 
   std::vector<xgc::robot::v1::RobotMessage> output;
   {
@@ -730,6 +792,17 @@ bool RobotRuntime::handleHeartbeat(const ros::WallTime &received,
       output.push_back(
           makeEnvelopeLocked("diagnostic.link", source_ms, semantic));
       recordOutputLocked("diagnostic.link");
+    }
+    if (!controller_text.empty()) {
+      recordSourceLocked("state.controller", received);
+      if (channelEnabled("state.controller") &&
+          shouldEmitLocked("state.controller", received)) {
+        xgc::semantic::common::v1::ControllerStatus status;
+        status.set_text(controller_text);
+        output.push_back(
+            makeEnvelopeLocked("state.controller", source_ms, status));
+        recordOutputLocked("state.controller");
+      }
     }
   }
   std_msgs::String message;

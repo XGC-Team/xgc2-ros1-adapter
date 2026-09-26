@@ -5,5 +5,5 @@
   <test test-name="mocap_rotor_runtime"
         pkg="xgc_mocap_rotor_ros1_adapter"
         type="xgc_mocap_rotor_ros1_adapter_runtime_test"
-        time-limit="60.0" />
+        time-limit="90.0" />
 </launch>

@@ -174,9 +174,15 @@ class ContractGeneratorTest(unittest.TestCase):
                 "state.power",
                 "state.health",
                 "state.flight",
+                "state.controller",
                 "diagnostic.link",
                 "diagnostic.stream-health",
             },
+        )
+        self.assertEqual(channels["state.controller"]["output_message_id"], 2012)
+        self.assertEqual(
+            channels["state.controller"]["endpoints"][0]["name_template"],
+            "xgc2/{robot_id}/up/forwarder_hb",
         )
         self.assertFalse(
             any(channel["kind"] == "operation" for channel in channels.values())
