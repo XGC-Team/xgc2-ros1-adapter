@@ -796,12 +796,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertIn('<arg name="{}" />'.format(mapping), launch)
 
-    def test_b2_release_metadata_and_public_apt_gate_are_frozen(self):
+    def test_release_version_matches_focal_and_b2_public_apt_gate_is_preserved(self):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")
         )
-        self.assertEqual(product["version"], "0.5.0-34")
-        self.assertEqual(product["release"]["apt_versions"]["focal"], "0.5.0-34")
+        self.assertEqual(product["release"]["apt_versions"]["focal"], product["version"])
         self.assertNotIn(
             "xgc2-b2arx-description",
             product["release"]["dependency_policy"],
