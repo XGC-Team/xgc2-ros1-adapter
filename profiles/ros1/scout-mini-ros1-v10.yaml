@@ -5,6 +5,16 @@ native_protocol: ros1
 robot_kind: scout_mini
 description: Scout Mini raw mocap projection, chassis, IMU, command telemetry, and discrete motion control. Online follows the on-board IMU; Adapter localization gates operational readiness.
 parameters:
+  ros_master_uri:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Experiment ROS master URI.
+  ros_ip:
+    type: string
+    required: false
+    delivery: target_binding
+    description: ROS address of this Adapter host.
   namespace:
     type: string
     required: true

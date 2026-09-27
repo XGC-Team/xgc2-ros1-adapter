@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <stdexcept>
 #include <utility>
 
 #include "xgc/semantic/aerial/v1/control.pb.h"
@@ -10,6 +11,29 @@
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
+
+TEST(RuntimeSupport, ROSConnectionComesFromExperimentBootstrap) {
+  xgc::adapter::v1::AdapterInstanceSpec instance;
+  xgc::robot::v1::RobotAdapterSpec robots;
+  auto *robot = robots.add_robots();
+  (*robot->mutable_parameters())["ros_master_uri"] = "http://10.68.3.250:11311";
+  (*robot->mutable_parameters())["ros_ip"] = "10.68.3.251";
+  instance.mutable_configuration()->set_value(robots.SerializeAsString());
+  const auto environment = RosEnvironmentFromSpec(instance);
+  EXPECT_EQ(environment.at("ROS_MASTER_URI"), "http://10.68.3.250:11311");
+  EXPECT_EQ(environment.at("ROS_IP"), "10.68.3.251");
+
+  auto *other = robots.add_robots();
+  *other = *robot;
+  (*other->mutable_parameters())["ros_master_uri"] = "http://10.68.4.250:11311";
+  instance.mutable_configuration()->set_value(robots.SerializeAsString());
+  EXPECT_THROW(RosEnvironmentFromSpec(instance), std::runtime_error);
+
+  robots.clear_robots();
+  robots.add_robots();
+  instance.mutable_configuration()->set_value(robots.SerializeAsString());
+  EXPECT_TRUE(RosEnvironmentFromSpec(instance).empty());
+}
 
 TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig config;

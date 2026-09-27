@@ -2,6 +2,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <iostream>
 #include <limits>
@@ -299,10 +300,8 @@ bool channelEnabled(const xgc2_ros1_robot_adapter::RobotConfig &robot,
 class Px4MultirotorRos1AdapterNode {
 public:
   Px4MultirotorRos1AdapterNode(ros::NodeHandle node_handle,
-                               const std::string &bootstrap_file)
+                               xgc2::adapter_runtime::ClientConfig config)
       : node_handle_(std::move(node_handle)) {
-    auto config =
-        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
     definition_id_ = config.registration().definition_id();
     config.dispatch_workers = 4;
 
@@ -445,7 +444,8 @@ private:
       *error = "profile digest mismatch for robot " + robot.robot_id;
       return false;
     }
-    if (robot.parameters.size() != 8 ||
+    if ((robot.parameters.size() - robot.parameters.count("ros_master_uri") -
+         robot.parameters.count("ros_ip")) != 8 ||
         robot.parameters.find("namespace") == robot.parameters.end() ||
         robot.parameters.find("mocap_rigid_body") == robot.parameters.end() ||
         robot.parameters.find("mocap_source_root") == robot.parameters.end() ||
@@ -1346,14 +1346,22 @@ int main(int argc, char **argv) {
     std::cerr << "xgc_px4_multirotor_ros1_adapter: " << error << '\n';
     return 2;
   }
-  ros::init(argc, argv, "xgc_px4_multirotor_ros1_adapter",
-            ros::init_options::AnonymousName |
-                ros::init_options::NoSigintHandler);
-  ros::master::setRetryTimeout(ros::WallDuration(3.0));
   try {
+    auto config =
+        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
+    const auto ros_environment =
+        xgc2_ros1_robot_adapter::RosEnvironmentFromSpec(config.initial_spec());
+    for (const auto &entry : ros_environment)
+      setenv(entry.first.c_str(), entry.second.c_str(), 1);
+    if (ros_environment.count("ROS_IP"))
+      unsetenv("ROS_HOSTNAME");
+    ros::init(argc, argv, "xgc_px4_multirotor_ros1_adapter",
+              ros::init_options::AnonymousName |
+                  ros::init_options::NoSigintHandler);
+    ros::master::setRetryTimeout(ros::WallDuration(3.0));
     xgc_px4_multirotor_ros1_adapter::ShutdownSignalHandler shutdown_signals;
     xgc_px4_multirotor_ros1_adapter::Px4MultirotorRos1AdapterNode node(
-        ros::NodeHandle(), bootstrap_file);
+        ros::NodeHandle(), std::move(config));
     ros::AsyncSpinner spinner(4);
     spinner.start();
     while (ros::ok() && !shutdown_signals.requested() && !node.exitRequested())

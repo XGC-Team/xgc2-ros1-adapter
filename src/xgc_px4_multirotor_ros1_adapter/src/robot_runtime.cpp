@@ -462,11 +462,8 @@ bool BuildNativeProfileConfig(
   if (config.profile_id != contract::kProfileId)
     return fail(error, "PX4 native profile identity is unsupported");
 
-  std::size_t parameter_count = 0u;
-  const auto *parameters =
-      contract::profileParameters(config.profile_id, &parameter_count);
-  if (parameters == nullptr || parameter_count != 8u ||
-      config.parameters.size() != parameter_count)
+  if (config.parameters.size() - config.parameters.count("ros_master_uri") -
+          config.parameters.count("ros_ip") != 8u)
     return fail(error, "PX4 native parameter binding is not exhaustive");
   contract::ParameterMetadata namespace_descriptor{};
   contract::ParameterMetadata mocap_parameter{};

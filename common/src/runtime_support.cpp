@@ -1,6 +1,7 @@
 #include "xgc2_ros1_robot_adapter/runtime_support.hpp"
 
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 namespace xgc2_ros1_robot_adapter {
@@ -46,6 +47,27 @@ bool BootstrapFileFromArguments(int argc, char **argv, std::string *path,
   if (error != nullptr)
     error->clear();
   return true;
+}
+
+std::map<std::string, std::string> RosEnvironmentFromSpec(
+    const xgc::adapter::v1::AdapterInstanceSpec &spec) {
+  xgc::robot::v1::RobotAdapterSpec robots;
+  if (!robots.ParseFromString(spec.configuration().value()))
+    throw std::runtime_error("invalid RobotAdapterSpec ROS configuration");
+  std::map<std::string, std::string> environment;
+  const std::map<std::string, std::string> names{
+      {"ros_master_uri", "ROS_MASTER_URI"}, {"ros_ip", "ROS_IP"}};
+  for (const auto &robot : robots.robots()) {
+    for (const auto &name : names) {
+      const auto value = robot.parameters().find(name.first);
+      if (value == robot.parameters().end() || value->second.empty())
+        continue;
+      const auto inserted = environment.emplace(name.second, value->second);
+      if (!inserted.second && inserted.first->second != value->second)
+        throw std::runtime_error("one ROS Adapter process cannot use different ROS endpoints");
+    }
+  }
+  return environment;
 }
 
 bool BindBootstrapCapability(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 #include "xgc/adapter/v1/adapter.pb.h"
@@ -18,6 +19,10 @@ constexpr std::uint32_t kRobotCapabilityVersion = 1u;
 // have no socket/token/identity flags or ROS-parameter fallbacks.
 bool BootstrapFileFromArguments(int argc, char **argv, std::string *path,
                                 std::string *error);
+
+// Read the experiment ROS endpoint before ros::init creates any ROS clients.
+std::map<std::string, std::string> RosEnvironmentFromSpec(
+    const xgc::adapter::v1::AdapterInstanceSpec &spec);
 
 // Attaches callbacks only to the exact contract delivered in the trusted
 // bootstrap. Product code cannot manufacture or widen a contract digest.

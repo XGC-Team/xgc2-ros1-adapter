@@ -447,9 +447,6 @@ scoutControlMode(std::uint8_t native_mode) {
 }
 
 bool validateNativeProfileContract(std::string *error) {
-  std::size_t parameter_count = 0u;
-  const auto *parameters =
-      contract::profileParameters(contract::kProfileId, &parameter_count);
   contract::ParameterMetadata mocap{};
   contract::ParameterMetadata robot_namespace{};
   contract::ParameterMetadata frames{};
@@ -458,8 +455,7 @@ bool validateNativeProfileContract(std::string *error) {
   contract::ParameterMetadata offset_x{};
   contract::ParameterMetadata offset_y{};
   contract::ParameterMetadata offset_z{};
-  if (parameters == nullptr || parameter_count != 8u ||
-      !contract::parameterMetadata(contract::kProfileId, "mocap_rigid_body", &mocap) ||
+  if (!contract::parameterMetadata(contract::kProfileId, "mocap_rigid_body", &mocap) ||
       mocap.type != contract::ParameterType::kString || !mocap.required ||
       !contract::parameterMetadata(contract::kProfileId, "namespace", &robot_namespace) ||
       robot_namespace.type != contract::ParameterType::kString || !robot_namespace.required ||

@@ -202,7 +202,10 @@ TEST(PositioningLiveness, ValidatesTheXgc1AssetParameterBounds) {
 TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   NativeProfileConfig native;
   std::string error;
-  ASSERT_TRUE(BuildNativeProfileConfig(makeProfileConfig(), &native, &error))
+  auto config = makeProfileConfig();
+  config.parameters["ros_master_uri"] = "http://10.68.3.250:11311";
+  config.parameters["ros_ip"] = "10.68.3.251";
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error))
       << error;
 
   EXPECT_EQ("/uav1/mavros/local_position/pose", native.pose_endpoint);
