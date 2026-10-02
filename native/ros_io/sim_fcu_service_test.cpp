@@ -10,6 +10,7 @@
 #include <mavros_msgs/ExtendedState.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
+#include <xgc2_lightweight_sim_msgs/SetProvider.h>
 #include <ros/ros.h>
 
 #include <array>
@@ -128,28 +129,30 @@ struct Instance {
   }
 };
 
-std::string edge_config(int index) {
+std::string edge_config(int index, bool providers = false) {
   const auto ns = "/private_fcu/robot" + std::to_string(index) + "/mavros";
   return std::string("node_name = \"sim_fcu_service_test\"\nslice_ms = 0.001\n") +
          "sim_fcu_robot_index = " + std::to_string(index) + "\n" +
          "sim_fcu_timeout_ms = 250\nsim_fcu_freshness_ms = 100\n" +
          "sim_fcu_request_topic = \"" + ns + "\"\n" +
          "sim_fcu_state_topic = \"" + ns + "/state\"\n" +
-         "sim_extended_state_topic = \"" + ns + "/extended_state\"\n";
+         "sim_extended_state_topic = \"" + ns + "/extended_state\"\n" +
+         (providers ? "sim_provider_service = \"/xgc/lightweight/providers/uav" + std::to_string(index + 1) + "\"\n" : "");
 }
 
 int main(int argc, char** argv) {
-  assert(argc == 3);
+  assert(argc == 3 || argc == 4);
+  const bool providers = argc == 4 && std::strcmp(argv[3], "--provider64") == 0;
   ros::init(argc, argv, "sim_fcu_service_test", ros::init_options::NoSigintHandler);
   ros::NodeHandle nh;
   Library ros_io(argv[1]), plant_lib(argv[2]);
-  assert(plant_lib.descriptor->port_count == 62);
+  assert(plant_lib.descriptor->port_count == (providers ? 64u : 62u));
   assert(std::strcmp(ros_io.descriptor->ports[ros_io.port("fcu_request")].schema_id, "xgc.fcu_request/1") == 0);
   assert(std::strcmp(ros_io.descriptor->ports[ros_io.port("sim_fcu_request")].schema_id, "xgc.fcu_request/2") == 0);
   const int64_t epoch = static_cast<int64_t>(ros::WallTime::now().toNSec());
   Instance plant(plant_lib, "model = \"fs150\"\nrobots = 6\nstep_ms = 1\noutput_ms = 1\nepoch_ns = " +
                            std::to_string(epoch) + "\n");
-  Instance edge5(ros_io, edge_config(5)), edge4(ros_io, edge_config(4));
+  Instance edge5(ros_io, edge_config(5, providers)), edge4(ros_io, edge_config(4, providers));
   std::array<mavros_msgs::State, 2> observed_state;
   std::array<mavros_msgs::ExtendedState, 2> observed_extended;
   auto state5 = nh.subscribe<mavros_msgs::State>("/private_fcu/robot5/mavros/state", 1,
@@ -194,6 +197,8 @@ int main(int argc, char** argv) {
       }
       if (packet.port == 61) for (auto* edge : {&edge5, &edge4})
         edge->boundary.state[ros_io.port("sim_extended_state")] = packet.bytes;
+      if (providers && packet.port == 63) for (auto* edge : {&edge5, &edge4})
+        edge->boundary.incoming[ros_io.port("sim_provider_result")].push_back(packet.bytes);
       if (packet.port == 56) {
         if (!replay_state) frozen_state = packet.bytes;
         edge5.boundary.state[ros_io.port("sim_fcu_state")] = frozen_state;
@@ -203,6 +208,10 @@ int main(int argc, char** argv) {
     plant.boundary.output.clear();
     for (auto* edge : {&edge5, &edge4}) {
       for (const auto& packet : edge->boundary.output) {
+        if (providers && packet.port == ros_io.port("sim_provider_request")) {
+          plant.boundary.incoming[62].push_back(packet.bytes);
+          continue;
+        }
         if (packet.port != ros_io.port("sim_fcu_request")) continue;
         last_request = decode<xgc_fcu_request_v2>(packet.bytes);
         assert(last_request.request_id & (uint64_t{1} << 63));
@@ -227,6 +236,22 @@ int main(int argc, char** argv) {
     wait([&] { return call.wait_for(0ms) == std::future_status::ready; });
     assert(call.get());
   };
+  if (providers) {
+    for (const int body : {5, 6}) {
+      auto client = nh.serviceClient<xgc2_lightweight_sim_msgs::SetProvider>("/xgc/lightweight/providers/uav" + std::to_string(body));
+      assert(client.waitForExistence(ros::Duration(3)));
+      xgc2_lightweight_sim_msgs::SetProvider provider;
+      provider.request.action = 0;
+      invoke(client, provider);
+      assert(provider.response.accepted && !provider.response.enabled && provider.response.generation == 0);
+      provider.request.action = 1;
+      invoke(client, provider);
+      assert(provider.response.accepted && provider.response.enabled && provider.response.generation == 1);
+      // Active start with the preceding expected generation is idempotent.
+      invoke(client, provider);
+      assert(provider.response.accepted && provider.response.generation == 1);
+    }
+  }
   wait([&] { return observed_state[0].connected && observed_state[1].connected &&
                     observed_extended[0].landed_state == 1 && observed_extended[1].landed_state == 1; });
   assert(observed_state[0].system_status == 3 && observed_state[1].system_status == 3);
@@ -322,6 +347,26 @@ int main(int argc, char** argv) {
   replay_state = false;
   for (int i = 0; i < 20; ++i) pump();
 
+  if (providers) {
+    auto client = nh.serviceClient<xgc2_lightweight_sim_msgs::SetProvider>("/xgc/lightweight/providers/uav6");
+    xgc2_lightweight_sim_msgs::SetProvider provider;
+    provider.request.action = 2; provider.request.generation = 1;
+    invoke(client, provider);
+    assert(provider.response.accepted && !provider.response.enabled && provider.response.generation == 1);
+    provider.request.action = 1;
+    invoke(client, provider);
+    assert(provider.response.accepted && provider.response.enabled && provider.response.generation == 2);
+    wait([&] { return observed_state[0].connected && !observed_state[0].armed; });
+    assert(std::fabs(last_pose.position[2]) < 1e-6);
+    provider.request.action = 2; provider.request.generation = 1;
+    invoke(client, provider);
+    assert(!provider.response.accepted && provider.response.enabled && provider.response.reason == 1 &&
+           provider.response.generation == 2);
+    provider.request.action = 0;
+    invoke(client, provider);
+    assert(provider.response.accepted && provider.response.enabled && provider.response.generation == 2);
+  }
+
   auto clock_entry = reinterpret_cast<xgc_clock_source_entry_v1>(dlsym(ros_io.handle, XGC_CLOCK_SOURCE_ENTRY));
   assert(clock_entry);
   auto clock = clock_entry();
@@ -351,7 +396,8 @@ int main(int argc, char** argv) {
   clock->vtbl->destroy(source);
   assert(edge5.boundary.wrong_thread == 0 && edge4.boundary.wrong_thread == 0);
   std::cout << "{\"result\":\"passed\",\"steps\":" << steps
-            << ",\"requests\":" << requests << ",\"model_robots\":6,\"plant_ports\":62,"
+            << ",\"requests\":" << requests << ",\"model_robots\":6,\"plant_ports\":"
+            << plant_lib.descriptor->port_count << ",\"provider64\":" << (providers ? "true" : "false") << ","
             << "\"host_background_calls\":0,\"actual_airborne_z\":" << last_pose.position[2]
             << ",\"force_result\":3,\"airborne_disarm_result\":2,\"timeout_result\":4,"
             << "\"stop_transport_response\":" << (stop_transport ? "true" : "false") << "}\n";

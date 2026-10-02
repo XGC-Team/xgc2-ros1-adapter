@@ -72,12 +72,15 @@ struct Boundary {
   }
   void tick(RosIo& edge) {
     stamp += 0.01;
+    xgc_pose_v1 pose{}; pose.stamp = stamp; pose.position[0] = 1; pose.position[1] = 2; pose.position[2] = 3;
+    pose.q_wxyz[0] = 1; input(kSimPose, pose);
     xgc_fcu_state_v1 state{}; state.stamp = stamp; state.connected = enabled; state.armed = armed;
     input(kSimFcuState, state);
     for (const auto& r : provider_results) input(kSimProviderResult, r);
     for (const auto& r : fcu_results) input(kSimFcuResult, r);
     provider_results.clear(); fcu_results.clear();
     xgc_step_ctx ctx{}; assert(edge.step(&ctx) == XGC_OK);
+    ros::spinOnce();
     std::this_thread::sleep_for(1ms);
   }
 };
@@ -88,10 +91,17 @@ int main(int argc, char** argv) {
   auto* edge = static_cast<RosIo*>(create(&boundary.api)); assert(edge);
   assert(configure(edge, "node_name=\"fcu_epoch_queue_test\"\nslice_ms=0.001\n"
       "sim_fcu_state_topic=\"/private_epoch/state\"\nsim_fcu_request_topic=\"/private_epoch/mavros\"\n"
-      "sim_provider_service=\"/private_epoch/provider\"\n") == XGC_OK);
+      "sim_provider_service=\"/private_epoch/provider\"\nframe_id=\"map\"\n"
+      "sim_pose_topic=\"/private_epoch/mocap\"\nsim_body_pose_topic=\"/private_epoch/body_truth\"\n"
+      "sim_mocap_position_stddev_m=[0.01,0.01,0.01]\n") == XGC_OK);
   assert(edge->activate() == XGC_OK);
   ros::NodeHandle nh;
-  auto provider = nh.serviceClient<sss_sim_env::SetProvider>("/private_epoch/provider");
+  geometry_msgs::PoseStamped truth, mocap;
+  auto truth_sub = nh.subscribe<geometry_msgs::PoseStamped>("/private_epoch/body_truth", 1,
+      [&](const geometry_msgs::PoseStamped::ConstPtr& m) { truth = *m; });
+  auto mocap_sub = nh.subscribe<geometry_msgs::PoseStamped>("/private_epoch/mocap", 1,
+      [&](const geometry_msgs::PoseStamped::ConstPtr& m) { mocap = *m; });
+  auto provider = nh.serviceClient<xgc2_lightweight_sim_msgs::SetProvider>("/private_epoch/provider");
   auto arming = nh.serviceClient<mavros_msgs::CommandBool>("/private_epoch/mavros/cmd/arming");
   assert(provider.waitForExistence(ros::Duration(2)));
   auto wait = [&](const auto& condition) {
@@ -99,11 +109,17 @@ int main(int argc, char** argv) {
     while (!condition()) { assert(std::chrono::steady_clock::now() < deadline); boundary.tick(*edge); }
   };
   auto lifecycle = [&](uint8_t action, uint64_t expected) {
-    sss_sim_env::SetProvider call; call.request.action = action; call.request.generation = expected;
+    xgc2_lightweight_sim_msgs::SetProvider call; call.request.action = action; call.request.generation = expected;
     auto future = std::async(std::launch::async, [&] { return provider.call(call); });
     wait([&] { return future.wait_for(0ms) == std::future_status::ready; });
     assert(future.get() && call.response.accepted); return call.response;
   };
+  wait([&] { return !truth.header.stamp.isZero() && truth.header.stamp == mocap.header.stamp; });
+  assert(!boundary.enabled);
+  assert(truth.header.frame_id == "world" && mocap.header.frame_id == "map");
+  assert(truth.pose.position.x == 1 && truth.pose.position.y == 2 && truth.pose.position.z == 3);
+  assert(truth.pose.orientation.w == 1);
+  assert(mocap.pose.position.x != truth.pose.position.x || mocap.pose.position.y != truth.pose.position.y);
   assert(lifecycle(0, 0).generation == 0 && !boundary.enabled);
   assert(lifecycle(1, 0).generation == 1);
   boundary.tick(*edge);
@@ -135,5 +151,6 @@ int main(int argc, char** argv) {
   assert(valid.get() && current.response.success && boundary.disarms == 1);
   edge->shutdown(); destroy(edge);
   std::cout << "{\"result\":\"passed\",\"queued_old_generation_disarms\":0,"
-               "\"current_generation_disarms\":1,\"generation\":2,\"captured_epoch_rejected\":true}\n";
+               "\"current_generation_disarms\":1,\"generation\":2,\"captured_epoch_rejected\":true,"
+               "\"offline_body_truth_before_mocap_noise\":true}\n";
 }

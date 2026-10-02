@@ -112,7 +112,7 @@
 #include "sim_mocap.hpp"
 #include "sim_fcu_rpc.hpp"
 #include "sim_provider_rpc.hpp"
-#include <sss_sim_env/SetProvider.h>
+#include <xgc2_lightweight_sim_msgs/SetProvider.h>
 #include <multirotor_reference_trajectory_msgs/AnalyticReference.h>
 #include <multirotor_reference_trajectory_msgs/ReferenceStatus.h>
 #include <multirotor_reference_trajectory_msgs/SampledReference.h>
@@ -722,7 +722,7 @@ struct RosIo {
   }
 
   static bool on_provider(const std::shared_ptr<xgc_sim_provider::Rpc>& rpc,
-                          sss_sim_env::SetProvider::Request& request, sss_sim_env::SetProvider::Response& response) {
+                          xgc2_lightweight_sim_msgs::SetProvider::Request& request, xgc2_lightweight_sim_msgs::SetProvider::Response& response) {
     const auto current = rpc->state();
     response.accepted = false;
     response.generation = current.generation;
@@ -1312,7 +1312,7 @@ struct RosIo {
       provider_service_loop = shared_provider_service_loop();
       const auto rpc = provider_rpc;
       ros::AdvertiseServiceOptions provider;
-      provider.init<sss_sim_env::SetProvider::Request, sss_sim_env::SetProvider::Response>(
+      provider.init<xgc2_lightweight_sim_msgs::SetProvider::Request, xgc2_lightweight_sim_msgs::SetProvider::Response>(
           sim_provider_service, [rpc](auto& request, auto& response) { return on_provider(rpc, request, response); });
       provider.callback_queue = &provider_service_loop->queue;
       provider_service = nh->advertiseService(provider);

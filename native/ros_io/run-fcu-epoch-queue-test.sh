@@ -3,6 +3,7 @@
 set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
+provider_prefix="${XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX:-$prefix}"
 sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-${XGC_RUNTIME_SDK_SOURCE_ROOT:+$XGC_RUNTIME_SDK_SOURCE_ROOT/abi/include}}"
 sdk_include="${sdk_include:-/usr/include/xgc-runtime}"
 work="${FCU_EPOCH_OUTPUT:-$(mktemp -d)}"
@@ -10,9 +11,10 @@ mkdir -p "$work"
 set +u
 source "$prefix/setup.bash"
 set -u
-bash "$source_dir/build.sh" "$work/libros_io.so"
+ros_lib="${ROS_IO_LIB:-$work/libros_io.so}"
+if [[ -z "${ROS_IO_LIB:-}" ]]; then bash "$source_dir/build.sh" "$ros_lib"; fi
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -pthread \
-  -I "$sdk_include" -I "$source_dir" -I "$work/ros-io-gen" -isystem "$prefix/include" \
+  -I "$sdk_include" -I "$source_dir" -I "$(dirname -- "$ros_lib")/ros-io-gen" -I "$provider_prefix/include" -isystem "$prefix/include" \
   "$source_dir/sim_fcu_epoch_queue_test.cpp" "$source_dir/ros_clock_source.cpp" "$source_dir/ros_dmpc_edge.cpp" \
   -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization \
   -lrosconsole -lrostime -lcpp_common -o "$work/fcu-epoch-queue-test"

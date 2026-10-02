@@ -6,6 +6,7 @@ source_dir="$(cd "$(dirname "$0")" && pwd)"
 sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-${XGC_RUNTIME_SDK_SOURCE_ROOT:+$XGC_RUNTIME_SDK_SOURCE_ROOT/abi/include}}"
 sdk_include="${sdk_include:-/usr/include/xgc-runtime}"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
+provider_prefix="${XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX:-$prefix}"
 plant_lib="${PLANT_LIB:?set PLANT_LIB to the owning native plant product plugin}"
 [[ -f "$plant_lib" ]] || { echo "native plant plugin does not exist: $plant_lib" >&2; exit 2; }
 output="${FCU_TEST_OUTPUT:-$(mktemp -d)}"
@@ -43,8 +44,10 @@ PY
 ros_lib="${ROS_IO_LIB:-$output/libros_io.so}"
 if [[ -z "${ROS_IO_LIB:-}" ]]; then bash "$source_dir/build.sh" "$ros_lib"; fi
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
-  -I "$sdk_include" -isystem "$prefix/include" \
+  -I "$sdk_include" -I "$(dirname -- "$ros_lib")/ros-io-gen" -I "$provider_prefix/include" -isystem "$prefix/include" \
   "$source_dir/sim_fcu_service_test.cpp" -o "$output/fcu-service-test" \
   -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization \
   -lrosconsole -lrostime -lcpp_common -ldl
-timeout --signal=TERM 15s "$output/fcu-service-test" "$ros_lib" "$plant_lib"
+extra=()
+if [[ "${PROVIDER_TEST:-0}" == 1 ]]; then extra+=(--provider64); fi
+timeout --signal=TERM 15s "$output/fcu-service-test" "$ros_lib" "$plant_lib" "${extra[@]}"
