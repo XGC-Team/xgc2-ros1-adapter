@@ -299,6 +299,8 @@ struct RosIo {
   std::shared_ptr<xgc_sim_fcu::Rpc> sim_rpc;
   std::shared_ptr<SimServiceLoop> sim_service_loop;
   std::string sim_provider_service;
+  std::string sim_provider_group;
+  bool sim_provider_request_owner{true};
   std::shared_ptr<xgc_sim_provider::Rpc> provider_rpc;
   std::shared_ptr<SimServiceLoop> provider_service_loop;
   ros::ServiceServer provider_service;
@@ -784,13 +786,24 @@ struct RosIo {
 
   void publish_provider_requests() {
     if (!provider_rpc) return;
-    for (const auto& request : provider_rpc->take_requests())
-      provider_rpc->published(request.request_id, write(kSimProviderRequest, request));
+    if (!sim_provider_group.empty()) {
+      if (!sim_provider_request_owner) return;
+      for (const auto& work : xgc_sim_provider::Groups::instance().take(sim_provider_group)) {
+        if (!work.rpc->can_publish(work.request.request_id)) continue;
+        work.rpc->published(work.request.request_id, write(kSimProviderRequest, work.request));
+      }
+    } else {
+      for (const auto& request : provider_rpc->take_requests())
+        if (provider_rpc->can_publish(request.request_id))
+          provider_rpc->published(request.request_id, write(kSimProviderRequest, request));
+    }
   }
 
   void stop_provider_services() {
     ++provider_controls_epoch;
     if (provider_rpc) provider_rpc->close();
+    if (provider_rpc && !sim_provider_group.empty())
+      xgc_sim_provider::Groups::instance().remove(sim_provider_group, static_cast<uint32_t>(sim_fcu_robot_index), provider_rpc);
     provider_service.shutdown();
     provider_pva_sub.shutdown();
     provider_attitude_sub.shutdown();
@@ -1294,6 +1307,8 @@ struct RosIo {
     if (provider_rpc) {
       provider_state = {};
       provider_rpc->open();
+      if (!sim_provider_group.empty())
+        xgc_sim_provider::Groups::instance().add(sim_provider_group, static_cast<uint32_t>(sim_fcu_robot_index), provider_rpc);
       provider_service_loop = shared_provider_service_loop();
       const auto rpc = provider_rpc;
       ros::AdvertiseServiceOptions provider;
@@ -1416,6 +1431,10 @@ xgc_status configure(void* p, const char* config) {
     self->sim_body_pose_topic = cfg::text_or(t, "sim_body_pose_topic", "");
     self->sim_hover_thrust_trace_topic = cfg::text_or(t, "sim_hover_thrust_trace_topic", "");
     self->sim_provider_service = cfg::text_or(t, "sim_provider_service", "");
+    self->sim_provider_group = cfg::text_or(t, "sim_provider_group", "");
+    self->sim_provider_request_owner = true;
+    if (!cfg::boolean(t, "sim_provider_request_owner", &self->sim_provider_request_owner))
+      throw std::invalid_argument("sim_provider_request_owner must be boolean");
     double rpc_index = 0, rpc_timeout_ms = 1000, rpc_freshness_ms = 500;
     if (!cfg::number(t, "sim_fcu_robot_index", &rpc_index) || !std::isfinite(rpc_index) ||
         rpc_index < 0 || rpc_index >= 6 || std::floor(rpc_index) != rpc_index ||

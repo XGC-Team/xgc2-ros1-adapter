@@ -1,5 +1,6 @@
 #pragma once
 #include "sim_fcu_rpc.hpp"
+#include <string>
 
 namespace xgc_sim_provider {
 
@@ -66,6 +67,11 @@ class Rpc {
     p->second->sent = ok;
     if (!ok) { p->second->done = true; changed_.notify_all(); }
   }
+  bool can_publish(uint64_t id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto p = pending_.find(id);
+    return active_ && p != pending_.end() && !p->second->done && Clock::now() < p->second->deadline;
+  }
   bool result(const xgc_sim_provider_result_v1& result) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_ || result.robot_index != index_ || !std::isfinite(result.stamp) || result.stamp < 0 ||
@@ -105,5 +111,43 @@ class Rpc {
   double last_stamp_{-1};
   std::deque<std::shared_ptr<Pending>> queued_;
   std::unordered_map<uint64_t, std::shared_ptr<Pending>> pending_;
+};
+
+// A batch has one Host output writer. Each body retains its own RPC/result
+// authority; only the designated edge drains this process-shared group.
+class Groups {
+ public:
+  struct Work { std::shared_ptr<Rpc> rpc; xgc_sim_provider_request_v1 request; };
+  static Groups& instance() { static Groups groups; return groups; }
+  void add(const std::string& group, uint32_t index, const std::shared_ptr<Rpc>& rpc) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto& member = groups_[group][index];
+    if (auto current = member.lock(); current && current != rpc)
+      throw std::invalid_argument("duplicate live provider group body");
+    member = rpc;
+  }
+  void remove(const std::string& group, uint32_t index, const std::shared_ptr<Rpc>& rpc) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = groups_.find(group);
+    if (found == groups_.end()) return;
+    auto member = found->second.find(index);
+    if (member != found->second.end() && member->second.lock() == rpc) found->second.erase(member);
+    if (found->second.empty()) groups_.erase(found);
+  }
+  std::vector<Work> take(const std::string& group) {
+    std::vector<std::shared_ptr<Rpc>> members;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto found = groups_.find(group);
+      if (found == groups_.end()) return {};
+      for (auto& member : found->second) if (auto rpc = member.second.lock()) members.push_back(rpc);
+    }
+    std::vector<Work> work;
+    for (auto& rpc : members) for (const auto& request : rpc->take_requests()) work.push_back({rpc, request});
+    return work;
+  }
+ private:
+  std::mutex mutex_;
+  std::unordered_map<std::string, std::unordered_map<uint32_t, std::weak_ptr<Rpc>>> groups_;
 };
 }  // namespace xgc_sim_provider
