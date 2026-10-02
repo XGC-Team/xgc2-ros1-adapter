@@ -256,7 +256,14 @@ docker exec "${container_name}" bash -lc '
         > /etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
     apt_update
-    apt-get install -y --no-install-recommends ros-noetic-scout-msgs
+    apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
+      libxgc2-runtime-sdk-dev ros-noetic-xgc2-lightweight-sim-msgs
+    test -f /usr/include/xgc-runtime/xgc_rt.h
+    test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
+    test -f /opt/ros/noetic/include/xgc2_lightweight_sim_msgs/SetProvider.h
+    test -f /opt/ros/noetic/share/xgc2_lightweight_sim_msgs/srv/SetProvider.srv
+    dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h \
+      /opt/ros/noetic/include/xgc2_lightweight_sim_msgs/SetProvider.h
     apt_candidate_version() {
       local package="$1"
       local candidate
@@ -370,6 +377,11 @@ docker exec "${container_name}" bash -lc '
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
+    mkdir -p /tmp/work/install-root/opt/ros/noetic/lib
+    XGC_RUNTIME_SDK_INCLUDE=/usr/include/xgc-runtime \
+    XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX=/opt/ros/noetic \
+      /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
+
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 
@@ -377,6 +389,9 @@ docker exec "${container_name}" bash -lc '
       /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
       --output-dir /tmp/out
+
+    /tmp/ros1-adapter/.xgc2/scripts/check_native_package_payload.sh \
+      /tmp/work/install-root /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
       # The official ROS Docker image excludes /usr/share/doc to reduce image
@@ -387,6 +402,7 @@ docker exec "${container_name}" bash -lc '
       fi
       apt-get install -y \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb \

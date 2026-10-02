@@ -82,6 +82,13 @@ append_source_digest() {
 ARCH="$(dpkg --print-architecture)"
 PREFIX="/opt/ros/${ROS_DISTRO}"
 PREFIX_ROOT="${INSTALL_ROOT}${PREFIX}"
+NATIVE_BRIDGE="${PREFIX}/lib/libros_io.so"
+if [[ ! -f "${INSTALL_ROOT}${NATIVE_BRIDGE}" ]]; then
+  echo "missing required installed native bridge: ${NATIVE_BRIDGE}" >&2
+  exit 1
+fi
+file -b "${INSTALL_ROOT}${NATIVE_BRIDGE}" | grep -q '^ELF'
+nm -D --defined-only "${INSTALL_ROOT}${NATIVE_BRIDGE}" | awk '$3 == "xgc_rt_plugin_v1" {found=1} END {exit !found}'
 BUILD_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -92,6 +99,7 @@ trap cleanup EXIT
 mkdir -p "${OUTPUT_DIR}"
 rm -f \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/ros-${ROS_DISTRO}-xgc2-ros1-native-bridge_"*.deb \
   "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${B2_PACKAGE}_"*.deb \
@@ -106,6 +114,9 @@ Priority: optional
 Maintainer: XGC2 <apt@example.com>
 
 Package: ${PX4_PACKAGE}
+Architecture: any
+
+Package: ros-${ROS_DISTRO}-xgc2-ros1-native-bridge
 Architecture: any
 
 Package: ${SCOUT_PACKAGE}
@@ -354,6 +365,25 @@ package_adapter \
   "robot-adapter-profile-v4.schema.json" \
   "xgc_px4_multirotor_ros1_adapter_service_helper"
 
+bridge_package="ros-${ROS_DISTRO}-xgc2-ros1-native-bridge"
+bridge_root="${BUILD_DIR}/${bridge_package}"
+mkdir -p "${bridge_root}/DEBIAN"
+copy_path "${INSTALL_ROOT}${NATIVE_BRIDGE}" "${bridge_root}"
+bridge_depends="$(binary_dependencies "${bridge_root}${NATIVE_BRIDGE}")"
+cat > "${bridge_root}/DEBIAN/control" <<EOF
+Package: ${bridge_package}
+Version: ${VERSION}
+Section: misc
+Priority: optional
+Architecture: ${ARCH}
+Maintainer: XGC2 <apt@example.com>
+Depends: ${bridge_depends}, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs (>= 0.3.0-1)
+Description: XGC2 owning native ROS1 edge and lightweight lifecycle bridge
+EOF
+append_source_digest "${bridge_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
+fakeroot dpkg-deb --build "${bridge_root}" \
+  "${OUTPUT_DIR}/${bridge_package}_${VERSION}_${ARCH}.deb" >/dev/null
+
 package_adapter \
   "${SCOUT_PACKAGE}" \
   "${SCOUT_ROS_PACKAGE}" \
@@ -408,6 +438,7 @@ package_forwarder \
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \
+    -o -name "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge_*.deb" \
     -o -name "${MECANUM_PACKAGE}_*.deb" -o -name "${B2_PACKAGE}_*.deb" \
     -o -name "${MOCAP_PACKAGE}_*.deb" \
     -o -name "${MOCAP_FORWARDER_PACKAGE}_*.deb" \) \

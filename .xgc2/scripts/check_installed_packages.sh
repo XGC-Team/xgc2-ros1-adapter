@@ -30,6 +30,11 @@ fi
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
+dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge" >/dev/null
+test "$(dpkg-query -W -f='${Version}' "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge")" = "${EXPECTED_PRODUCT_VERSION}"
+test -f "${PREFIX}/lib/libros_io.so"
+dpkg-query -S "${PREFIX}/lib/libros_io.so" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
+nm -D --defined-only "${PREFIX}/lib/libros_io.so" | awk '$3 == "xgc_rt_plugin_v1" {found=1} END {exit !found}'
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
 dpkg -s "${MECANUM_PACKAGE}" >/dev/null
 dpkg -s "${B2_PACKAGE}" >/dev/null
@@ -115,6 +120,9 @@ set +u
 # shellcheck disable=SC1090
 source "${PREFIX}/setup.bash"
 set -u
+
+dpkg -s "ros-${ROS_DISTRO}-roscpp" >/dev/null
+ldd "${PREFIX}/lib/libros_io.so" | awk '/not found/ {missing=1} END {exit missing ? 1 : 0}'
 
 check_ros_package() {
   if [[ "$#" -ne 5 ]]; then
