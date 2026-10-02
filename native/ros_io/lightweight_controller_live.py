@@ -6,14 +6,18 @@ import ctypes
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
+import xmlrpc.client
 
 import rospy
+import rosservice
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import ExtendedState, PositionTarget, State
 from mavros_msgs.srv import CommandBool, CommandLong, SetMode
@@ -22,6 +26,7 @@ from sensor_msgs.msg import Imu
 from hover_thrust_estimator_msgs.msg import HoverThrustEstimate
 from multirotor_reference_trajectory_msgs.msg import FlatReferencePoint, SampledReference
 from std_msgs.msg import Float64MultiArray, String
+from xgc2_lightweight_sim_msgs.srv import SetProvider
 
 
 STEP_NS = 100_000_000
@@ -73,6 +78,15 @@ qos = "event"
 [[channel]]
 name = "fcu_extended_state"
 qos = "state"
+[[channel]]
+name = "provider_request"
+qos = "event"
+[[channel]]
+name = "provider_result"
+qos = "event"
+[[channel]]
+name = "canonical_pose"
+qos = "state"
 '''
 
 
@@ -121,15 +135,22 @@ dir = {quoted(audit_dir)}
 name = "plant"
 path = {quoted(plant_path)}
 trigger = "on_round"
-config = {{ model = "fs150", epoch_ns = {epoch_ns}, step_ms = 1, output_ms = 10, initial_pose = [0.0, 0.0, 0.0, 0.0]{fcu_parameters} }}
-bind = {{ pose = {{ channel = "pose" }}, velocity = {{ channel = "velocity" }}, imu = {{ channel = "imu" }}, fcu_state = {{ channel = "fcu_state" }}, attitude_target = {{ channel = "attitude_target" }}, fcu_result = {{ channel = "fcu_result" }}, fcu_extended_state = {{ channel = "fcu_extended_state" }}, setpoint = {{ channel = "setpoint", from = ["uav1"] }}, attitude_command = {{ channel = "attitude_command", from = ["uav1"] }}, fcu_request = {{ channel = "fcu_request", from = ["uav1", "plant"] }} }}
+config = {{ model = "fs150", epoch_ns = {epoch_ns}, step_ms = 1, output_ms = 10, trace_state = true, initial_pose = [0.0, 0.0, 0.0, 0.0]{fcu_parameters} }}
+bind = {{ pose = {{ channel = "pose" }}, velocity = {{ channel = "velocity" }}, imu = {{ channel = "imu" }}, fcu_state = {{ channel = "fcu_state" }}, attitude_target = {{ channel = "attitude_target" }}, fcu_result = {{ channel = "fcu_result" }}, fcu_extended_state = {{ channel = "fcu_extended_state" }}, provider_request = {{ channel = "provider_request", from = ["plant"] }}, provider_result = {{ channel = "provider_result" }}, setpoint = {{ channel = "setpoint", from = ["uav1"] }}, attitude_command = {{ channel = "attitude_command", from = ["uav1"] }}, fcu_request = {{ channel = "fcu_request", from = ["uav1", "plant"] }} }}
 
 [[plugin]]
 name = "plant-ros-feedback"
 path = {quoted(ros_io_path)}
 trigger = "on_round"
-config = {{ node_name = "xgc_ros_feedback_plant", frame_id = "world", sim_odometry_child_frame = "uav1/base_link", sim_imu_orientation_from_pose = true, sim_pose_topic = "/uav1/mavros/local_position/pose", sim_velocity_topic = "/uav1/mavros/local_position/velocity_local", sim_imu_topic = "/uav1/mavros/imu/data", sim_fcu_state_topic = "/uav1/mavros/state", sim_attitude_target_topic = "/uav1/mavros/setpoint_raw/target_attitude", sim_fcu_request_topic = "/uav1/mavros", sim_fcu_robot_index = 0, sim_extended_state_topic = "/uav1/mavros/extended_state" }}
-bind = {{ sim_pose = {{ channel = "pose", from = ["plant"] }}, sim_velocity = {{ channel = "velocity", from = ["plant"] }}, sim_imu = {{ channel = "imu", from = ["plant"] }}, sim_fcu_state = {{ channel = "fcu_state", from = ["plant"] }}, sim_attitude_target = {{ channel = "attitude_target", from = ["plant"] }}, sim_fcu_request = {{ channel = "fcu_request" }}, sim_fcu_result = {{ channel = "fcu_result", from = ["plant"] }}, sim_extended_state = {{ channel = "fcu_extended_state", from = ["plant"] }} }}
+config = {{ node_name = "xgc_ros_feedback_plant", frame_id = "world", sim_odometry_child_frame = "uav1/base_link", sim_imu_orientation_from_pose = true, sim_pose_topic = "/uav1/mavros/local_position/pose", sim_velocity_topic = "/uav1/mavros/local_position/velocity_local", sim_imu_topic = "/uav1/mavros/imu/data", sim_fcu_state_topic = "/uav1/mavros/state", sim_attitude_target_topic = "/uav1/mavros/setpoint_raw/target_attitude", sim_fcu_request_topic = "/uav1/mavros", sim_fcu_robot_index = 0, sim_extended_state_topic = "/uav1/mavros/extended_state", sim_provider_service = "/uav1/simulation/provider" }}
+bind = {{ sim_pose = {{ channel = "pose", from = ["plant"] }}, sim_velocity = {{ channel = "velocity", from = ["plant"] }}, sim_imu = {{ channel = "imu", from = ["plant"] }}, sim_fcu_state = {{ channel = "fcu_state", from = ["plant"] }}, sim_attitude_target = {{ channel = "attitude_target", from = ["plant"] }}, sim_fcu_request = {{ channel = "fcu_request" }}, sim_fcu_result = {{ channel = "fcu_result", from = ["plant"] }}, sim_extended_state = {{ channel = "fcu_extended_state", from = ["plant"] }}, sim_provider_request = {{ channel = "provider_request" }}, sim_provider_result = {{ channel = "provider_result", from = ["plant"] }} }}
+
+[[plugin]]
+name = "plant-mocap-measurement"
+path = {quoted(ros_io_path)}
+trigger = "on_round"
+config = {{ node_name = "xgc_ros_feedback_plant", frame_id = "world", sim_pose_topic = "/vrpn_client_node/uav1/pose", sim_body_pose_topic = "/uav1/simulation/ground_truth/pose", sim_mocap_position_stddev_m = [0.0000001, 0.0000001, 0.0000001], sim_mocap_noise_seed = 1 }}
+bind = {{ sim_pose = {{ channel = "pose", from = ["plant"] }} }}
 '''
 
 
@@ -159,7 +180,7 @@ name = "controller"
 path = {quoted(controller_path)}
 trigger = "on_round"
 config = {{ time_source = "session", tracking_backend = "{backend}", takeoff_altitude = 1, planning_period = 0.1 }}
-bind = {{ local_pose = {{ channel = "pose", from = ["plant"] }}, vrpn_pose = {{ channel = "pose", from = ["plant"] }}, local_velocity = {{ channel = "velocity", from = ["plant"] }}, imu = {{ channel = "imu", from = ["plant"] }}, fcu_state = {{ channel = "fcu_state", from = ["plant"] }}, command = {{ channel = "command", from = ["uav1"] }}, alg_setpoint = {{ channel = "alg_setpoint", from = ["uav1"] }}, ref_active_sampled = {{ channel = "ref_sampled", from = ["uav1"] }}, hover_thrust = {{ channel = "hover_thrust", from = ["uav1"] }}, setpoint = {{ channel = "setpoint" }}, attitude_command = {{ channel = "attitude_command" }}, fcu_request_full = {{ channel = "fcu_request" }}, status = {{ channel = "status" }} }}
+bind = {{ local_pose = {{ channel = "pose", from = ["plant"] }}, vrpn_pose = {{ channel = "canonical_pose", from = ["uav1"] }}, local_velocity = {{ channel = "velocity", from = ["plant"] }}, imu = {{ channel = "imu", from = ["plant"] }}, fcu_state = {{ channel = "fcu_state", from = ["plant"] }}, command = {{ channel = "command", from = ["uav1"] }}, alg_setpoint = {{ channel = "alg_setpoint", from = ["uav1"] }}, ref_active_sampled = {{ channel = "ref_sampled", from = ["uav1"] }}, hover_thrust = {{ channel = "hover_thrust", from = ["uav1"] }}, setpoint = {{ channel = "setpoint" }}, attitude_command = {{ channel = "attitude_command" }}, fcu_request_full = {{ channel = "fcu_request" }}, status = {{ channel = "status" }} }}
 
 [[plugin]]
 name = "hover-thrust-estimator"
@@ -172,8 +193,8 @@ bind = {{ imu = {{ channel = "imu", from = ["plant"] }}, pose = {{ channel = "po
 name = "ros-io"
 path = {quoted(ros_io_path)}
 trigger = "on_round"
-config = {{ node_name = "xgc_ros_io_uav1", frame_id = "world", command_topic = "/command", alg_setpoint_topic = "/uav1/alg/setpoint_raw/local", ref_sampled_topic = "/uav1/alg/multirotor_reference_trajectory/active/sampled", sim_hover_thrust_topic = "/uav1/hover_thrust/estimate_state", sim_hover_thrust_trace_topic = "/uav1/hover_thrust/native_trace", status_topic = "/uav1/custom/statustext" }}
-bind = {{ command = {{ channel = "command" }}, alg_setpoint = {{ channel = "alg_setpoint" }}, ref_sampled = {{ channel = "ref_sampled" }}, sim_hover_thrust = {{ channel = "hover_thrust", from = ["uav1"] }}, status = {{ channel = "status", from = ["uav1"] }} }}
+config = {{ node_name = "xgc_ros_io_uav1", frame_id = "world", command_topic = "/command", alg_setpoint_topic = "/uav1/alg/setpoint_raw/local", ref_sampled_topic = "/uav1/alg/multirotor_reference_trajectory/active/sampled", sim_hover_thrust_topic = "/uav1/hover_thrust/estimate_state", sim_hover_thrust_trace_topic = "/uav1/hover_thrust/native_trace", status_topic = "/uav1/custom/statustext", local_pose_topic = "/uav1/pose" }}
+bind = {{ local_pose = {{ channel = "canonical_pose" }}, command = {{ channel = "command" }}, alg_setpoint = {{ channel = "alg_setpoint" }}, ref_sampled = {{ channel = "ref_sampled" }}, sim_hover_thrust = {{ channel = "hover_thrust", from = ["uav1"] }}, status = {{ channel = "status", from = ["uav1"] }} }}
 '''
 
 
@@ -296,7 +317,8 @@ def error_stats(values):
             'p95': ordered[math.ceil(.95*len(values))-1], 'max': ordered[-1]}
 
 
-def analyse_flight(capture, custom_start_ns, expected_hover, hte_initial):
+def analyse_flight(capture, custom_start_ns, expected_hover, hte_initial,
+                   state_frame='world', imu_frame='uav1/base_link', require_hte=True):
     """Independent kinematic checks on exact-stamp triples, never nearest ROS frames."""
     failures = []
     streams = [capture[key] for key in ('poses', 'velocities', 'imus')]
@@ -333,7 +355,7 @@ def analyse_flight(capture, custom_start_ns, expected_hover, hte_initial):
         if not all(math.isfinite(value) for value in all_values):
             failures.append('nonfinite measured state/IMU')
             continue
-        if pose['frame_id'] != 'world' or velocity['frame_id'] != 'world' or imu['frame_id'] != 'uav1/base_link':
+        if pose['frame_id'] != state_frame or velocity['frame_id'] != state_frame or imu['frame_id'] != imu_frame:
             failures.append('state or IMU frame mismatch')
         q = pose['q_wxyz']
         qi = imu['q_wxyz']
@@ -397,12 +419,12 @@ def analyse_flight(capture, custom_start_ns, expected_hover, hte_initial):
         failures.append('attitude does not tilt with realized horizontal acceleration')
     trace = capture['hover_thrust_trace']
     initial_expected = .3 if hte_initial is None else hte_initial
-    if not trace or any(abs(s['initial_hover_thrust']-initial_expected) > 1e-9 for s in trace):
+    if require_hte and (not trace or any(abs(s['initial_hover_thrust']-initial_expected) > 1e-9 for s in trace)):
         failures.append('real HTE did not retain its configured/original initial value')
     healthy = [s for s in trace if s['state_native'] == 12 and s['sample_used']
                and not s['flags'] & (1|2|4|8|16|32|64|128|256|4096|8192|65536)]
     tail = [s for s in healthy if s['stamp_s'] >= healthy[-1]['stamp_s']-2] if healthy else []
-    if len(tail) < 10 or max(abs(s['hover_thrust']-expected_hover) for s in tail) >= .02:
+    if require_hte and (len(tail) < 10 or max(abs(s['hover_thrust']-expected_hover) for s in tail) >= .02):
         failures.append('real HTE did not converge to physical hover ratio within .02')
     ordinary = capture['hover_thrust']
     matched_hte = sum(any(abs(s['stamp_ns']/1e9-t['stamp_s']) <= 5e-7 and s['flags']==t['flags']
@@ -434,7 +456,9 @@ def main():
     parser.add_argument("--controller", required=True, type=Path, help="path to libctl_px4.so")
     parser.add_argument("--ros-io", required=True, type=Path, help="path to libros_io.so")
     parser.add_argument('--hte', required=True, type=Path, help='path to the real libest_hover_thrust.so')
-    parser.add_argument('--backend', choices=('smc', 'dfbc'), default='smc')
+    parser.add_argument('--backend', choices=('px4_local', 'smc', 'dfbc'), default='px4_local')
+    parser.add_argument('--adapter-command-json', type=Path,
+                        help='existing real measurement Adapter argv JSON; required for px4_local admission')
     parser.add_argument('--thr-mdl-fac', type=float, default=0.0, help='fixed PX4 curve through the owning fcu_parameters block')
     parser.add_argument('--hte-initial', type=float, default=None, help='omit to retain upstream .3 default; probe uses .5')
     parser.add_argument("--plant-endpoint", required=True, type=zenoh_loopback_endpoint)
@@ -445,6 +469,8 @@ def main():
     args = parser.parse_args()
     if args.plant_endpoint == args.controller_endpoint:
         parser.error("--plant-endpoint and --controller-endpoint must use different ports")
+    if args.backend == 'px4_local' and args.adapter_command_json is None:
+        parser.error('px4_local whole-chain admission requires the existing real measurement Adapter argv recipe')
 
     host_path = absolute_file(parser, "--host", args.host)
     plant_path = absolute_file(parser, "--plant", args.plant)
@@ -512,6 +538,7 @@ def main():
         "hover_thrust_trace": [],
         'extended_states': [],
         'service_responses': [],
+        'canonical_poses': [],
         "actions": [],
     }
 
@@ -555,6 +582,15 @@ def main():
         }
         with capture_lock:
             capture["poses"].append(item)
+
+    def on_canonical_pose(message):
+        item = {'stamp_ns': stamp_ns(message), 'received_wall_time_ns': time.time_ns(),
+                'frame_id': message.header.frame_id,
+                'position': [message.pose.position.x, message.pose.position.y, message.pose.position.z],
+                'q_wxyz': [message.pose.orientation.w, message.pose.orientation.x,
+                           message.pose.orientation.y, message.pose.orientation.z]}
+        with capture_lock:
+            capture['canonical_poses'].append(item)
 
     def on_velocity(message):
         item = {
@@ -621,8 +657,13 @@ def main():
     loss_validation = None
     paused_controller = False
     stop_quiet = False
+    adapter = None
+    adapter_recipe = None
+    adapter_log = None
 
     def check_deadline(wait_description=None):
+        if adapter is not None and adapter.poll() is not None:
+            raise RuntimeError(f'real measurement Adapter runtime exited with status {adapter.returncode}')
         for role, host in hosts.items():
             if host is not None and host.poll() is not None:
                 raise RuntimeError(f"{role} xgc-rt-host exited with status {host.returncode}")
@@ -643,7 +684,7 @@ def main():
     def current(name):
         with capture_lock:
             value = capture[name]
-            if name in ("poses", "velocities", "imus", "hover_thrust", "hover_thrust_trace"):
+            if name in ("poses", "velocities", "imus", "hover_thrust", "hover_thrust_trace", 'canonical_poses'):
                 return value[-1] if value else None
             return value
 
@@ -770,6 +811,16 @@ def main():
         )
 
     try:
+        if args.adapter_command_json is not None:
+            adapter_recipe = json.loads(args.adapter_command_json.read_text())
+            argv = adapter_recipe.get('argv')
+            if not isinstance(argv, list) or not argv or not all(isinstance(value, str) for value in argv):
+                raise ValueError('existing real Adapter recipe must contain its executable argv array')
+            environment = dict(os.environ)
+            environment.update(adapter_recipe.get('env', {}))
+            adapter_log = (work / 'measurement-adapter-runtime.log').open('w', encoding='utf-8')
+            adapter = subprocess.Popen(argv, cwd=adapter_recipe.get('cwd'), env=environment,
+                                       stdout=adapter_log, stderr=subprocess.STDOUT)
         for role in ("plant", "uav1"):
             host_logs[role] = log_paths[role].open("w", encoding="utf-8")
             hosts[role] = subprocess.Popen(
@@ -783,6 +834,7 @@ def main():
         rospy.Subscriber("/uav1/custom/statustext", String, on_controller_state, queue_size=100)
         rospy.Subscriber("/uav1/mavros/state", State, on_fcu_state, queue_size=100)
         rospy.Subscriber("/uav1/mavros/local_position/pose", PoseStamped, on_pose, queue_size=100)
+        rospy.Subscriber('/uav1/pose', PoseStamped, on_canonical_pose, queue_size=100)
         rospy.Subscriber("/uav1/mavros/local_position/velocity_local", TwistStamped, on_velocity, queue_size=100)
         rospy.Subscriber('/uav1/mavros/imu/data', Imu, on_imu, queue_size=100)
         rospy.Subscriber('/uav1/mavros/setpoint_raw/target_attitude', AttitudeTarget, on_target, queue_size=100)
@@ -792,10 +844,18 @@ def main():
         command = rospy.Publisher("/command", String, queue_size=10)
         reference = rospy.Publisher("/uav1/alg/setpoint_raw/local", PositionTarget, queue_size=10)
         flat_reference = rospy.Publisher('/uav1/alg/multirotor_reference_trajectory/active/sampled', SampledReference, queue_size=1)
+        provider_response = call_service('/uav1/simulation/provider', SetProvider, action=1, generation=0)
+        with capture_lock:
+            capture['service_responses'].append({'service': '/uav1/simulation/provider', 'action': 1,
+                'accepted': bool(provider_response.accepted), 'enabled': bool(provider_response.enabled),
+                'reason': int(provider_response.reason), 'generation': int(provider_response.generation),
+                'message': provider_response.message, 'received_wall_time_ns': time.time_ns()})
+        if not provider_response.accepted or not provider_response.enabled or provider_response.generation != 1:
+            raise AssertionError('real provider start did not execute and admit generation 1')
 
         wait_for(
             lambda: command.get_num_connections() > 0
-            and (reference if args.backend == 'smc' else flat_reference).get_num_connections() > 0
+            and (flat_reference if args.backend == 'dfbc' else reference).get_num_connections() > 0
             and current("fcu_state") is not None
             and current("poses") is not None
             and current("velocities") is not None,
@@ -803,6 +863,8 @@ def main():
             "ROS edge connections and initial plant feedback",
         )
         wait_for(lambda: current("controller_state") == "Ready", "controller Ready")
+        wait_for(lambda: current('canonical_poses') is not None,
+                 'canonical pose from the real supervised measurement Adapter')
         wait_for(lambda: current('imus') is not None and current('hover_thrust_trace') is not None,
                  'same-stamp oriented IMU and initial real HTE output')
         record_action("takeoff")
@@ -826,7 +888,7 @@ def main():
             elapsed_ns = max(0, now_ns - custom_start_ns)
             if now_ns >= next_setpoint_ns:
                 setpoint = position_target(elapsed_ns, now_ns)
-                if args.backend == 'smc':
+                if args.backend != 'dfbc':
                     reference.publish(setpoint)
                 if elapsed_ns >= TRACKING_NS:
                     target_stamp_ns = setpoint.header.stamp.to_nsec()
@@ -969,6 +1031,22 @@ def main():
                         host.wait()
         for host_log in host_logs.values():
             host_log.close()
+        if adapter is not None:
+            stop_file = adapter_recipe.get('stop_file') if adapter_recipe else None
+            if stop_file:
+                Path(stop_file).touch()
+            elif adapter.poll() is None:
+                adapter.send_signal(signal.SIGTERM)
+            try:
+                adapter.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                adapter.terminate()
+                adapter.wait(timeout=5)
+                failure = failure or 'real measurement Adapter did not release on its prescribed Stop'
+            if adapter.returncode != 0:
+                failure = failure or f'real Adapter runtime Stop returned {adapter.returncode}'
+            if adapter_log:
+                adapter_log.close()
         if failure is None:
             if any(host.returncode != 0 for host in hosts.values()) or any(host_shutdown_escalation.values()):
                 failure = 'Stop did not cleanly retire both real Hosts'
@@ -992,5 +1070,273 @@ def main():
         raise SystemExit(1)
 
 
+def run_ros_owner_chain(recipe_path):
+    """Consume a production leaf, supervised Adapter and original ROS controller.
+
+    The recipe supplies existing artifacts and production-exported identities;
+    this fixture neither constructs a native graph nor publishes canonical pose.
+    """
+    recipe = json.loads(Path(recipe_path).read_text())
+    work = Path(recipe['output_dir'])
+    work.mkdir(parents=True, exist_ok=True)
+    config = json.loads(Path(recipe['runtime_config']).read_text())
+    leaf = json.loads(Path(recipe['manifest']).read_text())
+    plants = [p for p in leaf['plugin'] if p.get('role') == 'lightweight_vehicle']
+    if len(plants) != 1 or plants[0]['config']['initial_pose'] != [0, 0, 0, 0]:
+        raise ValueError('the bounded original-controller fixture requires one production zero-origin body')
+    fcu = plants[0]['config'].get('fcu_parameters', {})
+    hover = physical_hover_thrust(0)['hover_thrust_command']
+    if abs(fcu.get('MPC_THR_HOVER', 0)-hover) > 1e-10 or fcu.get('THR_MDL_FAC') != 0:
+        raise ValueError('selected smoke requires the disclosed calibrated authoring profile')
+    capture = {key: [] for key in ('poses', 'velocities', 'imus', 'hover_thrust',
+                                   'hover_thrust_trace', 'truth', 'mocap', 'canonical',
+                                   'states', 'extended_states', 'controller_states', 'setpoints')}
+    capture.update(actions=[], services=[])
+    lock = threading.Lock()
+    processes, logs = {}, {}
+    failure = None
+    validation = None
+    endpoint_error = None
+    custom_start = None
+    measurement_receipt = {}
+    controller_loaded = {}
+    stop_quiet = False
+    deadline = time.monotonic()+90
+
+    def read(path):
+        try:
+            return json.loads(Path(path).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def spawn(name, argv, env=None, cwd=None):
+        logs[name] = (work/(name+'.log')).open('w')
+        processes[name] = subprocess.Popen(argv, env=env, cwd=cwd, stdout=logs[name],
+                                           stderr=subprocess.STDOUT, start_new_session=True)
+        return processes[name]
+
+    def wait(predicate, description):
+        while not predicate():
+            for name, process in processes.items():
+                if process.poll() is not None:
+                    raise RuntimeError(name+' exited '+str(process.returncode)+' before '+description)
+            if time.monotonic() >= deadline:
+                raise TimeoutError(description)
+            time.sleep(.01)
+
+    def latest(key):
+        with lock:
+            return capture[key][-1] if capture[key] else None
+
+    def accept(message, key):
+        item = {'received_wall_time_ns': time.time_ns()}
+        if hasattr(message, 'header'):
+            item.update(stamp_ns=message.header.stamp.to_nsec(), frame_id=message.header.frame_id)
+        if isinstance(message, PoseStamped):
+            item.update(position=[message.pose.position.x, message.pose.position.y, message.pose.position.z],
+                        q_wxyz=[message.pose.orientation.w, message.pose.orientation.x,
+                                message.pose.orientation.y, message.pose.orientation.z])
+        elif isinstance(message, TwistStamped):
+            item.update(linear=[message.twist.linear.x, message.twist.linear.y, message.twist.linear.z],
+                        angular=[message.twist.angular.x, message.twist.angular.y, message.twist.angular.z])
+        elif isinstance(message, Imu):
+            item.update(q_wxyz=[message.orientation.w, message.orientation.x, message.orientation.y, message.orientation.z],
+                        gyro=[message.angular_velocity.x, message.angular_velocity.y, message.angular_velocity.z],
+                        specific_force=[message.linear_acceleration.x, message.linear_acceleration.y, message.linear_acceleration.z],
+                        orientation_covariance_0=message.orientation_covariance[0])
+        elif isinstance(message, State):
+            item.update(connected=message.connected, armed=message.armed, mode=message.mode)
+        elif isinstance(message, ExtendedState):
+            item.update(landed_state=message.landed_state, vtol_state=message.vtol_state)
+        elif isinstance(message, String):
+            item.update(state=message.data)
+        elif isinstance(message, PositionTarget):
+            item.update(type_mask=message.type_mask, position=[message.position.x, message.position.y, message.position.z])
+        with lock:
+            if key != 'controller_states' or not capture[key] or capture[key][-1]['state'] != item['state']:
+                capture[key].append(item)
+
+    def call(name, service_type, **fields):
+        rospy.wait_for_service(name, timeout=5)
+        proxy = rospy.ServiceProxy(name, service_type)
+        outcome = []
+        def invoke():
+            try:
+                outcome.append(proxy(**fields))
+            except BaseException as error:
+                outcome.append(error)
+        thread = threading.Thread(target=invoke, daemon=True)
+        thread.start()
+        thread.join(5)
+        proxy.close()
+        if thread.is_alive():
+            raise TimeoutError('actual service '+name)
+        if isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        response = outcome[0]
+        receipt = dict(service=name, service_type=rosservice.get_service_type(name),
+                       request=fields, received_wall_time_ns=time.time_ns())
+        receipt.update({key: getattr(response, key) for key in response.__slots__})
+        capture['services'].append(receipt)
+        return response
+
+    def action(name):
+        capture['actions'].append(dict(action=name, wall_time_ns=time.time_ns()))
+        command.publish(String(data=name))
+
+    try:
+        adapter_env = dict(os.environ, XGC_REAL_PX4_RUNTIME_E2E='1',
+                           XGC_REAL_PX4_RUNTIME_E2E_CONFIG=recipe['runtime_config'])
+        spawn('adapter-runtime', [recipe['helper'], '-test.run', '^TestRealPX4AdapterRuntimeHold$',
+                                 '-test.v', '-test.timeout', '0'], env=adapter_env, cwd=recipe['helper_cwd'])
+        wait(lambda: read(config['ready_file']).get('admitted'), 'original Adapter admission')
+        spawn('host', ['python3', recipe['launcher'], recipe['bundle'], recipe['manifest'], str(work/'host-state')])
+        rospy.init_node('private_original_px4_local_chain', anonymous=False)
+        topics = [('poses', '/uav1/mavros/local_position/pose', PoseStamped),
+                  ('velocities', '/uav1/mavros/local_position/velocity_local', TwistStamped),
+                  ('imus', '/uav1/mavros/imu/data', Imu),
+                  ('truth', '/xgc/simulation/body/uav1/pose', PoseStamped),
+                  ('mocap', '/vrpn_client_node/uav1/pose', PoseStamped),
+                  ('canonical', '/uav1/pose', PoseStamped),
+                  ('states', '/uav1/mavros/state', State),
+                  ('extended_states', '/uav1/mavros/extended_state', ExtendedState),
+                  ('controller_states', '/uav1/custom/statustext', String),
+                  ('setpoints', '/uav1/mavros/setpoint_raw/local', PositionTarget)]
+        subscribers = [rospy.Subscriber(topic, message_type, accept, callback_args=key, queue_size=1000)
+                       for key, topic, message_type in topics]
+        command = rospy.Publisher('/command', String, queue_size=10)
+        reference = rospy.Publisher('/uav1/alg/setpoint_raw/local', PositionTarget, queue_size=10)
+        wait(lambda: latest('canonical') and read(config['ready_file']).get('measurement_ready'),
+             'actual same-stamp measurement from supervised Adapter PID')
+        measurement_receipt = read(config['ready_file'])
+        (work/'measurement-ready.json').write_text(json.dumps(measurement_receipt, indent=2)+'\n')
+        observed = call(recipe['provider_service'], SetProvider, action=0, generation=0)
+        if not observed.accepted or observed.enabled or observed.generation != 0:
+            raise AssertionError('provider must start offline generation 0')
+        started = call(recipe['provider_service'], SetProvider, action=1, generation=0)
+        if not started.accepted or not started.enabled or started.generation != 1:
+            raise AssertionError('provider start must execute generation 1')
+        prefix = Path(recipe['controller_prefix'])
+        spawn('original-controller', ['roslaunch', 'px4_multirotor_controller', 'uav_nmpc_controller.launch',
+              'config_file:='+str(prefix/'share/px4_multirotor_controller/config/px4_local_1m.yaml'),
+              'world_boundary_json:=null'])
+        wait(lambda: latest('controller_states') and latest('controller_states')['state'] == 'Ready'
+             and command.get_num_connections() and reference.get_num_connections(), 'original ROS controller Ready')
+        master = xmlrpc.client.ServerProxy(os.environ['ROS_MASTER_URI'])
+        code, message, uri = master.lookupNode('/private_original_px4_local_chain', '/uav1/px4_multirotor_controller')
+        if code != 1:
+            raise AssertionError('original controller node identity: '+message)
+        code, message, pid = xmlrpc.client.ServerProxy(uri).getPid('/private_original_px4_local_chain')
+        if code != 1:
+            raise AssertionError('original controller process identity: '+message)
+        maps = Path('/proc/'+str(pid)+'/maps').read_text()
+        (work/'original-controller-loaded-maps.log').write_text(maps)
+        loaded = {line.split()[-1] for line in maps.splitlines()
+                  if 'libpx4_multirotor_controller_' in line or 'libxgc2_state_machine' in line}
+        if not loaded or any(not path.startswith(str(prefix/'lib')+'/') for path in loaded):
+            raise AssertionError('original controller loaded libraries outside owning installed prefix')
+        controller_loaded = {'pid': pid, 'libraries': {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in loaded}}
+        action('takeoff')
+        wait(lambda: latest('controller_states')['state'] == 'Hover', 'original ROS takeoff to Hover')
+        custom_start = time.time_ns()
+        action('custom1')
+        next_reference = custom_start
+        while time.time_ns()-custom_start < TRACKING_NS:
+            now = time.time_ns()
+            if now >= next_reference:
+                reference.publish(position_target(now-custom_start, now))
+                next_reference = now+STEP_NS
+            wait(lambda: True, 'tracking')
+            time.sleep(.005)
+        target_stamp = time.time_ns()
+        reference.publish(position_target(TRACKING_NS, target_stamp))
+        wait(lambda: latest('poses')['stamp_ns'] >= target_stamp, 'full tracking endpoint')
+        endpoint_error = norm([a-b for a,b in zip(latest('poses')['position'], [1,0,1])])
+        if endpoint_error >= .03 or latest('controller_states')['state'] != 'Custom1':
+            raise AssertionError('original ROS 10s Custom1 endpoint '+str(endpoint_error))
+        action('land')
+        wait(lambda: latest('states') and not latest('states')['armed']
+             and latest('poses')['position'][2] < .03, 'actual landing and disarm')
+        reply = call('/uav1/mavros/cmd/arming', CommandBool, value=False)
+        if not reply.success or reply.result != 0:
+            raise AssertionError('actual correlated disarm response')
+        with lock:
+            validation = analyse_flight(capture, custom_start, hover, None,
+                                        state_frame='map', imu_frame='base_link', require_hte=False)
+        sequence = [s['state'] for s in capture['controller_states']]
+        gate = iter(('Ready', 'Takeoff', 'Hover', 'Custom1', 'Landing'))
+        expected = next(gate, None)
+        for state in sequence:
+            if ('Takeoff' if state.startswith('Takeoff') else state) == expected:
+                expected = next(gate, None)
+        if expected is not None:
+            validation['failures'].append('missing original controller state sequence')
+        validation['passed'] = not validation['failures']
+        if not validation['passed']:
+            raise AssertionError('; '.join(validation['failures']))
+        stopped = call(recipe['provider_service'], SetProvider, action=2, generation=1)
+        if not stopped.accepted or stopped.enabled:
+            raise AssertionError('provider Stop did not retire generation 1')
+    except BaseException as error:
+        failure = type(error).__name__+': '+str(error)
+    finally:
+        for name in ('original-controller', 'host'):
+            process = processes.get(name)
+            if process and process.poll() is None:
+                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=5)
+                    failure = failure or name+' required Stop escalation'
+        adapter = processes.get('adapter-runtime')
+        if adapter and adapter.poll() is None:
+            Path(config['stop_file']).touch()
+            try:
+                adapter.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                os.killpg(adapter.pid, signal.SIGTERM)
+                adapter.wait(timeout=5)
+                failure = failure or 'Adapter Stop timeout'
+        stopped_receipt = read(config['evidence_file'])
+        if not stopped_receipt.get('adapter_process_exited') or stopped_receipt.get('active_leases') != 0:
+            failure = failure or 'actual Adapter process/lease Stop incomplete'
+        for log in logs.values():
+            log.close()
+        exits = {name: process.returncode for name, process in processes.items()}
+        if any(exits.values()):
+            failure = failure or 'owned process nonzero Stop: '+str(exits)
+        if 'host' in processes:
+            time.sleep(.1)
+            quiet_keys = ('poses', 'velocities', 'imus', 'truth', 'mocap', 'canonical')
+            with lock:
+                counts = [len(capture[key]) for key in quiet_keys]
+            time.sleep(.3)
+            with lock:
+                stop_quiet = counts == [len(capture[key]) for key in quiet_keys]
+            if not stop_quiet:
+                failure = failure or 'state/measurement publications continued after owned Stop'
+        index_path = Path(recipe['bundle'])/'PLANT-BUNDLE.json'
+        index = read(index_path)
+        result = dict(schema='xgc.original-ros-px4-local-chain/1', passed=failure is None,
+                      failure=failure, endpoint_error_m=endpoint_error, six_dof_validation=validation,
+                      startup_fcu_overrides=fcu, startup_provenance='explicit authored calibrated private smoke; asset defaults unchanged',
+                      recipe=recipe, input_sha256={key: hashlib.sha256(Path(recipe[key]).read_bytes()).hexdigest()
+                         for key in ('helper', 'manifest', 'runtime_config')},
+                      measurement_receipt=measurement_receipt, adapter_stopped=stopped_receipt,
+                      process_exit=exits, stop_outputs_quiet=stop_quiet,
+                      controller_loaded=controller_loaded, bundle_index=index,
+                      bundle_index_sha256=hashlib.sha256(index_path.read_bytes()).hexdigest(),
+                      controller_profile_sha256=hashlib.sha256((Path(recipe['controller_prefix'])/'share/px4_multirotor_controller/config/px4_local_1m.yaml').read_bytes()).hexdigest(),
+                      capture=capture,
+                      open_gates=['SMC', 'DFBC', 'HTE convergence', 'multi-slot lifecycle', 'Gazebo'])
+        (work/'controller-live-result.json').write_text(json.dumps(result, indent=2)+'\n')
+        print(json.dumps({key: result[key] for key in ('passed', 'failure', 'endpoint_error_m', 'six_dof_validation', 'process_exit')}), flush=True)
+    return 0 if failure is None else 1
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == '--ros-owner-recipe-json':
+        raise SystemExit(run_ros_owner_chain(sys.argv[2]))
     main()
