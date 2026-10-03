@@ -13,10 +13,6 @@ rigid_prefix="${XGC_RIGID_STATE_WIRE_PREFIX:-/usr}"
 hte_prefix="${XGC_HOVER_THRUST_WIRE_PREFIX:-/usr}"
 reference_prefix="${XGC_REFERENCE_WIRE_PREFIX:-/usr}"
 edge_prefix="${XGC_ROS_IO_HELPERS_PREFIX:-/usr}"
-[[ -f "$provider_prefix/include/xgc2_lightweight_sim_msgs/SetProvider.h" &&
-   -f "$provider_prefix/share/xgc2_lightweight_sim_msgs/srv/SetProvider.srv" ]] || {
-  echo "installed xgc2_lightweight_sim_msgs interface missing at $provider_prefix" >&2; exit 2;
-}
 set +u
 source "$prefix/setup.bash"
 set -u
