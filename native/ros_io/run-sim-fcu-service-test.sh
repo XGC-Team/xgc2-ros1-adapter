@@ -3,8 +3,9 @@
 # Run in a resource-limited, network-none container; never use the station master.
 set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-${XGC_RUNTIME_SDK_SOURCE_ROOT:+$XGC_RUNTIME_SDK_SOURCE_ROOT/abi/include}}"
-sdk_include="${sdk_include:-/usr/include/xgc-runtime}"
+sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-/usr/include/xgc-runtime}"
+robotics_prefix="${XGC_ROBOTICS_INTERFACES_PREFIX:-/usr}"
+simulation_prefix="${XGC_LIGHTWEIGHT_SIM_INTERFACES_PREFIX:-/usr}"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
 provider_prefix="${XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX:-$prefix}"
 plant_lib="${PLANT_LIB:?set PLANT_LIB to the owning native plant product plugin}"
@@ -44,7 +45,7 @@ PY
 ros_lib="${ROS_IO_LIB:-$output/libros_io.so}"
 if [[ -z "${ROS_IO_LIB:-}" ]]; then bash "$source_dir/build.sh" "$ros_lib"; fi
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Werror -pthread \
-  -I "$sdk_include" -I "$(dirname -- "$ros_lib")/ros-io-gen" -I "$provider_prefix/include" -isystem "$prefix/include" \
+  -I "$sdk_include" -I "$robotics_prefix/include" -I "$simulation_prefix/include" -I "$(dirname -- "$ros_lib")/ros-io-gen" -I "$provider_prefix/include" -isystem "$prefix/include" \
   "$source_dir/sim_fcu_service_test.cpp" -o "$output/fcu-service-test" \
   -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization \
   -lrosconsole -lrostime -lcpp_common -ldl

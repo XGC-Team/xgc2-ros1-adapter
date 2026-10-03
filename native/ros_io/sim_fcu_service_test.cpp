@@ -3,7 +3,8 @@
 // The fixture also records any Host API call from a background ROS callback.
 #include "xgc_rt.h"
 #include "xgc_clock_source.h"
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
+#include <xgc-lightweight-sim/simulation_records_v1.h>
 
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/CommandLong.h>

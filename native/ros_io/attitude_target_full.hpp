@@ -1,6 +1,6 @@
 #pragma once
 
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
 
 // Keep the full mask and ignored payload. Consumers decide which fields to
 // use; this transport conversion must not turn a body-rate command into an

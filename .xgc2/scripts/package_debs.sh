@@ -89,6 +89,24 @@ if [[ ! -f "${INSTALL_ROOT}${NATIVE_BRIDGE}" ]]; then
 fi
 file -b "${INSTALL_ROOT}${NATIVE_BRIDGE}" | grep -q '^ELF'
 nm -D --defined-only "${INSTALL_ROOT}${NATIVE_BRIDGE}" | awk '$3 == "xgc_rt_plugin_v1" {found=1} END {exit !found}'
+NATIVE_UTILITY_PATHS=(
+  "/usr/lib/libxgc_ros_edge.so"
+  "/usr/include/xgc-ros-io/ros_edge.hpp"
+  "/usr/include/xgc-ros-io/ros_slice.hpp"
+  "/usr/include/xgc-ros-io/sim_odometry.hpp"
+  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
+  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
+  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
+  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets.cmake"
+  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets-release.cmake"
+)
+for path in "${NATIVE_UTILITY_PATHS[@]}"; do
+  [[ -f "${INSTALL_ROOT}${path}" ]] || {
+    echo "missing required installed native utility: ${path}" >&2
+    exit 1
+  }
+done
+file -b "${INSTALL_ROOT}/usr/lib/libxgc_ros_edge.so" | grep -q '^ELF'
 BUILD_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -138,6 +156,10 @@ EOF
 binary_dependencies() {
   local -a binaries=("$@")
   local -a options=()
+  if [[ -n "${BRIDGE_PRIVATE_ROOT:-}" ]]; then
+    options+=("-S${BRIDGE_PRIVATE_ROOT}" "-l${BRIDGE_PRIVATE_ROOT}/usr/lib"
+      "-xros-${ROS_DISTRO}-xgc2-ros1-native-bridge")
+  fi
   local binary
   local output
   local dependencies
@@ -369,7 +391,9 @@ bridge_package="ros-${ROS_DISTRO}-xgc2-ros1-native-bridge"
 bridge_root="${BUILD_DIR}/${bridge_package}"
 mkdir -p "${bridge_root}/DEBIAN"
 copy_path "${INSTALL_ROOT}${NATIVE_BRIDGE}" "${bridge_root}"
-bridge_depends="$(binary_dependencies "${bridge_root}${NATIVE_BRIDGE}")"
+for path in "${NATIVE_UTILITY_PATHS[@]}"; do
+  copy_path "${INSTALL_ROOT}${path}" "${bridge_root}"
+done
 cat > "${bridge_root}/DEBIAN/control" <<EOF
 Package: ${bridge_package}
 Version: ${VERSION}
@@ -377,9 +401,11 @@ Section: misc
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: XGC2 <apt@example.com>
-Depends: ${bridge_depends}, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs (>= 0.3.0-1)
 Description: XGC2 owning native ROS1 edge and lightweight lifecycle bridge
 EOF
+bridge_depends="$(BRIDGE_PRIVATE_ROOT="${bridge_root}" binary_dependencies \
+  "${bridge_root}${NATIVE_BRIDGE}" "${bridge_root}/usr/lib/libxgc_ros_edge.so")"
+printf '%s\n' "Depends: ${bridge_depends}, ros-${ROS_DISTRO}-roscpp, libxgc2-runtime-sdk-dev (>= 0.1.0-2~focal), libxgc2-robotics-interfaces-dev (>= 0.1.0-1~focal), xgc2-lightweight-sim, ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs (>= 0.3.0-1), libxgc2-hover-thrust-dev, ros-${ROS_DISTRO}-xgc2-estimator-rigid-state, ros-${ROS_DISTRO}-xgc2-multirotor-controller" >>"${bridge_root}/DEBIAN/control"
 append_source_digest "${bridge_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
 fakeroot dpkg-deb --build "${bridge_root}" \
   "${OUTPUT_DIR}/${bridge_package}_${VERSION}_${ARCH}.deb" >/dev/null

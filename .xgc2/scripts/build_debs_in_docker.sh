@@ -257,7 +257,30 @@ docker exec "${container_name}" bash -lc '
     fi
     apt_update
     apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
-      libxgc2-runtime-sdk-dev ros-noetic-xgc2-lightweight-sim-msgs
+      libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
+      xgc2-lightweight-sim ros-noetic-xgc2-lightweight-sim-msgs \
+      libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
+      ros-noetic-xgc2-multirotor-controller
+    dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
+    dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
+    # Existing owning packages only; absent DTO payloads remain a hard failure.
+    require_owned_header() {
+      local package="$1" path="$2"
+      test -f "${path}"
+      dpkg-query -S "${path}" | grep -Fxq "${package}: ${path}"
+    }
+    for header in xgc_rt.h xgc_clock_source.h flat_config.hpp; do
+      require_owned_header libxgc2-runtime-sdk-dev "/usr/include/xgc-runtime/${header}"
+    done
+    for header in robotics_interfaces_v1.h control_records_v1.h paired_state_v1.h; do
+      require_owned_header libxgc2-robotics-interfaces-dev "/usr/include/xgc-robotics-interfaces/${header}"
+    done
+    require_owned_header xgc2-lightweight-sim /usr/include/xgc-lightweight-sim/simulation_records_v1.h
+    require_owned_header libxgc2-hover-thrust-dev /opt/ros/noetic/include/hover_thrust_estimator/native/hover_thrust_wire.h
+    require_owned_header ros-noetic-xgc2-estimator-rigid-state /opt/ros/noetic/include/estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h
+    for header in reference_wire_v1.h reference_wire.hpp; do
+      require_owned_header ros-noetic-xgc2-multirotor-controller "/opt/ros/noetic/include/multirotor_reference_trajectory/${header}"
+    done
     test -f /usr/include/xgc-runtime/xgc_rt.h
     test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
     test -f /opt/ros/noetic/include/xgc2_lightweight_sim_msgs/SetProvider.h
@@ -377,9 +400,23 @@ docker exec "${container_name}" bash -lc '
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
+    # Build the single owning Edge implementation and install its Helpers export.
+    cmake -S /tmp/work/native/ros_io/helpers -B /tmp/work/build-ros-io-helpers \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+      -DCMAKE_INSTALL_DATADIR=share -DCMAKE_PREFIX_PATH="/usr;/opt/ros/noetic"
+    cmake --build /tmp/work/build-ros-io-helpers --parallel "${parallel_jobs}"
+    cmake --install /tmp/work/build-ros-io-helpers
+    DESTDIR=/tmp/work/install-root cmake --install /tmp/work/build-ros-io-helpers
+    ldconfig
     mkdir -p /tmp/work/install-root/opt/ros/noetic/lib
     XGC_RUNTIME_SDK_INCLUDE=/usr/include/xgc-runtime \
     XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX=/opt/ros/noetic \
+    XGC_ROBOTICS_INTERFACES_PREFIX=/usr \
+    XGC_LIGHTWEIGHT_SIM_INTERFACES_PREFIX=/usr \
+    XGC_HOVER_THRUST_WIRE_PREFIX=/opt/ros/noetic \
+    XGC_RIGID_STATE_WIRE_PREFIX=/opt/ros/noetic \
+    XGC_REFERENCE_WIRE_PREFIX=/opt/ros/noetic \
+    XGC_ROS_IO_HELPERS_PREFIX=/usr \
       /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
 
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests

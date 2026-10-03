@@ -2,7 +2,7 @@
 // run-clock-test.sh. This process does not call the station.
 #include "xgc_clock_source.h"
 #include "xgc_rt.h"
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
 
 #include <mavros_msgs/PositionTarget.h>
 #include <ros/ros.h>
@@ -61,6 +61,8 @@ struct Loaded {
   const xgc_plugin_vtbl* plugin{nullptr};
   void* clock_self{nullptr};
   void* plugin_self{nullptr};
+  uint32_t command_port{UINT32_MAX};
+  uint32_t setpoint_port{UINT32_MAX};
 };
 
 int load(Loaded* loaded, const char* path) {
@@ -76,6 +78,13 @@ int load(Loaded* loaded, const char* path) {
   }
   loaded->clock = clock->vtbl;
   loaded->plugin = plugin->vtbl;
+  for (uint32_t i = 0; i < plugin->port_count; ++i) {
+    if (std::strcmp(plugin->ports[i].name, "command") == 0) loaded->command_port = i;
+    if (std::strcmp(plugin->ports[i].name, "setpoint") == 0) loaded->setpoint_port = i;
+  }
+  if (loaded->command_port == UINT32_MAX || loaded->setpoint_port == UINT32_MAX) {
+    return fail("ordinary command/setpoint ports are missing");
+  }
   loaded->clock_self = loaded->clock->create();
   if (loaded->clock_self == nullptr) return fail("clock create failed");
   return 0;
@@ -88,10 +97,12 @@ struct Host {
   int pending_port{-1};
   int64_t now{1000000000};
   int command_inputs{0};
+  uint32_t command_port{UINT32_MAX};
 };
 
 xgc_status host_publish(void* host, uint32_t port, uint64_t, const uint8_t*, uint32_t) {
-  if (port == 13) ++static_cast<Host*>(host)->command_inputs;
+  auto* self = static_cast<Host*>(host);
+  if (port == self->command_port) ++self->command_inputs;
   return XGC_OK;
 }
 xgc_status host_next(void* host, uint32_t port, xgc_sample_view* out) {
@@ -283,6 +294,7 @@ int main(int argc, char** argv) {
   }
 
   Host host;
+  host.command_port = loaded.command_port;
   host.api.abi_version = XGC_RT_ABI_VERSION;
   host.api.abi_minor = XGC_RT_ABI_MINOR;
   host.api.host = &host;
@@ -324,7 +336,7 @@ int main(int argc, char** argv) {
   sample.position[0] = 1.0;
   host.sample.assign(reinterpret_cast<uint8_t*>(&sample), reinterpret_cast<uint8_t*>(&sample) + sizeof sample);
   host.pending = true;
-  host.pending_port = 15;
+  host.pending_port = static_cast<int>(loaded.setpoint_port);
   ctx.deadline = host.now + 30000000LL;
   if (loaded.plugin->step(loaded.plugin_self, &ctx) != XGC_OK) return fail("closed-gate step failed");
   if (wait_message(&published, 300)) return fail("closed gate published a setpoint");

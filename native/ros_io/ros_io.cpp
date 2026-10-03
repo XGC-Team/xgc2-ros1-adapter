@@ -1,7 +1,8 @@
 // ros_io: the aggregator's ROS edge. It does ordinary ROS subscribe and
 // publish and copies data between topics and module I/O. It is not the
 // ros1_bridge package and there is no separate bridge process: domain
-// modules never touch ROS; only this plugin does.
+// generic sensor, FCU and provider edges are owned here. Domain ROS plugins
+// are assembled by their own algorithm workspace.
 //
 // Every port is optional and is enabled by `<port>_topic` in the config (an
 // enabled port must also be bound in the manifest, and a bound port needs its
@@ -11,7 +12,6 @@
 //     imu              sensor_msgs/Imu                      -> xgc.imu/1
 //     pose             geometry_msgs/PoseStamped            -> xgc.pose/1
 //     attitude_target  mavros_msgs/AttitudeTarget           -> xgc.attitude_target/1
-//     own_plan         formation_generator/AssumedTrajectory -> xgc.dmpc.assumed_trajectory/1
 //     fcu_state        mavros_msgs/State                    -> xgc.fcu_state/1
 //     local_pose       geometry_msgs/PoseStamped            -> xgc.pose/1
 //     local_velocity   geometry_msgs/TwistStamped           -> xgc.twist/1
@@ -27,8 +27,6 @@
 //     cmd_vel          geometry_msgs/Twist                   -> xgc.twist/1 (stamp = receipt)
 //   module inputs -> ROS
 //     vision_pose      xgc.pose/1                   -> geometry_msgs/PoseStamped (frame `frame_id`)
-//     neighbor_plans   xgc.dmpc.assumed_trajectory/1 -> formation_generator/AssumedTrajectory
-//     sync_trigger     xgc.dmpc.sync_trigger/1       -> periodic_sync/SyncTrigger
 //     rigid_state_estimate xgc.rigid_state_estimate/1 -> rigid_state_estimator_msgs/RigidStateEstimate
 //     setpoint         xgc.position_target/1        -> mavros_msgs/PositionTarget (frame "map")
 //     attitude_rate    xgc.body_rate_thrust/1       -> mavros_msgs/AttitudeTarget (attitude ignored)
@@ -42,7 +40,6 @@
 //     ref_active_analytic   xgc.ref.analytic/1      -> .../AnalyticReference (latched)
 //     ref_active_sampled    xgc.ref.sampled/1       -> .../SampledReference (latched)
 //   (the ref_* outputs are latched, as the reference trajectory node's are)
-//     formation_tick   xgc.dmpc.formation_tick/1    -> formation_generator/FormationTick
 //     planar_pva       xgc.planar_pva/1             -> unicycle_reference_trajectory_msgs/PlanarPvaReference
 //     sim_pose         xgc.pose/1                   -> geometry_msgs/PoseStamped (frame `frame_id`)
 //     sim_velocity     xgc.twist/1                  -> geometry_msgs/TwistStamped (frame `frame_id`)
@@ -54,10 +51,6 @@
 //                      sim_fcu_result; SetMode reports only host delivery.
 //     sim_fcu_result   xgc.fcu_result/1, shared batch EVENT input for the facade.
 //     sim_extended_state xgc.fcu_extended_state/1 -> mavros_msgs/ExtendedState.
-//   sync_trigger and formation_tick are local facades for the unchanged DMPC
-//   planner: dmpc-rounds writes them on this robot's own round boundaries
-//   (E0 + k*P on the aligned OS clock). Publish them on the robot's own topic;
-//   they are never a timing authority for another robot.
 //
 // Threading: ROS callbacks run on this plugin's own queue. Each step first
 // publishes what the modules wrote since the last step, then services that
@@ -69,10 +62,10 @@
 //
 // Config: `<port>_topic` (string), `node_name`, `frame_id` (default "world"),
 // `queue_size` (default 10), `slice_ms` (default 0: service ROS until the
-// round's deadline). With long rounds (DMPC, 100 ms) set `slice_ms` (e.g. 2)
+// round's deadline). With long rounds (100 ms) set `slice_ms` (e.g. 2)
 // and the plugin's `wake_ms` to the same value: each step then services ROS
-// for at most one slice, and module outputs (the planner's local
-// FormationTick) reach ROS within about a slice instead of a round. A slice
+// for at most one slice, and module outputs reach ROS within about a slice
+// instead of a round. A slice
 // remainder shorter than the kernel's timer slack (50 us) is not waited, so
 // `slice_ms` = 0.001 is exactly one non-blocking pass (ros_slice.hpp).
 // `sim_mocap_position_stddev_m = [x,y,z]` enables publication-side mocap
@@ -91,8 +84,6 @@
 #include <thread>
 #include <vector>
 
-#include <formation_generator/AssumedTrajectory.h>
-#include <formation_generator/FormationTick.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -116,7 +107,6 @@
 #include <multirotor_reference_trajectory_msgs/AnalyticReference.h>
 #include <multirotor_reference_trajectory_msgs/ReferenceStatus.h>
 #include <multirotor_reference_trajectory_msgs/SampledReference.h>
-#include <periodic_sync/SyncTrigger.h>
 #include <rigid_state_estimator_msgs/RigidStateEstimate.h>
 #include <ros/callback_queue.h>
 #include <ros/ros.h>
@@ -124,18 +114,17 @@
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/String.h>
-#include <std_msgs/UInt8MultiArray.h>
 #include <unicycle_reference_trajectory_msgs/PlanarPvaReference.h>
 
-#include "common/flat_config.hpp"
-#include "common/reference_wire.hpp"
-#include "ros_dmpc_edge.hpp"
+#include <flat_config.hpp>
+#include <multirotor_reference_trajectory/reference_wire.hpp>
 #include "ros_edge.hpp"
-#include "ros_paired_pose.hpp"
 #include "ros_slice.hpp"
-#include "xgc_dmpc_planner_v1.h"
 #include "xgc_rt.h"
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
+#include <xgc-lightweight-sim/simulation_records_v1.h>
+#include <estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h>
+#include <hover_thrust_estimator/native/hover_thrust_wire.h>
 
 #include <chrono>
 
@@ -147,10 +136,7 @@ enum Port : uint32_t {
   kImu = 0,
   kPose,
   kAttitudeTarget,
-  kOwnPlan,
   kVisionPose,
-  kNeighborPlans,
-  kSyncTrigger,
   kRigidStateEstimate,
   kFcuState,
   kLocalPose,
@@ -171,13 +157,6 @@ enum Port : uint32_t {
   kRefActiveSampled,
   kHoverThrust,
   kControllerState,
-  kFormationTick,
-  kPairedState,
-  kSceneSnapshot,
-  kSceneHeartbeat,
-  kMissionRequest,
-  kTimelineAck,
-  kTimelineStatus,
   kPlanarPva,
   kSimPose,
   kSimVelocity,
@@ -196,13 +175,45 @@ enum Port : uint32_t {
 };
 
 const char* const kPortNames[kPortCount] = {
-    "imu",       "pose",       "attitude_target", "own_plan", "vision_pose", "neighbor_plans", "sync_trigger",
-    "rigid_state_estimate", "fcu_state", "local_pose", "local_velocity", "fcu_imu", "battery", "command",
-    "alg_setpoint", "setpoint",  "attitude_rate", "status", "fcu_request", "ref_analytic",
-    "ref_sampled", "ref_reset", "ref_status", "ref_active_analytic", "ref_active_sampled",
-    "hover_thrust", "controller_state", "formation_tick", "paired_state", "scene_snapshot",
-    "scene_heartbeat", "mission_request", "timeline_ack", "timeline_status", "planar_pva", "sim_pose",
-    "sim_velocity", "sim_imu", "sim_fcu_state", "cmd_vel", "sim_fcu_request", "attitude_target_full", "sim_attitude_target", "sim_hover_thrust", "sim_fcu_result", "sim_extended_state", "sim_provider_request", "sim_provider_result"};
+    "imu",
+    "pose",
+    "attitude_target",
+    "vision_pose",
+    "rigid_state_estimate",
+    "fcu_state",
+    "local_pose",
+    "local_velocity",
+    "fcu_imu",
+    "battery",
+    "command",
+    "alg_setpoint",
+    "setpoint",
+    "attitude_rate",
+    "status",
+    "fcu_request",
+    "ref_analytic",
+    "ref_sampled",
+    "ref_reset",
+    "ref_status",
+    "ref_active_analytic",
+    "ref_active_sampled",
+    "hover_thrust",
+    "controller_state",
+    "planar_pva",
+    "sim_pose",
+    "sim_velocity",
+    "sim_imu",
+    "sim_fcu_state",
+    "cmd_vel",
+    "sim_fcu_request",
+    "attitude_target_full",
+    "sim_attitude_target",
+    "sim_hover_thrust",
+    "sim_fcu_result",
+    "sim_extended_state",
+    "sim_provider_request",
+    "sim_provider_result",
+};
 
 // All simulated FCU services in this process share one low-frequency queue.
 // Its callbacks only use the thread-safe RPC helper, never RosIo or the Host.
@@ -277,15 +288,7 @@ struct RosIo {
   ros::Publisher sim_odometry_pub;
   std::string sim_hover_thrust_trace_topic;
   ros::Publisher sim_hover_thrust_trace_pub;
-  std::string scene_snapshot_topic;
-  std::string scene_state_topic;
   std::string node_name{"xgc_ros_io"};
-  bool have_pose = false;
-  bool have_twist = false;
-  xgc_pose_v1 pose_cache{};
-  xgc_twist_v1 twist_cache{};
-  xgc2_geometry_msgs::SceneSnapshot::ConstPtr snapshot;
-  xgc2_geometry_msgs::SceneState::ConstPtr scene_state;
   std::string frame_id{"world"};
   int queue_size{10};
   double slice_ms{0.0};
@@ -325,49 +328,17 @@ struct RosIo {
 
   ~RosIo() { stop_provider_services(); stop_sim_services(); stop_calls(); }
 
-  void publish_pair() {
-    if (!enabled(kPairedState) || !same_raw_header(have_pose, have_twist, pose_cache.stamp, twist_cache.stamp)) return;
-    xgc_dmpc_paired_state_v1 paired{};
-    fill_paired(pose_cache, twist_cache.stamp, twist_cache.linear[0], twist_cache.linear[1], twist_cache.linear[2],
-                &paired);
-    write(kPairedState, paired);
-  }
 
-  void publish_fixed(Port port, const std_msgs::UInt8MultiArray::ConstPtr& message, size_t size) {
-    if (message->data.size() != size) {
-      log(XGC_LOG_WARN, "ros_io: fixed DMPC payload has the wrong length");
-      return;
-    }
-    write_bytes(port, message->data.data(), size);
-  }
 
-  void on_scene_snapshot(const xgc2_geometry_msgs::SceneSnapshot::ConstPtr& message) {
-    snapshot = message;
-    publish_scene();
-  }
 
-  void on_scene_state(const xgc2_geometry_msgs::SceneState::ConstPtr& message) {
-    scene_state = message;
-    publish_scene();
-  }
 
-  void publish_scene() {
-    if (!snapshot || !scene_state) return;
-    std::vector<uint8_t> blob;
-    std::string error;
-    if (!xgc_dmpc_pack_scene_blob(*snapshot, *scene_state, &blob, &error)) {
-      log(XGC_LOG_WARN, "ros_io: " + error);
-      return;
-    }
-    write_bytes(kSceneSnapshot, blob.data(), blob.size());
-    xgc_dmpc_scene_heartbeat_v1 beat{};
-    beat.received_wall_sec = ros::WallTime::now().toSec();
-    write(kSceneHeartbeat, beat);
-  }
 
-  void on_mission_request(const std_msgs::UInt8MultiArray::ConstPtr& message) {
-    publish_fixed(kMissionRequest, message, sizeof(xgc_dmpc_mission_timeline_v1));
-  }
+
+
+
+
+
+
 
   void log(xgc_log_level level, const std::string& m) const { host->log(host->host, level, m.c_str()); }
 
@@ -407,13 +378,6 @@ struct RosIo {
     s.position[2] = m->pose.position.z;
     quat(s.q_wxyz, m->pose.orientation);
     write(kPose, s);
-    if (!note_pair_pose(enabled(kLocalPose), false, &pose_cache, m->header.stamp.toSec(), m->pose.position.x,
-                        m->pose.position.y, m->pose.position.z, m->pose.orientation.w, m->pose.orientation.x,
-                        m->pose.orientation.y, m->pose.orientation.z)) {
-      return;
-    }
-    have_pose = true;
-    publish_pair();
   }
 
   void on_attitude_target(const mavros_msgs::AttitudeTarget::ConstPtr& m) {
@@ -430,24 +394,7 @@ struct RosIo {
     write(kAttitudeTargetFull, sample);
   }
 
-  void on_plan(const formation_generator::AssumedTrajectory::ConstPtr& m) {
-    xgc_dmpc_assumed_trajectory_v1 h{};
-    h.stamp = stamp_or_now(m->header.stamp);
-    h.uav_id = m->uav_id;
-    h.num_states = m->num_states;
-    h.num_timesteps = m->num_timesteps;
-    h.rest_len = static_cast<uint32_t>(m->rest_position.size());
-    h.valid = m->valid ? 1u : 0u;
-    if (m->states.size() != static_cast<size_t>(m->num_states) * m->num_timesteps) {
-      log(XGC_LOG_WARN, "ros_io: AssumedTrajectory with inconsistent dimensions dropped");
-      return;
-    }
-    std::vector<uint8_t> out(sizeof h + 8 * (m->states.size() + m->rest_position.size()));
-    std::memcpy(out.data(), &h, sizeof h);
-    std::memcpy(out.data() + sizeof h, m->states.data(), 8 * m->states.size());
-    std::memcpy(out.data() + sizeof h + 8 * m->states.size(), m->rest_position.data(), 8 * m->rest_position.size());
-    write_bytes(kOwnPlan, out.data(), out.size());
-  }
+
 
   void on_fcu_state(const mavros_msgs::State::ConstPtr& m) {
     xgc_fcu_state_v1 s{};
@@ -469,13 +416,6 @@ struct RosIo {
     s.position[2] = m->pose.position.z;
     quat(s.q_wxyz, m->pose.orientation);
     write(kLocalPose, s);
-    if (!note_pair_pose(enabled(kLocalPose), true, &pose_cache, m->header.stamp.toSec(), m->pose.position.x,
-                        m->pose.position.y, m->pose.position.z, m->pose.orientation.w, m->pose.orientation.x,
-                        m->pose.orientation.y, m->pose.orientation.z)) {
-      return;
-    }
-    have_pose = true;
-    publish_pair();
   }
 
   void on_local_velocity(const geometry_msgs::TwistStamped::ConstPtr& m) {
@@ -484,10 +424,6 @@ struct RosIo {
     vec3(s.linear, m->twist.linear);
     vec3(s.angular, m->twist.angular);
     write(kLocalVelocity, s);
-    twist_cache = s;
-    twist_cache.stamp = m->header.stamp.toSec();
-    have_twist = true;
-    publish_pair();
   }
 
   void on_fcu_imu(const sensor_msgs::Imu::ConstPtr& m) {
@@ -560,7 +496,7 @@ struct RosIo {
   }
 
   void on_hover_thrust(const hover_thrust_estimator_msgs::HoverThrustEstimate::ConstPtr& m) {
-    xgc_hover_thrust_v1 s{};
+    hover_thrust_native::xgc_hover_thrust_v1 s{};
     s.stamp = stamp_or_now(m->header.stamp);
     s.hover_thrust = m->hover_thrust;
     s.state = m->state;
@@ -959,8 +895,8 @@ struct RosIo {
       ++to_ros;
     }
     while (host->next(host->host, kSimHoverThrust, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_hover_thrust_v1)) continue;
-      xgc_hover_thrust_v1 sample;
+      if (v.len != sizeof(hover_thrust_native::xgc_hover_thrust_v1)) continue;
+      hover_thrust_native::xgc_hover_thrust_v1 sample;
       std::memcpy(&sample, v.data, sizeof sample);
       hover_thrust_estimator_msgs::HoverThrustEstimate m;
       m.header.stamp.fromSec(sample.stamp);
@@ -1019,62 +955,9 @@ struct RosIo {
       last_sim_extended_stamp = state.stamp;
       ++to_ros;
     }
-    while (host->next(host->host, kNeighborPlans, &v) == XGC_OK) {
-      xgc_dmpc_assumed_trajectory_v1 h;
-      if (v.len < sizeof h) continue;
-      std::memcpy(&h, v.data, sizeof h);
-      // Bound allocation by the actual received bytes. A uint32-by-uint32
-      // product fits uint64_t; its byte count need not fit size_t.
-      if ((v.len - sizeof h) % 8 != 0) continue;
-      const uint64_t state_count = static_cast<uint64_t>(h.num_states) * h.num_timesteps;
-      const size_t elements = (v.len - sizeof h) / 8;
-      if (state_count > elements || h.rest_len != elements - state_count) continue;
-      const size_t states = static_cast<size_t>(state_count);
-      formation_generator::AssumedTrajectory m;
-      m.header.stamp.fromSec(h.stamp);
-      m.uav_id = static_cast<uint8_t>(h.uav_id);
-      m.num_states = h.num_states;
-      m.num_timesteps = h.num_timesteps;
-      m.valid = h.valid != 0;
-      m.states.resize(states);
-      m.rest_position.resize(h.rest_len);
-      std::memcpy(m.states.data(), v.data + sizeof h, 8 * states);
-      std::memcpy(m.rest_position.data(), v.data + sizeof h + 8 * states, 8 * h.rest_len);
-      pubs[kNeighborPlans].publish(m);
-      ++to_ros;
-    }
-    while (host->next(host->host, kSyncTrigger, &v) == XGC_OK) {
-      xgc_dmpc_sync_trigger_v1 h;
-      if (v.len < sizeof h) continue;
-      std::memcpy(&h, v.data, sizeof h);
-      if (v.len != sizeof h + 4 * static_cast<size_t>(h.count)) continue;
-      periodic_sync::SyncTrigger m;
-      m.sequence_id = h.sequence_id;
-      m.trigger_time.fromSec(h.trigger_time);
-      m.published_time = ros::Time::now();
-      m.active_participant_ids.resize(h.count);
-      std::memcpy(m.active_participant_ids.data(), v.data + sizeof h, 4 * static_cast<size_t>(h.count));
-      pubs[kSyncTrigger].publish(m);
-      ++to_ros;
-    }
-    while (host->next(host->host, kFormationTick, &v) == XGC_OK) {
-      xgc_dmpc_formation_tick_v1 f;
-      xgc_dmpc_sync_trigger_v1 h;
-      if (v.len < sizeof f + sizeof h) continue;
-      std::memcpy(&f, v.data, sizeof f);
-      std::memcpy(&h, v.data + sizeof f, sizeof h);
-      if (v.len != sizeof f + sizeof h + 4 * static_cast<size_t>(h.count)) continue;
-      formation_generator::FormationTick m;
-      m.trigger.sequence_id = h.sequence_id;
-      m.trigger.trigger_time.fromSec(h.trigger_time);
-      m.trigger.published_time = ros::Time::now();
-      m.trigger.active_participant_ids.resize(h.count);
-      std::memcpy(m.trigger.active_participant_ids.data(), v.data + sizeof f + sizeof h, 4 * static_cast<size_t>(h.count));
-      m.rolling = f.rolling != 0;
-      m.mission_time = f.mission_time;
-      pubs[kFormationTick].publish(m);
-      ++to_ros;
-    }
+
+
+
     while (host->next(host->host, kPlanarPva, &v) == XGC_OK) {
       if (v.len != sizeof(xgc_planar_pva_v1)) continue;
       xgc_planar_pva_v1 p;
@@ -1219,17 +1102,7 @@ struct RosIo {
       lines.swap(call_log);
     }
     for (const auto& l : lines) log(XGC_LOG_INFO, l);
-    auto publish_bytes = [&](Port port, size_t size) {
-      while (host->next(host->host, port, &v) == XGC_OK) {
-        if (v.len != size) continue;
-        std_msgs::UInt8MultiArray message;
-        message.data.assign(v.data, v.data + v.len);
-        pubs[port].publish(message);
-        ++to_ros;
-      }
-    };
-    publish_bytes(kTimelineAck, sizeof(xgc_dmpc_mission_ack_v1));
-    publish_bytes(kTimelineStatus, sizeof(xgc_dmpc_timeline_status_v1));
+
   }
 
   xgc_status activate() {
@@ -1246,7 +1119,6 @@ struct RosIo {
       subs.push_back(nh->subscribe(topics[kAttitudeTarget], queue_size, &RosIo::on_attitude_target, this));
     if (enabled(kAttitudeTargetFull) && !provider_rpc)
       subs.push_back(nh->subscribe(topics[kAttitudeTargetFull], queue_size, &RosIo::on_attitude_target_full, this));
-    if (enabled(kOwnPlan)) subs.push_back(nh->subscribe(topics[kOwnPlan], queue_size, &RosIo::on_plan, this));
     if (enabled(kVisionPose)) pubs[kVisionPose] = nh->advertise<geometry_msgs::PoseStamped>(topics[kVisionPose], queue_size);
     if (sim_imu_orientation_from_pose && (!enabled(kSimPose) || sim_odometry_child_frame.empty()))
       throw std::invalid_argument("ros-io: oriented simulated IMU requires sim_pose and a body frame");
@@ -1275,10 +1147,6 @@ struct RosIo {
     if (enabled(kSimFcuState)) pubs[kSimFcuState] = nh->advertise<mavros_msgs::State>(topics[kSimFcuState], queue_size);
     if (enabled(kSimExtendedState))
       pubs[kSimExtendedState] = nh->advertise<mavros_msgs::ExtendedState>(topics[kSimExtendedState], queue_size);
-    if (enabled(kNeighborPlans))
-      pubs[kNeighborPlans] = nh->advertise<formation_generator::AssumedTrajectory>(topics[kNeighborPlans], queue_size);
-    if (enabled(kSyncTrigger))
-      pubs[kSyncTrigger] = nh->advertise<periodic_sync::SyncTrigger>(topics[kSyncTrigger], queue_size);
     if (enabled(kRigidStateEstimate))
       pubs[kRigidStateEstimate] =
           nh->advertise<rigid_state_estimator_msgs::RigidStateEstimate>(topics[kRigidStateEstimate], queue_size);
@@ -1324,18 +1192,7 @@ struct RosIo {
       subs.push_back(nh->subscribe(topics[kRefSampled], queue_size, &RosIo::on_ref_sampled, this));
     if (enabled(kControllerState))
       subs.push_back(nh->subscribe(topics[kControllerState], queue_size, &RosIo::on_controller_state, this));
-    if (enabled(kFormationTick))
-      pubs[kFormationTick] = nh->advertise<formation_generator::FormationTick>(topics[kFormationTick], queue_size);
-    if (!scene_snapshot_topic.empty() && !scene_state_topic.empty()) {
-      subs.push_back(nh->subscribe(scene_snapshot_topic, 1, &RosIo::on_scene_snapshot, this));
-      subs.push_back(nh->subscribe(scene_state_topic, 1, &RosIo::on_scene_state, this));
-    }
-    if (enabled(kMissionRequest))
-      subs.push_back(nh->subscribe(topics[kMissionRequest], queue_size, &RosIo::on_mission_request, this));
-    if (enabled(kTimelineAck))
-      pubs[kTimelineAck] = nh->advertise<std_msgs::UInt8MultiArray>(topics[kTimelineAck], queue_size);
-    if (enabled(kTimelineStatus))
-      pubs[kTimelineStatus] = nh->advertise<std_msgs::UInt8MultiArray>(topics[kTimelineStatus], queue_size);
+
     if (enabled(kPlanarPva))
       pubs[kPlanarPva] =
           nh->advertise<unicycle_reference_trajectory_msgs::PlanarPvaReference>(topics[kPlanarPva], queue_size);
@@ -1456,15 +1313,6 @@ xgc_status configure(void* p, const char* config) {
     } else self->provider_rpc.reset();
     if (!cfg::boolean(t, "sim_imu_orientation_from_pose", &self->sim_imu_orientation_from_pose))
       throw std::invalid_argument("ros-io: sim_imu_orientation_from_pose must be boolean");
-    self->scene_snapshot_topic = cfg::text_or(t, "scene_snapshot_topic", "");
-    self->scene_state_topic = cfg::text_or(t, "scene_state_topic", "");
-    if (!self->scene_snapshot_topic.empty() && !self->scene_state_topic.empty()) {
-      for (Port port : {kSceneSnapshot, kSceneHeartbeat}) self->topics[port] = "scene";
-    }
-    if (!self->topics[kLocalVelocity].empty() &&
-        (!self->topics[kLocalPose].empty() || !self->topics[kPose].empty())) {
-      self->topics[kPairedState] = "paired";
-    }
     self->node_name = cfg::text_or(t, "node_name", "xgc_ros_io");
     self->frame_id = cfg::text_or(t, "frame_id", "world");
     std::string noise_config;
@@ -1524,10 +1372,7 @@ const xgc_port_decl kPorts[kPortCount] = {
     {"imu", XGC_PORT_OUT_OPTIONAL, "xgc.imu/1", XGC_QOS_STATE},
     {"pose", XGC_PORT_OUT_OPTIONAL, "xgc.pose/1", XGC_QOS_STATE},
     {"attitude_target", XGC_PORT_OUT_OPTIONAL, "xgc.attitude_target/1", XGC_QOS_STATE},
-    {"own_plan", XGC_PORT_OUT_OPTIONAL, "xgc.dmpc.assumed_trajectory/1", XGC_QOS_CONTROL},
     {"vision_pose", XGC_PORT_IN_OPTIONAL, "xgc.pose/1", XGC_QOS_STATE},
-    {"neighbor_plans", XGC_PORT_IN_OPTIONAL, "xgc.dmpc.assumed_trajectory/1", XGC_QOS_CONTROL},
-    {"sync_trigger", XGC_PORT_IN_OPTIONAL, "xgc.dmpc.sync_trigger/1", XGC_QOS_CONTROL},
     {"rigid_state_estimate", XGC_PORT_IN_OPTIONAL, "xgc.rigid_state_estimate/1", XGC_QOS_STATE},
     {"fcu_state", XGC_PORT_OUT_OPTIONAL, "xgc.fcu_state/1", XGC_QOS_STATE},
     {"local_pose", XGC_PORT_OUT_OPTIONAL, "xgc.pose/1", XGC_QOS_STATE},
@@ -1548,13 +1393,6 @@ const xgc_port_decl kPorts[kPortCount] = {
     {"ref_active_sampled", XGC_PORT_IN_OPTIONAL, "xgc.ref.sampled/1", XGC_QOS_STATE},
     {"hover_thrust", XGC_PORT_OUT_OPTIONAL, "xgc.hover_thrust/1", XGC_QOS_STATE},
     {"controller_state", XGC_PORT_OUT_OPTIONAL, "xgc.controller_status/1", XGC_QOS_STATE},
-    {"formation_tick", XGC_PORT_IN_OPTIONAL, "xgc.dmpc.formation_tick/1", XGC_QOS_CONTROL},
-    {"paired_state", XGC_PORT_OUT_OPTIONAL, "xgc.dmpc.paired_state/1", XGC_QOS_STATE},
-    {"scene_snapshot", XGC_PORT_OUT_OPTIONAL, "xgc.dmpc.scene_snapshot/1", XGC_QOS_STATE},
-    {"scene_heartbeat", XGC_PORT_OUT_OPTIONAL, "xgc.dmpc.scene_heartbeat/1", XGC_QOS_STATE},
-    {"mission_request", XGC_PORT_OUT_OPTIONAL, "xgc.dmpc.mission_timeline/1", XGC_QOS_EVENT},
-    {"timeline_ack", XGC_PORT_IN_OPTIONAL, "xgc.dmpc.timeline_ack/1", XGC_QOS_EVENT},
-    {"timeline_status", XGC_PORT_IN_OPTIONAL, "xgc.dmpc.timeline_status/1", XGC_QOS_STATE},
     {"planar_pva", XGC_PORT_IN_OPTIONAL, "xgc.planar_pva/1", XGC_QOS_CONTROL},
     {"sim_pose", XGC_PORT_IN_OPTIONAL, "xgc.pose/1", XGC_QOS_STATE},
     {"sim_velocity", XGC_PORT_IN_OPTIONAL, "xgc.twist/1", XGC_QOS_STATE},

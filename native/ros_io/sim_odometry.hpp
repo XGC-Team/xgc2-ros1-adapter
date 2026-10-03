@@ -1,7 +1,7 @@
 // Measured model pose and velocity -> MAVROS-compatible body-twist Odometry.
 #pragma once
 #include <cmath>
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
 
 struct SimOdometry {
   xgc_pose_v1 pose{};

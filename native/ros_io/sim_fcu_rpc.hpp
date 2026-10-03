@@ -15,7 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
+#include <xgc-lightweight-sim/simulation_records_v1.h>
 
 namespace xgc_sim_fcu {
 

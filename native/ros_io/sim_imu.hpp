@@ -1,7 +1,7 @@
 // Pair model IMU with orientation from exactly the same integration step.
 #pragma once
 #include <cmath>
-#include "xgc_schemas_v1.h"
+#include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
 
 inline bool matched_sim_imu(const xgc_pose_v1& pose, const xgc_imu_v1& imu,
                             double last_stamp) {
