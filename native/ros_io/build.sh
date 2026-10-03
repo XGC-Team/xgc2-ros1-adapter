@@ -13,22 +13,6 @@ rigid_prefix="${XGC_RIGID_STATE_WIRE_PREFIX:-/usr}"
 hte_prefix="${XGC_HOVER_THRUST_WIRE_PREFIX:-/usr}"
 reference_prefix="${XGC_REFERENCE_WIRE_PREFIX:-/usr}"
 edge_prefix="${XGC_ROS_IO_HELPERS_PREFIX:-/usr}"
-for installed_header in \
-  "$robotics_prefix/include/xgc-robotics-interfaces/robotics_interfaces_v1.h" \
-  "$robotics_prefix/include/xgc-robotics-interfaces/control_records_v1.h" \
-  "$robotics_prefix/include/xgc-robotics-interfaces/paired_state_v1.h" \
-  "$simulation_prefix/include/xgc-lightweight-sim/simulation_records_v1.h" \
-  "$rigid_prefix/include/estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h" \
-  "$hte_prefix/include/hover_thrust_estimator/native/hover_thrust_wire.h" \
-  "$reference_prefix/include/multirotor_reference_trajectory/reference_wire_v1.h"; do
-  [[ -f "$installed_header" ]] || { echo "required installed DTO header missing: $installed_header" >&2; exit 2; }
-done
-[[ -f "$edge_prefix/lib/libxgc_ros_edge.so" && -f "$edge_prefix/include/xgc-ros-io/ros_edge.hpp" ]] || {
-  echo "required installed XgcRosIo::Edge utility missing at $edge_prefix" >&2; exit 2;
-}
-for sdk_header in xgc_rt.h xgc_clock_source.h flat_config.hpp; do
-  [[ -f "$sdk_include/$sdk_header" ]] || { echo "required installed Runtime SDK header missing: $sdk_include/$sdk_header" >&2; exit 2; }
-done
 [[ -f "$provider_prefix/include/xgc2_lightweight_sim_msgs/SetProvider.h" &&
    -f "$provider_prefix/share/xgc2_lightweight_sim_msgs/srv/SetProvider.srv" ]] || {
   echo "installed xgc2_lightweight_sim_msgs interface missing at $provider_prefix" >&2; exit 2;
