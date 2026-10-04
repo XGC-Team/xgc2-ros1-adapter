@@ -68,6 +68,11 @@
 // instead of a round. A slice
 // remainder shorter than the kernel's timer slack (50 us) is not waited, so
 // `slice_ms` = 0.001 is exactly one non-blocking pass (ros_slice.hpp).
+// `sim_fcu_state_period_ms` / `sim_extended_state_period_ms` (default 0: every
+// plant sample, as before) publish the simulated MAVROS `state` and
+// `extended_state` at a physical period instead, and at once on any content
+// change (sim_publish_gate.hpp). Only the ROS publication is gated; the FCU
+// request facade still sees every `sim_fcu_state` sample.
 // `sim_mocap_position_stddev_m = [x,y,z]` enables publication-side mocap
 // position measurement noise on sim_pose only; absent means exact plant pose.
 // `sim_mocap_noise_seed` selects a reproducible per-robot stream (default 1).
@@ -103,6 +108,7 @@
 #include "sim_mocap.hpp"
 #include "sim_fcu_rpc.hpp"
 #include "sim_provider_rpc.hpp"
+#include "sim_publish_gate.hpp"
 #include <xgc2_lightweight_sim_msgs/SetProvider.h>
 #include <multirotor_reference_trajectory_msgs/AnalyticReference.h>
 #include <multirotor_reference_trajectory_msgs/ReferenceStatus.h>
@@ -312,6 +318,10 @@ struct RosIo {
   uint64_t provider_controls_epoch{0};
   int sim_fcu_robot_index{0};
   double last_sim_extended_stamp{-1};
+  // Publication cadence of the simulated MAVROS state records. The default
+  // (period 0) publishes every plant sample, as before.
+  xgc_sim_publish::ChangeOrPeriodGate<xgc_sim_publish::FcuStateContent> sim_state_gate;
+  xgc_sim_publish::ChangeOrPeriodGate<xgc_sim_publish::ExtendedStateContent> sim_extended_gate;
   uint64_t round{0};
   uint64_t from_ros{0};
   uint64_t to_ros{0};
@@ -747,6 +757,10 @@ struct RosIo {
   }
 
   void discard_pending_output() {
+    // A reopened output starts a new publication period: the first state after
+    // it is published at once.
+    sim_state_gate.reset();
+    sim_extended_gate.reset();
     xgc_sample_view v;
     for (uint32_t port = 0; port < kPortCount; ++port) {
       while (host->next(host->host, port, &v) == XGC_OK) {
@@ -932,6 +946,16 @@ struct RosIo {
       m.manual_input = s.manual_input != 0;
       m.system_status = s.system_status;
       m.mode = text(s.mode);
+      // The facade above saw every sample. Only the ROS publication follows the
+      // physical cadence: one per period and at once on any content change.
+      xgc_sim_publish::FcuStateContent content;
+      content.connected = m.connected;
+      content.armed = m.armed;
+      content.guided = m.guided;
+      content.manual_input = m.manual_input;
+      content.system_status = m.system_status;
+      content.mode = m.mode;
+      if (!sim_state_gate.admit(content, xgc_sim_publish::SteadyClock::now())) continue;
       pubs[kSimFcuState].publish(m);
       ++to_ros;
     }
@@ -947,12 +971,16 @@ struct RosIo {
       std::memcpy(&state, v.data, sizeof state);
       if (!std::isfinite(state.stamp) || state.stamp < 0 || state.stamp <= last_sim_extended_stamp ||
           state.count > 6 || static_cast<uint32_t>(sim_fcu_robot_index) >= state.count) continue;
+      last_sim_extended_stamp = state.stamp;  // every accepted sample, published or not
       mavros_msgs::ExtendedState message;
       message.header.stamp.fromSec(state.stamp);
       message.landed_state = state.landed_state[sim_fcu_robot_index];
       message.vtol_state = state.vtol_state[sim_fcu_robot_index];
+      xgc_sim_publish::ExtendedStateContent content;
+      content.landed_state = message.landed_state;
+      content.vtol_state = message.vtol_state;
+      if (!sim_extended_gate.admit(content, xgc_sim_publish::SteadyClock::now())) continue;
       pubs[kSimExtendedState].publish(message);
-      last_sim_extended_stamp = state.stamp;
       ++to_ros;
     }
 
@@ -1301,6 +1329,16 @@ xgc_status configure(void* p, const char* config) {
         rpc_freshness_ms < 1 || rpc_freshness_ms > 5000 || std::floor(rpc_freshness_ms) != rpc_freshness_ms)
       throw std::invalid_argument("invalid sim FCU index or RPC deadlines");
     self->sim_fcu_robot_index = static_cast<int>(rpc_index);
+    // Publication period of the simulated state/extended_state (0: every sample).
+    double state_period_ms = 0, extended_period_ms = 0;
+    xgc_sim_publish::SteadyClock::duration state_period{}, extended_period{};
+    if (!cfg::number(t, "sim_fcu_state_period_ms", &state_period_ms) ||
+        !cfg::number(t, "sim_extended_state_period_ms", &extended_period_ms) ||
+        !xgc_sim_publish::period_from_ms(state_period_ms, &state_period) ||
+        !xgc_sim_publish::period_from_ms(extended_period_ms, &extended_period))
+      throw std::invalid_argument("sim_fcu_state_period_ms and sim_extended_state_period_ms must be whole milliseconds in 0..60000");
+    self->sim_state_gate = xgc_sim_publish::ChangeOrPeriodGate<xgc_sim_publish::FcuStateContent>(state_period);
+    self->sim_extended_gate = xgc_sim_publish::ChangeOrPeriodGate<xgc_sim_publish::ExtendedStateContent>(extended_period);
     if (self->enabled(kSimFcuRequest)) {
       self->topics[kSimFcuResult] = "fcu-result";  // Host-only batch result, no ROS topic.
       self->sim_rpc = std::make_shared<xgc_sim_fcu::Rpc>(

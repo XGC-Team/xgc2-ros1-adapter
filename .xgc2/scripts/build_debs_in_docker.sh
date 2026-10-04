@@ -419,6 +419,10 @@ docker exec "${container_name}" bash -lc '
     XGC_ROS_IO_HELPERS_PREFIX=/usr \
       /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
 
+    # ROS-free check of the simulated MAVROS state publication gate and of its
+    # wiring in ros_io.cpp; needs only a C++17 compiler and python3.
+    bash /tmp/work/native/ros_io/run-publish-gate-test.sh
+
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 

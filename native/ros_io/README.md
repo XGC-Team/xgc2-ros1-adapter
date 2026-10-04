@@ -51,6 +51,22 @@ shorter than the kernel's 50 us timer slack is not waited, so the lightweight
 plant's `slice_ms = 0.001` steps are one non-blocking pass.
 `bash plugins/ros-io/run-slice-test.sh` checks this arithmetic without ROS.
 
+## Simulated MAVROS state cadence
+
+A real MAVROS node publishes `state` once per FCU HEARTBEAT (1 Hz) and
+`extended_state` once per EXTENDED_SYS_STATE message. The plant writes both
+records every output period, so `sim_fcu_state` and `sim_extended_state` would
+otherwise publish at the plant rate. `sim_fcu_state_period_ms` and
+`sim_extended_state_period_ms` (whole milliseconds, 0..60000, default 0 = every
+sample, the previous behavior) publish them once per period of steady time and
+at once on any content change (`connected`, `armed`, `guided`, `manual_input`,
+`system_status`, `mode`; `landed_state`, `vtol_state`). The first sample after
+activation or after a reopened output is published at once. Only the ROS
+publication is gated: every plant sample still reaches the simulated FCU request
+facade, and the extended-state monotonic stamp check still sees every sample.
+The gate never reads subscribers. `bash plugins/ros-io/run-publish-gate-test.sh`
+checks the gate logic and its wiring without ROS.
+
 ## Lightweight controller live check
 
 `lightweight_controller_live.py` runs the FS150 plant and the real ctl-px4 SMC controller in separate `xgc-rt-host` processes. It sends the plant/controller channels over Zenoh TCP and uses the existing ROS master only for test commands, PVA setpoints, and observed ROS outputs. Source the ROS environment and prepare a reachable ROS master first; this script does not start ROS, MAVROS, or Docker. It checks the existing takeoff, 10-second trajectory tracking, endpoint error, and landing sequence. It does not validate DMPC or a complete experiment.
