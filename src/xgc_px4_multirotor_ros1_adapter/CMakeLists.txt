@@ -112,6 +112,7 @@ if(CATKIN_ENABLE_TESTING)
   )
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp
+    test/channel_table_test.cpp
     src/robot_runtime.cpp
     src/shutdown_signal.cpp
   )

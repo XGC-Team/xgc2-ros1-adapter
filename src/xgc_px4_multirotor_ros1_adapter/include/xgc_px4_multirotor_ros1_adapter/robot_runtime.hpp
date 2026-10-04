@@ -29,6 +29,7 @@
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/channel_table.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 
@@ -131,17 +132,6 @@ private:
     bool active_;
   };
 
-  struct SourceTracker {
-    ros::WallTime last_seen;
-    ros::WallTime window_started;
-    std::uint64_t source_samples = 0;
-    std::uint64_t output_samples = 0;
-    std::uint64_t dropped_samples = 0;
-    double source_rate_hz = 0.0;
-    double output_rate_hz = 0.0;
-    double stale_after_seconds = 1.0;
-  };
-
   RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                std::string profile_id, std::string robot_namespace,
                std::uint64_t spec_revision,
@@ -155,23 +145,29 @@ private:
   bool install(std::string *error);
   bool installPx4(std::string *error);
   bool channelRequired(const std::string &channel_id) const;
+  bool channelEnabled(ChannelId channel) const {
+    return channels_[channel].enabled;
+  }
+  bool channelRequired(ChannelId channel) const {
+    return channels_[channel].required;
+  }
   bool beginCallback();
   void endCallback();
 
-  bool shouldEmitLocked(const std::string &channel_id,
-                        const ros::WallTime &now);
+  // The gate, envelope and source accounting below index the resolved
+  // ChannelTable; none of them consults the generated contract or a
+  // string-keyed map. Callers hold mutex_.
+  bool shouldEmitLocked(ChannelId channel, const ros::WallTime &now);
   xgc::robot::v1::RobotMessage
-  makeEnvelopeLocked(const std::string &channel_id,
-                     const ros::Time &source_stamp,
+  makeEnvelopeLocked(ChannelId channel, const ros::Time &source_stamp,
                      const google::protobuf::Message &payload);
   void emit(std::vector<xgc::robot::v1::RobotMessage> messages);
   void ensureSourceLocked(const std::string &channel_id,
                           double stale_after_seconds);
-  void recordSourceLocked(const std::string &channel_id,
-                          const ros::WallTime &now);
-  void recordStateSourceLocked(const std::string &channel_id,
-                               bool count_sample);
-  void recordOutputLocked(const std::string &channel_id);
+  void recordSourceLocked(ChannelId channel, const ros::WallTime &now);
+  void recordStateSourceLocked(ChannelId channel, bool count_sample);
+  void recordOutputLocked(ChannelId channel);
+  void countDroppedLocked(ChannelId channel);
   void emitPositionErrorLocked(
       const ros::Time &source_stamp, const ros::WallTime &now,
       std::vector<xgc::robot::v1::RobotMessage> *messages);
@@ -217,6 +213,8 @@ private:
   const std::set<std::string> enabled_channels_;
   const std::set<std::string> required_channels_;
   const EnvelopeEmitter emitter_;
+  // Resolved once at construction. Mutated only with mutex_ held.
+  ChannelTable channels_;
 
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
@@ -246,9 +244,6 @@ private:
   bool stopping_ = false;
   bool stop_complete_ = false;
   std::size_t active_callbacks_ = 0;
-  std::map<std::string, SourceTracker> sources_;
-  std::map<std::string, ros::WallTime> last_output_;
-  std::map<std::string, std::uint64_t> sequences_;
 
   mavros_msgs::State mavros_state_;
   mavros_msgs::ExtendedState mavros_extended_state_;

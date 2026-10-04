@@ -333,6 +333,13 @@ double channelStaleAfterSeconds(const std::string &profile_id,
   return static_cast<double>(channel.stale_after_millis) / 1000.0;
 }
 
+// The same bound, read from the channel resolved at runtime construction.
+double channelStaleAfterSeconds(const ChannelTable::Channel &channel) {
+  if (!channel.metadata_found || channel.stale_after_millis == 0u)
+    throw std::logic_error("generated channel stale policy is invalid");
+  return static_cast<double>(channel.stale_after_millis) / 1000.0;
+}
+
 } // namespace
 
 std::uint32_t localSetpointValidFields(std::uint16_t type_mask) {
@@ -908,6 +915,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
       enabled_channels_(std::move(enabled_channels)),
       required_channels_(std::move(required_channels)),
       emitter_(std::move(emitter)),
+      channels_(profile_id_, enabled_channels_, required_channels_),
       offboard_source_timeout_seconds_(
           native_profile.offboard_source_timeout_seconds),
       offboard_minimum_rate_hz_(native_profile.offboard_minimum_rate_hz),
@@ -1264,65 +1272,18 @@ bool RobotRuntime::installPx4(std::string *error) {
   return true;
 }
 
-bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
+bool RobotRuntime::shouldEmitLocked(ChannelId channel,
                                     const ros::WallTime &now) {
-  contract::ChannelMetadata metadata;
-  if (!contract::channelMetadata(profile_id_, channel_id, &metadata) ||
-      metadata.output_rate_hz <= 0.0) {
-    return false;
-  }
-  auto &last = last_output_[channel_id];
-  if (!last.isZero() && now >= last &&
-      (now - last).toSec() < (1.0 / metadata.output_rate_hz)) {
-    return false;
-  }
-  last = now;
-  return true;
+  return channels_.shouldEmit(&channels_[channel], now);
 }
 
 xgc::robot::v1::RobotMessage
-RobotRuntime::makeEnvelopeLocked(const std::string &channel_id,
+RobotRuntime::makeEnvelopeLocked(ChannelId channel,
                                  const ros::Time &source_stamp,
                                  const google::protobuf::Message &payload) {
-  contract::ChannelMetadata channel;
-  if (!contract::channelMetadata(profile_id_, channel_id, &channel) ||
-      channel.output_message_id == 0u) {
-    throw std::logic_error(
-        "channel output is absent from generated XGC2 contract metadata");
-  }
-  contract::MessageMetadata metadata;
-  if (!contract::messageMetadata(channel.output_message_id, &metadata)) {
-    throw std::logic_error(
-        "message ID is absent from generated XGC2 contract metadata");
-  }
-  xgc2_ros1_robot_adapter::MessageSchema schema;
-  schema.message_id = channel.output_message_id;
-  schema.type_name = metadata.type_name;
-  schema.version = metadata.version;
-  schema.fingerprint = metadata.fingerprint;
-
-  xgc2_ros1_robot_adapter::RobotMessageContext context;
-  context.robot_id = robot_id_;
-  context.channel_id = channel_id;
-  context.sequence = ++sequences_[channel_id];
-  if (!source_stamp.isZero()) {
-    context.has_source_time = true;
-    context.source_time_nanos =
-        static_cast<std::int64_t>(source_stamp.toNSec());
-    context.source_clock_domain = ros::Time::isSimTime()
-                                      ? xgc::v1::CLOCK_DOMAIN_SIMULATION
-                                      : xgc::v1::CLOCK_DOMAIN_NATIVE;
-  }
-  context.observed_unix_nanos =
-      static_cast<std::int64_t>(ros::WallTime::now().toNSec());
-
-  xgc::robot::v1::RobotMessage envelope;
-  std::string error;
-  if (!xgc2_ros1_robot_adapter::BuildRobotMessage(context, schema, payload,
-                                                  &envelope, &error)) {
-    throw std::runtime_error("failed to build robot telemetry item: " + error);
-  }
-  return envelope;
+  return channels_.makeEnvelope(
+      &channels_[channel], robot_id_, source_stamp, payload,
+      static_cast<std::int64_t>(ros::WallTime::now().toNSec()));
 }
 
 void RobotRuntime::emit(std::vector<xgc::robot::v1::RobotMessage> messages) {
@@ -1337,37 +1298,25 @@ void RobotRuntime::emit(std::vector<xgc::robot::v1::RobotMessage> messages) {
 
 void RobotRuntime::ensureSourceLocked(const std::string &channel_id,
                                       double stale_after_seconds) {
-  if (stale_after_seconds <= 0.0)
-    throw std::logic_error("semantic source freshness must be positive");
-  auto &source = sources_[channel_id];
-  source.stale_after_seconds = stale_after_seconds;
+  ChannelTable::Channel *channel = channels_.find(channel_id);
+  if (channel == nullptr)
+    throw std::logic_error("semantic channel is not emitted by this runtime: " +
+                           channel_id);
+  channels_.ensureSource(channel, stale_after_seconds);
 }
 
-void RobotRuntime::recordSourceLocked(const std::string &channel_id,
+void RobotRuntime::recordSourceLocked(ChannelId channel,
                                       const ros::WallTime &now) {
-  auto source_it = sources_.find(channel_id);
-  if (source_it == sources_.end())
-    throw std::logic_error("semantic source was not installed: " + channel_id);
-  auto &source = source_it->second;
-  if (source.window_started.isZero())
-    source.window_started = now;
-  if (!source.last_seen.isZero() && now > source.last_seen) {
-    const double instantaneous_rate = 1.0 / (now - source.last_seen).toSec();
-    source.source_rate_hz =
-        source.source_rate_hz <= 0.0
-            ? instantaneous_rate
-            : 0.8 * source.source_rate_hz + 0.2 * instantaneous_rate;
-  }
-  source.last_seen = now;
-  ++source.source_samples;
+  channels_.recordSource(&channels_[channel], now);
 }
 
-void RobotRuntime::recordStateSourceLocked(const std::string &channel_id,
+void RobotRuntime::recordStateSourceLocked(ChannelId channel,
                                            bool count_sample) {
-  auto source_it = sources_.find(channel_id);
-  if (source_it == sources_.end())
-    throw std::logic_error("PX4 state source was not installed: " + channel_id);
-  auto &source = source_it->second;
+  ChannelTable::Channel &state_channel = channels_[channel];
+  if (state_channel.source == nullptr)
+    throw std::logic_error("PX4 state source was not installed: " +
+                           state_channel.id);
+  auto &source = *state_channel.source;
   if (source.window_started.isZero()) {
     source.window_started = !mavros_state_last_seen_.isZero()
                                 ? mavros_state_last_seen_
@@ -1375,7 +1324,7 @@ void RobotRuntime::recordStateSourceLocked(const std::string &channel_id,
   }
   if (count_sample)
     ++source.source_samples;
-  const bool flight_state_only = channel_id == "state.flight";
+  const bool flight_state_only = channel == ChannelId::kFlight;
   if (mavros_state_last_seen_.isZero() ||
       (!flight_state_only && mavros_extended_state_last_seen_.isZero())) {
     return;
@@ -1395,11 +1344,12 @@ void RobotRuntime::recordStateSourceLocked(const std::string &channel_id,
   source.last_seen = complete_input_time;
 }
 
-void RobotRuntime::recordOutputLocked(const std::string &channel_id) {
-  auto source_it = sources_.find(channel_id);
-  if (source_it == sources_.end())
-    throw std::logic_error("semantic source was not installed: " + channel_id);
-  ++source_it->second.output_samples;
+void RobotRuntime::recordOutputLocked(ChannelId channel) {
+  channels_.recordOutput(&channels_[channel]);
+}
+
+void RobotRuntime::countDroppedLocked(ChannelId channel) {
+  ++channels_.droppedSource(&channels_[channel]).dropped_samples;
 }
 
 void RobotRuntime::emitPositionErrorLocked(
@@ -1407,20 +1357,21 @@ void RobotRuntime::emitPositionErrorLocked(
     std::vector<xgc::robot::v1::RobotMessage> *messages) {
   if (!has_local_position_ || !has_mocap_position_ || messages == nullptr)
     return;
-  if (channelRequired("state.localization.error"))
-    recordSourceLocked("state.localization.error", now);
+  if (channelRequired(ChannelId::kLocalizationError))
+    recordSourceLocked(ChannelId::kLocalizationError, now);
   const double distance =
       positionDistanceMeters(local_position_, mocap_position_);
-  if (channelEnabled("state.localization.error") && std::isfinite(distance) &&
-      shouldEmitLocked("state.localization.error", now)) {
+  if (channelEnabled(ChannelId::kLocalizationError) &&
+      std::isfinite(distance) &&
+      shouldEmitLocked(ChannelId::kLocalizationError, now)) {
     xgc::semantic::common::v1::DistanceEstimate payload;
     payload.set_frame_id(local_position_frame_id_);
     payload.set_meters(distance);
-    messages->push_back(makeEnvelopeLocked("state.localization.error",
+    messages->push_back(makeEnvelopeLocked(ChannelId::kLocalizationError,
                                            source_stamp, payload));
-    recordOutputLocked("state.localization.error");
-  } else if (channelEnabled("state.localization.error")) {
-    ++sources_["state.localization.error"].dropped_samples;
+    recordOutputLocked(ChannelId::kLocalizationError);
+  } else if (channelEnabled(ChannelId::kLocalizationError)) {
+    countDroppedLocked(ChannelId::kLocalizationError);
   }
 }
 
@@ -1477,8 +1428,9 @@ void RobotRuntime::setPositioningHealthLocked(
 std::uint64_t
 RobotRuntime::sourceAgeMillisLocked(const std::string &channel_id,
                                     const ros::WallTime &now) const {
-  const auto it = sources_.find(channel_id);
-  if (it == sources_.end() || it->second.last_seen.isZero() ||
+  const auto &sources = channels_.sources();
+  const auto it = sources.find(channel_id);
+  if (it == sources.end() || it->second.last_seen.isZero() ||
       now < it->second.last_seen) {
     return 0;
   }
@@ -1495,7 +1447,7 @@ void RobotRuntime::px4PoseCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.pose", now);
+    recordSourceLocked(ChannelId::kPose, now);
     if (std::isfinite(message->pose.position.x) &&
         std::isfinite(message->pose.position.y) &&
         std::isfinite(message->pose.position.z)) {
@@ -1503,16 +1455,17 @@ void RobotRuntime::px4PoseCallback(
       local_position_frame_id_ = message->header.frame_id;
       has_local_position_ = true;
     }
-    if (channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
+    if (channelEnabled(ChannelId::kPose) &&
+        shouldEmitLocked(ChannelId::kPose, now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyVector(message->pose.position, payload.mutable_position());
       copyQuaternion(message->pose.orientation, payload.mutable_orientation());
       output.push_back(
-          makeEnvelopeLocked("state.pose", message->header.stamp, payload));
-      recordOutputLocked("state.pose");
-    } else if (channelEnabled("state.pose")) {
-      ++sources_["state.pose"].dropped_samples;
+          makeEnvelopeLocked(ChannelId::kPose, message->header.stamp, payload));
+      recordOutputLocked(ChannelId::kPose);
+    } else if (channelEnabled(ChannelId::kPose)) {
+      countDroppedLocked(ChannelId::kPose);
     }
     emitPositionErrorLocked(message->header.stamp, now, &output);
   }
@@ -1530,10 +1483,10 @@ void RobotRuntime::mocapPoseCallback(
   bool publish_vision = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.mocap.pose", now);
+    recordSourceLocked(ChannelId::kMocapPose, now);
     if (!xgc2_ros1_robot_adapter::projectLocalizationPose(
             *message, localization_, &projected)) {
-      ++sources_["state.mocap.pose"].dropped_samples;
+      countDroppedLocked(ChannelId::kMocapPose);
       return;
     }
     mocap_position_ = projected.pose.position;
@@ -1542,31 +1495,31 @@ void RobotRuntime::mocapPoseCallback(
         now.toSec(), projected.pose.position.x,
         projected.pose.position.y, projected.pose.position.z);
 
-    if (channelEnabled("state.mocap.pose") &&
-        shouldEmitLocked("state.mocap.pose", now)) {
+    if (channelEnabled(ChannelId::kMocapPose) &&
+        shouldEmitLocked(ChannelId::kMocapPose, now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(projected.header.frame_id);
       copyVector(projected.pose.position, payload.mutable_position());
       copyQuaternion(projected.pose.orientation,
                      payload.mutable_orientation());
       output.push_back(makeEnvelopeLocked(
-          "state.mocap.pose", projected.header.stamp, payload));
-      recordOutputLocked("state.mocap.pose");
-    } else if (channelEnabled("state.mocap.pose")) {
-      ++sources_["state.mocap.pose"].dropped_samples;
+          ChannelId::kMocapPose, projected.header.stamp, payload));
+      recordOutputLocked(ChannelId::kMocapPose);
+    } else if (channelEnabled(ChannelId::kMocapPose)) {
+      countDroppedLocked(ChannelId::kMocapPose);
     }
     if (publish_vision_ && vision_publish_cadence_.take(now.toSec())) {
       publish_vision = true;
-      recordSourceLocked("state.vision.pose", now);
-      if (channelEnabled("state.vision.pose") &&
-          shouldEmitLocked("state.vision.pose", now)) {
+      recordSourceLocked(ChannelId::kVisionPose, now);
+      if (channelEnabled(ChannelId::kVisionPose) &&
+          shouldEmitLocked(ChannelId::kVisionPose, now)) {
         xgc::semantic::common::v1::PoseEstimate payload;
         payload.set_frame_id(projected.header.frame_id);
         copyVector(projected.pose.position, payload.mutable_position());
         copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
         output.push_back(makeEnvelopeLocked(
-            "state.vision.pose", projected.header.stamp, payload));
-        recordOutputLocked("state.vision.pose");
+            ChannelId::kVisionPose, projected.header.stamp, payload));
+        recordOutputLocked(ChannelId::kVisionPose);
       }
     }
     emitPositionErrorLocked(projected.header.stamp, now, &output);
@@ -1588,37 +1541,37 @@ void RobotRuntime::mocapVelocityCallback(
     return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (channelRequired("state.mocap.velocity"))
-      recordSourceLocked("state.mocap.velocity", now);
-    if (channelRequired("state.mocap.speed"))
-      recordSourceLocked("state.mocap.speed", now);
+    if (channelRequired(ChannelId::kMocapVelocity))
+      recordSourceLocked(ChannelId::kMocapVelocity, now);
+    if (channelRequired(ChannelId::kMocapSpeed))
+      recordSourceLocked(ChannelId::kMocapSpeed, now);
 
-    if (channelEnabled("state.mocap.velocity") &&
-        shouldEmitLocked("state.mocap.velocity", now)) {
+    if (channelEnabled(ChannelId::kMocapVelocity) &&
+        shouldEmitLocked(ChannelId::kMocapVelocity, now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyVector(message->twist.linear, payload.mutable_linear());
       copyVector(message->twist.angular, payload.mutable_angular());
       output.push_back(makeEnvelopeLocked(
-          "state.mocap.velocity", message->header.stamp, payload));
-      recordOutputLocked("state.mocap.velocity");
-    } else if (channelEnabled("state.mocap.velocity")) {
-      ++sources_["state.mocap.velocity"].dropped_samples;
+          ChannelId::kMocapVelocity, message->header.stamp, payload));
+      recordOutputLocked(ChannelId::kMocapVelocity);
+    } else if (channelEnabled(ChannelId::kMocapVelocity)) {
+      countDroppedLocked(ChannelId::kMocapVelocity);
     }
 
     const double speed = std::hypot(
         std::hypot(message->twist.linear.x, message->twist.linear.y),
         message->twist.linear.z);
-    if (channelEnabled("state.mocap.speed") && std::isfinite(speed) &&
-        shouldEmitLocked("state.mocap.speed", now)) {
+    if (channelEnabled(ChannelId::kMocapSpeed) && std::isfinite(speed) &&
+        shouldEmitLocked(ChannelId::kMocapSpeed, now)) {
       xgc::semantic::common::v1::SpeedEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       payload.set_meters_per_second(speed);
       output.push_back(makeEnvelopeLocked(
-          "state.mocap.speed", message->header.stamp, payload));
-      recordOutputLocked("state.mocap.speed");
-    } else if (channelEnabled("state.mocap.speed")) {
-      ++sources_["state.mocap.speed"].dropped_samples;
+          ChannelId::kMocapSpeed, message->header.stamp, payload));
+      recordOutputLocked(ChannelId::kMocapSpeed);
+    } else if (channelEnabled(ChannelId::kMocapSpeed)) {
+      countDroppedLocked(ChannelId::kMocapSpeed);
     }
   }
   canonical_velocity_publisher_.publish(*message);
@@ -1635,18 +1588,18 @@ void RobotRuntime::mocapAccelerationCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.mocap.acceleration", now);
-    if (channelEnabled("state.mocap.acceleration") &&
-        shouldEmitLocked("state.mocap.acceleration", now)) {
+    recordSourceLocked(ChannelId::kMocapAcceleration, now);
+    if (channelEnabled(ChannelId::kMocapAcceleration) &&
+        shouldEmitLocked(ChannelId::kMocapAcceleration, now)) {
       xgc::semantic::common::v1::AccelerationEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyVector(message->accel.linear, payload.mutable_linear());
       copyVector(message->accel.angular, payload.mutable_angular());
       output.push_back(makeEnvelopeLocked(
-          "state.mocap.acceleration", message->header.stamp, payload));
-      recordOutputLocked("state.mocap.acceleration");
-    } else if (channelEnabled("state.mocap.acceleration")) {
-      ++sources_["state.mocap.acceleration"].dropped_samples;
+          ChannelId::kMocapAcceleration, message->header.stamp, payload));
+      recordOutputLocked(ChannelId::kMocapAcceleration);
+    } else if (channelEnabled(ChannelId::kMocapAcceleration)) {
+      countDroppedLocked(ChannelId::kMocapAcceleration);
     }
   }
   canonical_acceleration_publisher_.publish(*message);
@@ -1662,18 +1615,19 @@ void RobotRuntime::px4VelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.velocity", now);
-    if (channelEnabled("state.velocity") &&
-        shouldEmitLocked("state.velocity", now)) {
+    recordSourceLocked(ChannelId::kVelocity, now);
+    if (channelEnabled(ChannelId::kVelocity) &&
+        shouldEmitLocked(ChannelId::kVelocity, now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyVector(message->twist.linear, payload.mutable_linear());
       copyVector(message->twist.angular, payload.mutable_angular());
       output.push_back(
-          makeEnvelopeLocked("state.velocity", message->header.stamp, payload));
-      recordOutputLocked("state.velocity");
-    } else if (channelEnabled("state.velocity")) {
-      ++sources_["state.velocity"].dropped_samples;
+          makeEnvelopeLocked(ChannelId::kVelocity, message->header.stamp,
+                             payload));
+      recordOutputLocked(ChannelId::kVelocity);
+    } else if (channelEnabled(ChannelId::kVelocity)) {
+      countDroppedLocked(ChannelId::kVelocity);
     }
   }
   emit(std::move(output));
@@ -1687,8 +1641,9 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.imu", now);
-    if (channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
+    recordSourceLocked(ChannelId::kImu, now);
+    if (channelEnabled(ChannelId::kImu) &&
+        shouldEmitLocked(ChannelId::kImu, now)) {
       xgc::semantic::common::v1::ImuEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyQuaternion(message->orientation, payload.mutable_orientation());
@@ -1702,10 +1657,10 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
       copyCovariance(message->linear_acceleration_covariance,
                      payload.mutable_linear_acceleration_covariance());
       output.push_back(
-          makeEnvelopeLocked("state.imu", message->header.stamp, payload));
-      recordOutputLocked("state.imu");
-    } else if (channelEnabled("state.imu")) {
-      ++sources_["state.imu"].dropped_samples;
+          makeEnvelopeLocked(ChannelId::kImu, message->header.stamp, payload));
+      recordOutputLocked(ChannelId::kImu);
+    } else if (channelEnabled(ChannelId::kImu)) {
+      countDroppedLocked(ChannelId::kImu);
     }
   }
   emit(std::move(output));
@@ -1720,8 +1675,9 @@ void RobotRuntime::batteryCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.power", now);
-    if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
+    recordSourceLocked(ChannelId::kPower, now);
+    if (channelEnabled(ChannelId::kPower) &&
+        shouldEmitLocked(ChannelId::kPower, now)) {
       xgc::semantic::common::v1::PowerStatus payload;
       if (std::isfinite(message->percentage))
         payload.set_percentage(message->percentage);
@@ -1735,10 +1691,11 @@ void RobotRuntime::batteryCallback(
           message->power_supply_status ==
           sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_CHARGING);
       output.push_back(
-          makeEnvelopeLocked("state.power", message->header.stamp, payload));
-      recordOutputLocked("state.power");
-    } else if (channelEnabled("state.power")) {
-      ++sources_["state.power"].dropped_samples;
+          makeEnvelopeLocked(ChannelId::kPower, message->header.stamp,
+                             payload));
+      recordOutputLocked(ChannelId::kPower);
+    } else if (channelEnabled(ChannelId::kPower)) {
+      countDroppedLocked(ChannelId::kPower);
     }
   }
   emit(std::move(output));
@@ -1754,15 +1711,16 @@ void RobotRuntime::controllerStatusCallback(
   const ros::Time stamp = ros::Time::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.controller", now);
-    if (channelEnabled("state.controller") &&
-        shouldEmitLocked("state.controller", now)) {
+    recordSourceLocked(ChannelId::kController, now);
+    if (channelEnabled(ChannelId::kController) &&
+        shouldEmitLocked(ChannelId::kController, now)) {
       xgc::semantic::common::v1::ControllerStatus payload;
       payload.set_text(message->data);
-      output.push_back(makeEnvelopeLocked("state.controller", stamp, payload));
-      recordOutputLocked("state.controller");
-    } else if (channelEnabled("state.controller")) {
-      ++sources_["state.controller"].dropped_samples;
+      output.push_back(
+          makeEnvelopeLocked(ChannelId::kController, stamp, payload));
+      recordOutputLocked(ChannelId::kController);
+    } else if (channelEnabled(ChannelId::kController)) {
+      countDroppedLocked(ChannelId::kController);
     }
   }
   emit(std::move(output));
@@ -1777,10 +1735,10 @@ void RobotRuntime::mavrosStateCallback(
   mavros_state_ = *message;
   has_mavros_state_ = true;
   mavros_state_last_seen_ = ros::WallTime::now();
-  if (channelRequired("state.health"))
-    recordStateSourceLocked("state.health", true);
-  if (channelRequired("state.flight"))
-    recordStateSourceLocked("state.flight", true);
+  if (channelRequired(ChannelId::kHealth))
+    recordStateSourceLocked(ChannelId::kHealth, true);
+  if (channelRequired(ChannelId::kFlight))
+    recordStateSourceLocked(ChannelId::kFlight, true);
 }
 
 void RobotRuntime::mavrosExtendedStateCallback(
@@ -1792,8 +1750,8 @@ void RobotRuntime::mavrosExtendedStateCallback(
   mavros_extended_state_ = *message;
   has_mavros_extended_state_ = true;
   mavros_extended_state_last_seen_ = ros::WallTime::now();
-  if (channelRequired("state.health"))
-    recordStateSourceLocked("state.health", false);
+  if (channelRequired(ChannelId::kHealth))
+    recordStateSourceLocked(ChannelId::kHealth, false);
 }
 
 void RobotRuntime::localSetpointCallback(
@@ -1813,9 +1771,9 @@ void RobotRuntime::localSetpointCallback(
         frame !=
             xgc::semantic::aerial::v1::LOCAL_COORDINATE_FRAME_UNSPECIFIED &&
         fields != 0 && finiteLocalSetpoint(*message, fields);
-    recordSourceLocked("setpoint.local", now);
-    if (channelEnabled("setpoint.local") &&
-        shouldEmitLocked("setpoint.local", now)) {
+    recordSourceLocked(ChannelId::kSetpointLocal, now);
+    if (channelEnabled(ChannelId::kSetpointLocal) &&
+        shouldEmitLocked(ChannelId::kSetpointLocal, now)) {
       xgc::semantic::aerial::v1::LocalTrajectorySetpoint payload;
       payload.set_frame_id(message->header.frame_id);
       payload.set_coordinate_frame(frame);
@@ -1833,10 +1791,11 @@ void RobotRuntime::localSetpointCallback(
       payload.set_acceleration_is_force(
           (message->type_mask & mavros_msgs::PositionTarget::FORCE) != 0);
       output.push_back(
-          makeEnvelopeLocked("setpoint.local", message->header.stamp, payload));
-      recordOutputLocked("setpoint.local");
-    } else if (channelEnabled("setpoint.local")) {
-      ++sources_["setpoint.local"].dropped_samples;
+          makeEnvelopeLocked(ChannelId::kSetpointLocal, message->header.stamp,
+                             payload));
+      recordOutputLocked(ChannelId::kSetpointLocal);
+    } else if (channelEnabled(ChannelId::kSetpointLocal)) {
+      countDroppedLocked(ChannelId::kSetpointLocal);
     }
   }
   emit(std::move(output));
@@ -1856,9 +1815,9 @@ void RobotRuntime::attitudeSetpointCallback(
     has_attitude_setpoint_ = true;
     valid_attitude_setpoint_ =
         fields != 0 && finiteAttitudeSetpoint(*message, fields);
-    recordSourceLocked("setpoint.attitude", now);
-    if (channelEnabled("setpoint.attitude") &&
-        shouldEmitLocked("setpoint.attitude", now)) {
+    recordSourceLocked(ChannelId::kSetpointAttitude, now);
+    if (channelEnabled(ChannelId::kSetpointAttitude) &&
+        shouldEmitLocked(ChannelId::kSetpointAttitude, now)) {
       xgc::semantic::aerial::v1::AttitudeSetpoint payload;
       payload.set_frame_id(message->header.frame_id);
       payload.set_valid_fields(fields);
@@ -1868,11 +1827,11 @@ void RobotRuntime::attitudeSetpointCallback(
                          fields, 1);
       if ((fields & (1u << 4)) != 0 && std::isfinite(message->thrust))
         payload.set_thrust(message->thrust);
-      output.push_back(makeEnvelopeLocked("setpoint.attitude",
+      output.push_back(makeEnvelopeLocked(ChannelId::kSetpointAttitude,
                                           message->header.stamp, payload));
-      recordOutputLocked("setpoint.attitude");
-    } else if (channelEnabled("setpoint.attitude")) {
-      ++sources_["setpoint.attitude"].dropped_samples;
+      recordOutputLocked(ChannelId::kSetpointAttitude);
+    } else if (channelEnabled(ChannelId::kSetpointAttitude)) {
+      countDroppedLocked(ChannelId::kSetpointAttitude);
     }
   }
   emit(std::move(output));
@@ -1887,9 +1846,9 @@ void RobotRuntime::timesyncStatusCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("diagnostic.fcu-link", now);
-    if (channelEnabled("diagnostic.fcu-link") &&
-        shouldEmitLocked("diagnostic.fcu-link", now)) {
+    recordSourceLocked(ChannelId::kFcuLink, now);
+    if (channelEnabled(ChannelId::kFcuLink) &&
+        shouldEmitLocked(ChannelId::kFcuLink, now)) {
       xgc::semantic::aerial::v1::FcuLinkStatus payload;
       payload.set_remote_timestamp_ns(
           static_cast<std::int64_t>(std::min<std::uint64_t>(
@@ -1900,11 +1859,11 @@ void RobotRuntime::timesyncStatusCallback(
       payload.set_estimated_offset_ns(message->estimated_offset_ns);
       if (std::isfinite(message->round_trip_time_ms))
         payload.set_round_trip_time_ms(message->round_trip_time_ms);
-      output.push_back(makeEnvelopeLocked("diagnostic.fcu-link",
+      output.push_back(makeEnvelopeLocked(ChannelId::kFcuLink,
                                           message->header.stamp, payload));
-      recordOutputLocked("diagnostic.fcu-link");
-    } else if (channelEnabled("diagnostic.fcu-link")) {
-      ++sources_["diagnostic.fcu-link"].dropped_samples;
+      recordOutputLocked(ChannelId::kFcuLink);
+    } else if (channelEnabled(ChannelId::kFcuLink)) {
+      countDroppedLocked(ChannelId::kFcuLink);
     }
   }
   emit(std::move(output));
@@ -1927,9 +1886,9 @@ void RobotRuntime::emitPx4PeriodicLocked(
     const ros::WallTime &now,
     std::vector<xgc::robot::v1::RobotMessage> *messages) {
   const double health_stale_after =
-      channelStaleAfterSeconds(profile_id_, "state.health");
+      channelStaleAfterSeconds(channels_[ChannelId::kHealth]);
   const double flight_stale_after =
-      channelStaleAfterSeconds(profile_id_, "state.flight");
+      channelStaleAfterSeconds(channels_[ChannelId::kFlight]);
   const bool health_state_fresh =
       has_mavros_state_ &&
       sourceIsFresh(mavros_state_last_seen_, now, health_stale_after);
@@ -1943,7 +1902,8 @@ void RobotRuntime::emitPx4PeriodicLocked(
       has_mavros_extended_state_ &&
       sourceIsFresh(mavros_extended_state_last_seen_, now, flight_stale_after);
 
-  if (channelEnabled("state.health") && shouldEmitLocked("state.health", now)) {
+  if (channelEnabled(ChannelId::kHealth) &&
+      shouldEmitLocked(ChannelId::kHealth, now)) {
     xgc::semantic::common::v1::VehicleHealth payload;
     const bool online = px4IsOnline(has_mavros_state_, health_state_fresh,
                                     mavros_state_.connected);
@@ -1982,11 +1942,12 @@ void RobotRuntime::emitPx4PeriodicLocked(
     }
     const ros::Time stamp =
         has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();
-    messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
-    recordOutputLocked("state.health");
+    messages->push_back(makeEnvelopeLocked(ChannelId::kHealth, stamp, payload));
+    recordOutputLocked(ChannelId::kHealth);
   }
 
-  if (channelEnabled("state.flight") && shouldEmitLocked("state.flight", now)) {
+  if (channelEnabled(ChannelId::kFlight) &&
+      shouldEmitLocked(ChannelId::kFlight, now)) {
     xgc::semantic::aerial::v1::FlightStatus payload;
     payload.set_connected(flight_state_fresh && mavros_state_.connected);
     payload.set_armed(flight_state_fresh && mavros_state_.armed);
@@ -1997,22 +1958,23 @@ void RobotRuntime::emitPx4PeriodicLocked(
         flight_extended_fresh ? mavros_extended_state_.landed_state : 0u);
     const ros::Time stamp =
         has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();
-    messages->push_back(makeEnvelopeLocked("state.flight", stamp, payload));
-    recordOutputLocked("state.flight");
+    messages->push_back(makeEnvelopeLocked(ChannelId::kFlight, stamp, payload));
+    recordOutputLocked(ChannelId::kFlight);
   }
 
-  if (channelRequired("diagnostic.offboard-input")) {
-    recordSourceLocked("diagnostic.offboard-input", now);
+  if (channelRequired(ChannelId::kOffboardInput)) {
+    recordSourceLocked(ChannelId::kOffboardInput, now);
   }
-  if (channelEnabled("diagnostic.offboard-input") &&
-      shouldEmitLocked("diagnostic.offboard-input", now)) {
+  if (channelEnabled(ChannelId::kOffboardInput) &&
+      shouldEmitLocked(ChannelId::kOffboardInput, now)) {
     xgc::semantic::aerial::v1::OffboardInputStatus payload;
-    const auto local_it = sources_.find("setpoint.local");
-    const auto attitude_it = sources_.find("setpoint.attitude");
-    const bool local_seen = has_local_setpoint_ && local_it != sources_.end() &&
+    auto &sources = channels_.sources();
+    const auto local_it = sources.find("setpoint.local");
+    const auto attitude_it = sources.find("setpoint.attitude");
+    const bool local_seen = has_local_setpoint_ && local_it != sources.end() &&
                             !local_it->second.last_seen.isZero();
     const bool attitude_seen = has_attitude_setpoint_ &&
-                               attitude_it != sources_.end() &&
+                               attitude_it != sources.end() &&
                                !attitude_it->second.last_seen.isZero();
     const bool use_local =
         local_seen && (!attitude_seen || local_it->second.last_seen >=
@@ -2068,30 +2030,30 @@ void RobotRuntime::emitPx4PeriodicLocked(
             ? local_setpoint_.header.stamp
             : (attitude_seen ? attitude_setpoint_.header.stamp : ros::Time());
     messages->push_back(
-        makeEnvelopeLocked("diagnostic.offboard-input", stamp, payload));
-    recordOutputLocked("diagnostic.offboard-input");
+        makeEnvelopeLocked(ChannelId::kOffboardInput, stamp, payload));
+    recordOutputLocked(ChannelId::kOffboardInput);
   }
 }
 
 void RobotRuntime::emitStreamHealthLocked(
     const ros::WallTime &now,
     std::vector<xgc::robot::v1::RobotMessage> *messages) {
-  if (!channelEnabled("diagnostic.stream-health") ||
-      !shouldEmitLocked("diagnostic.stream-health", now)) {
+  if (!channelEnabled(ChannelId::kStreamHealth) ||
+      !shouldEmitLocked(ChannelId::kStreamHealth, now)) {
     return;
   }
-  contract::ChannelMetadata health_channel{};
-  if (!contract::channelMetadata(profile_id_, "diagnostic.stream-health",
-                                 &health_channel)) {
+  const ChannelTable::Channel &health_channel =
+      channels_[ChannelId::kStreamHealth];
+  if (!health_channel.metadata_found) {
     throw std::logic_error("stream-health descriptor is missing");
   }
   xgc::semantic::common::v1::StreamHealthReport report;
-  for (std::size_t index = 0u; index < health_channel.observes_count; ++index) {
-    const std::string channel_id = health_channel.observes[index];
+  auto &sources = channels_.sources();
+  for (const std::string &channel_id : health_channel.observes) {
     if (!publish_vision_ && channel_id == "state.vision.pose")
       continue;
-    auto source_it = sources_.find(channel_id);
-    if (source_it == sources_.end()) {
+    auto source_it = sources.find(channel_id);
+    if (source_it == sources.end()) {
       throw std::logic_error("observed semantic source was not installed: " +
                              channel_id);
     }
@@ -2121,7 +2083,7 @@ void RobotRuntime::emitStreamHealthLocked(
         !sourceIsFresh(source.last_seen, now, source.stale_after_seconds));
   }
   messages->push_back(
-      makeEnvelopeLocked("diagnostic.stream-health", ros::Time(), report));
+      makeEnvelopeLocked(ChannelId::kStreamHealth, ros::Time(), report));
 }
 
 } // namespace xgc_px4_multirotor_ros1_adapter
