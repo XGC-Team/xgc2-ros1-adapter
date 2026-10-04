@@ -224,6 +224,7 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   EXPECT_DOUBLE_EQ(2.5, native.offboard_minimum_rate_hz);
   EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
   EXPECT_DOUBLE_EQ(5.0, native.maximum_operation_timeout_seconds);
+  EXPECT_TRUE(native.publish_vision);
   EXPECT_DOUBLE_EQ(30.0, native.vision_publish_rate_hz);
   EXPECT_EQ(
       (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
@@ -284,6 +285,28 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
   EXPECT_FALSE(px4IsOnline(false, true, true));
   EXPECT_FALSE(px4IsOnline(true, false, true));
   EXPECT_FALSE(px4IsOnline(true, true, false));
+}
+
+TEST(InstalledProfile, VisionForwardingIsOptionalAndRequiresAnExplicitBoolean) {
+  auto config = makeProfileConfig();
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_TRUE(native.publish_vision);
+
+  config.parameters["publish_vision"] = "false";
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_FALSE(native.publish_vision);
+  EXPECT_EQ("/uav1/mavros/local_position/pose", native.pose_endpoint);
+  EXPECT_EQ("/uav1/pose", native.canonical_pose_endpoint);
+  EXPECT_EQ("/vrpn_client_node_physical/FS150_01/pose", native.mocap_endpoint);
+
+  config.parameters["publish_vision"] = "true";
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_TRUE(native.publish_vision);
+
+  config.parameters["publish_vision"] = "0";
+  EXPECT_FALSE(BuildNativeProfileConfig(config, &native, &error));
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {

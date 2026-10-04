@@ -46,6 +46,11 @@ parameters:
     required: false
     delivery: target_binding
     description: Run-frozen Experiment world Z translation injected by Robot runtime.
+  publish_vision:
+    type: boolean
+    required: false
+    delivery: target_binding
+    description: Forward mocap pose to MAVROS external vision; omitted defaults to true.
   positioning_frame_number:
     type: integer
     required: true

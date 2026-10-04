@@ -463,8 +463,10 @@ bool BuildNativeProfileConfig(
     return fail(error, "PX4 native profile identity is unsupported");
 
   if (config.parameters.size() - config.parameters.count("ros_master_uri") -
-          config.parameters.count("ros_ip") != 8u)
+          config.parameters.count("ros_ip") -
+          config.parameters.count("publish_vision") != 8u)
     return fail(error, "PX4 native parameter binding is not exhaustive");
+  contract::ParameterMetadata publish_vision_parameter{};
   contract::ParameterMetadata namespace_descriptor{};
   contract::ParameterMetadata mocap_parameter{};
   contract::ParameterMetadata positioning_frames{};
@@ -473,7 +475,11 @@ bool BuildNativeProfileConfig(
   contract::ParameterMetadata offset_x{};
   contract::ParameterMetadata offset_y{};
   contract::ParameterMetadata offset_z{};
-  if (!contract::parameterMetadata(config.profile_id, "namespace",
+  if (!contract::parameterMetadata(config.profile_id, "publish_vision",
+                                   &publish_vision_parameter) ||
+      publish_vision_parameter.type != contract::ParameterType::kBoolean ||
+      publish_vision_parameter.required ||
+      !contract::parameterMetadata(config.profile_id, "namespace",
                                    &namespace_descriptor) ||
       namespace_descriptor.type != contract::ParameterType::kString ||
       !namespace_descriptor.required ||
@@ -580,6 +586,12 @@ bool BuildNativeProfileConfig(
   }
 
   NativeProfileConfig candidate;
+  const auto publish_vision = config.parameters.find("publish_vision");
+  if (publish_vision != config.parameters.end()) {
+    if (publish_vision->second != "true" && publish_vision->second != "false")
+      return fail(error, "PX4 publish_vision parameter must be true or false");
+    candidate.publish_vision = publish_vision->second == "true";
+  }
   std::string flight_state_endpoint;
   std::string flight_extended_state_endpoint;
   std::string mocap_speed_endpoint;
@@ -911,6 +923,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
           std::move(native_profile.extended_state_endpoint)),
       mocap_endpoint_(std::move(native_profile.mocap_endpoint)),
       vision_pose_endpoint_(std::move(native_profile.vision_pose_endpoint)),
+      publish_vision_(native_profile.publish_vision),
       mocap_velocity_endpoint_(
           std::move(native_profile.mocap_velocity_endpoint)),
       mocap_acceleration_endpoint_(
@@ -1038,13 +1051,16 @@ bool RobotRuntime::installPx4(std::string *error) {
       node_handle_.advertise<geometry_msgs::TwistStamped>(canonical_velocity_endpoint_, 20, false);
   canonical_acceleration_publisher_ =
       node_handle_.advertise<geometry_msgs::AccelStamped>(canonical_acceleration_endpoint_, 20, false);
-  vision_pose_publisher_ =
-      node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 20, false);
   if (!requireRosRegistration(canonical_pose_publisher_, canonical_pose_endpoint_, error) ||
       !requireRosRegistration(canonical_velocity_publisher_, canonical_velocity_endpoint_, error) ||
-      !requireRosRegistration(canonical_acceleration_publisher_, canonical_acceleration_endpoint_, error) ||
-      !requireRosRegistration(vision_pose_publisher_, vision_pose_endpoint_, error))
+      !requireRosRegistration(canonical_acceleration_publisher_, canonical_acceleration_endpoint_, error))
     return false;
+  if (publish_vision_) {
+    vision_pose_publisher_ =
+        node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 20, false);
+    if (!requireRosRegistration(vision_pose_publisher_, vision_pose_endpoint_, error))
+      return false;
+  }
   if (channelRequired("state.localization.error")) {
     ensureSourceLocked(
         "state.localization.error",
@@ -1075,7 +1091,7 @@ bool RobotRuntime::installPx4(std::string *error) {
     if (!requireRosRegistration(mocap_subscriber_, mocap_endpoint_, error))
       return false;
   }
-  if (channelRequired("state.vision.pose")) {
+  if (publish_vision_ && channelRequired("state.vision.pose")) {
     ensureSourceLocked(
         "state.vision.pose",
         channelStaleAfterSeconds(profile_id_, "state.vision.pose"));
@@ -1539,7 +1555,7 @@ void RobotRuntime::mocapPoseCallback(
     } else if (channelEnabled("state.mocap.pose")) {
       ++sources_["state.mocap.pose"].dropped_samples;
     }
-    if (vision_publish_cadence_.take(now.toSec())) {
+    if (publish_vision_ && vision_publish_cadence_.take(now.toSec())) {
       publish_vision = true;
       recordSourceLocked("state.vision.pose", now);
       if (channelEnabled("state.vision.pose") &&
@@ -2072,6 +2088,8 @@ void RobotRuntime::emitStreamHealthLocked(
   xgc::semantic::common::v1::StreamHealthReport report;
   for (std::size_t index = 0u; index < health_channel.observes_count; ++index) {
     const std::string channel_id = health_channel.observes[index];
+    if (!publish_vision_ && channel_id == "state.vision.pose")
+      continue;
     auto source_it = sources_.find(channel_id);
     if (source_it == sources_.end()) {
       throw std::logic_error("observed semantic source was not installed: " +

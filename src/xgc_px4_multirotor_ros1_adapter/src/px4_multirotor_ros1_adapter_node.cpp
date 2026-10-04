@@ -445,7 +445,8 @@ private:
       return false;
     }
     if ((robot.parameters.size() - robot.parameters.count("ros_master_uri") -
-         robot.parameters.count("ros_ip")) != 8 ||
+         robot.parameters.count("ros_ip") -
+         robot.parameters.count("publish_vision")) != 8 ||
         robot.parameters.find("namespace") == robot.parameters.end() ||
         robot.parameters.find("mocap_rigid_body") == robot.parameters.end() ||
         robot.parameters.find("mocap_source_root") == robot.parameters.end() ||

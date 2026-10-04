@@ -61,6 +61,7 @@ struct NativeProfileConfig {
   double remote_control_altitude_meters = 0.0;
   double remote_control_maximum_linear_velocity_mps = 0.0;
   double remote_control_maximum_yaw_rate_rps = 0.0;
+  bool publish_vision = true;
   double vision_publish_rate_hz = 30.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   std::vector<std::string> allowed_modes;
@@ -230,6 +231,7 @@ private:
   const std::string extended_state_endpoint_;
   const std::string mocap_endpoint_;
   const std::string vision_pose_endpoint_;
+  const bool publish_vision_;
   const std::string mocap_velocity_endpoint_;
   const std::string mocap_acceleration_endpoint_;
   const std::string canonical_pose_endpoint_;

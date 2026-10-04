@@ -245,6 +245,9 @@ class ContractGeneratorTest(unittest.TestCase):
         )
 
         px4 = px4_profiles["px4.multirotor.ros1.v9"]
+        self.assertEqual(px4["parameters"]["publish_vision"]["type"], "boolean")
+        self.assertFalse(px4["parameters"]["publish_vision"]["required"])
+        self.assertEqual(px4["parameters"]["publish_vision"]["delivery"], "target_binding")
         px4_channels = {channel["id"]: channel for channel in px4["channels"]}
         self.assertEqual(
             set(px4_channels),
