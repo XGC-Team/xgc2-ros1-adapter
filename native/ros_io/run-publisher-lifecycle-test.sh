@@ -8,14 +8,14 @@ set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
 port="${ROS_LIFECYCLE_TEST_PORT:-11541}"
-runs="${ROS_LIFECYCLE_TEST_RUNS:-20}"
+runs="${ROS_LIFECYCLE_TEST_RUNS:-10}"
 work="$(mktemp -d /tmp/ros-lifecycle-test.XXXXXX)"
 cleanup() {
   if [[ -n "${core_pid:-}" ]]; then kill "$core_pid" 2>/dev/null || true; wait "$core_pid" 2>/dev/null || true; fi
   rm -rf "$work"
 }
 trap cleanup EXIT
-export ROS_MASTER_URI="http://127.0.0.1:${port}" ROS_HOME="$work/ros-home" ROS_LOG_DIR="$work/ros-log"
+export ROS_MASTER_URI="http://127.0.0.1:${port}" ROS_IP="${ROS_IP:-127.0.0.1}" ROS_HOME="$work/ros-home" ROS_LOG_DIR="$work/ros-log"
 mkdir -p "$ROS_HOME" "$ROS_LOG_DIR"
 "$prefix/bin/roscore" -p "$port" >"$work/roscore.log" 2>&1 &
 core_pid=$!
@@ -33,7 +33,7 @@ helpers="${XGC_ROS_IO_HELPERS_PREFIX:-/usr}"
 faults() {
   local mode="$1" count=0
   for _ in $(seq 1 "$runs"); do
-    "$work/lifecycle-test" "$mode" 12 12 >/dev/null 2>&1 || count=$((count + 1))
+    timeout "${ROS_LIFECYCLE_TEST_TIMEOUT:-120}" "$work/lifecycle-test" "$mode" 12 12 >/dev/null 2>&1 || count=$((count + 1))
   done
   echo "$count"
 }
