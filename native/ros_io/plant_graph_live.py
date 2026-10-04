@@ -17,6 +17,14 @@ the host with SIGTERM. Nothing else runs: no Gazebo, SITL, MAVROS or controller.
 
 `compare` exits 0 when both runs published exactly the same (topic, type) set,
 subscribed the same topics and served the same services.
+
+`run` exits nonzero when the host does not exit 0. `stop-stress` runs the host
+`--runs` times on the same manifest, each for `--seconds` after the epoch,
+stops it with SIGTERM and fails on any exit other than 0: the Stop path of many
+edges unadvertising together (see ros_publisher_lifecycle_test.cpp for the
+roscpp defect it exercises). With 30 per-robot edges and roscpp as released,
+the host faulted in a share of the runs before the edges serialized their
+publisher lifecycle.
 """
 import argparse
 import hashlib
@@ -130,7 +138,22 @@ def run(args):
         master.wait(10)
     print("host exit %s; %d published topics, %d subscribed, %d services" %
           (host.returncode, len(graph["published"]), len(graph["subscribed"]), len(graph["services"])))
-    return 0
+    return 0 if host.returncode == 0 else 1
+
+
+def stop_stress(args):
+    failures = []
+    for index in range(args.runs):
+        args.output_dir = str(Path(args.output_root) / ("run-%03d" % index))
+        args.port = args.port_base + index
+        status = run(args)
+        if status != 0:
+            failures.append(index)
+        if not args.keep and status == 0:
+            subprocess.run(["rm", "-rf", args.output_dir], check=False)
+    print("stop-stress: %d of %d runs ended with a host exit other than 0%s" %
+          (len(failures), args.runs, "" if not failures else " (runs %s)" % failures))
+    return 1 if failures else 0
 
 
 def compare(args):
@@ -158,11 +181,21 @@ def main():
     r.add_argument("--port", type=int, default=11411)
     r.add_argument("--seconds", type=float, default=5.0)
     r.add_argument("--output-dir", required=True)
+    t = sub.add_parser("stop-stress")
+    t.add_argument("--manifest", required=True)
+    t.add_argument("--host", required=True)
+    t.add_argument("--role", action="append", default=[], metavar="ROLE=PATH")
+    t.add_argument("--rosmaster", required=True)
+    t.add_argument("--port-base", type=int, default=11500)
+    t.add_argument("--runs", type=int, default=20)
+    t.add_argument("--seconds", type=float, default=1.0)
+    t.add_argument("--output-root", required=True)
+    t.add_argument("--keep", action="store_true", help="keep the output of passing runs")
     c = sub.add_parser("compare")
     c.add_argument("first")
     c.add_argument("second")
     args = parser.parse_args()
-    return run(args) if args.command == "run" else compare(args)
+    return {"run": run, "stop-stress": stop_stress, "compare": compare}[args.command](args)
 
 
 if __name__ == "__main__":

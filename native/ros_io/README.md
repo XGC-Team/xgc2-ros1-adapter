@@ -98,3 +98,20 @@ edges. `bash run-sim-edge-batch-test.sh` checks the layout, the config split,
 the tee and the per-robot host without ROS. `plant_graph_live.py` runs the real
 Host with a Core-generated manifest and prints the ROS graph the plant creates,
 to compare the per-robot and the batched layout.
+
+## Publisher lifecycle
+
+roscpp's `TopicManager::unadvertise` finds a `Publication` under its mutex,
+releases the mutex, and later erases it with the iterator from the first
+critical section (ros_comm 1.16.0 and 1.17.x are identical). A concurrent
+advertise or unadvertise in the same process makes that iterator stale: the
+erase removes another topic's `Publication`, and the next publish on that topic
+dereferences a null `Publication` (`TopicManager::publish` does not check the
+lookup): a segmentation fault in `Publisher::publish`. Every `RosIo` therefore
+advertises and unadvertises its publishers under
+`xgc_ros_edge::publisher_lifecycle_mutex()` (`activate`, `release_publishers`).
+`ros_publisher_lifecycle_test.cpp` reproduces the defect with roscpp alone
+(`run-publisher-lifecycle-test.sh`; the `raw` mode is informational, `guarded`
+must never fault). `plant_graph_live.py stop-stress` exercises the real Host.
+Threads of other plugins in the same process that advertise publishers must
+take the same mutex.

@@ -326,7 +326,27 @@ struct RosIo {
   std::vector<std::string> call_log;
   bool calls_stop{false};
 
-  ~RosIo() { stop_provider_services(); stop_sim_services(); stop_calls(); }
+  ~RosIo() {
+    stop_provider_services();
+    stop_sim_services();
+    stop_calls();
+    release_publishers();
+  }
+
+  // Unadvertises every publisher of this edge and releases its NodeHandle.
+  // roscpp's TopicManager::unadvertise is not safe against a concurrent
+  // advertise or unadvertise in the same process (it erases with an iterator
+  // from an earlier critical section, so it can remove another topic's
+  // Publication, and the next publish on that topic faults), so all edges of a
+  // process take one mutex for it (ros_publisher_lifecycle_test.cpp).
+  void release_publishers() {
+    std::lock_guard<std::mutex> lifecycle(xgc_ros_edge::publisher_lifecycle_mutex());
+    sim_odometry_pub.shutdown();
+    sim_body_pose_pub.shutdown();
+    sim_hover_thrust_trace_pub.shutdown();
+    for (auto& p : pubs) p.shutdown();
+    nh.reset();
+  }
 
 
 
@@ -1111,6 +1131,9 @@ struct RosIo {
       log(XGC_LOG_ERROR, std::string("ros_io: ") + ros_init.error);
       return XGC_ERR;
     }
+    // Publishers are advertised under the process lifecycle mutex (see
+    // release_publishers); subscribers and services do not need it.
+    std::lock_guard<std::mutex> lifecycle(xgc_ros_edge::publisher_lifecycle_mutex());
     nh = std::make_unique<ros::NodeHandle>();
     nh->setCallbackQueue(&queue);
     if (enabled(kImu)) subs.push_back(nh->subscribe(topics[kImu], queue_size, &RosIo::on_imu, this));
@@ -1245,13 +1268,10 @@ struct RosIo {
     stop_provider_services();
     stop_sim_services();
     stop_calls();
-    sim_odometry_pub.shutdown();
-    sim_body_pose_pub.shutdown();
     sim_command_service.shutdown();
     sim_set_mode_service.shutdown();
     subs.clear();
-    for (auto& p : pubs) p.shutdown();
-    nh.reset();
+    release_publishers();
   }
 };
 

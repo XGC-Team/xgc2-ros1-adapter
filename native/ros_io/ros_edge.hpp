@@ -35,6 +35,14 @@ __attribute__((visibility("default"))) std::string& frozen_node_name();
 
 __attribute__((visibility("default"))) std::string bare_node_name(std::string name);
 
+// roscpp's TopicManager::unadvertise erases a Publication with an iterator
+// taken in an earlier critical section, so a concurrent advertise or
+// unadvertise in the same process can make it erase another topic's
+// Publication, and the next publish on that topic faults. Every plugin thread
+// that advertises or unadvertises a publisher holds this mutex while it does
+// (ros_publisher_lifecycle_test.cpp reproduces the defect).
+__attribute__((visibility("default"))) std::mutex& publisher_lifecycle_mutex();
+
 // Initialize ROS at most once. A later caller must repeat the same bare node
 // name; the master and ROS_IP stay those of the process environment.
 __attribute__((visibility("default"))) RosInit ensure_ros(const std::string& requested_bare);

@@ -29,6 +29,11 @@ std::mutex& ros_init_mu() {
   return mu;
 }
 
+std::mutex& publisher_lifecycle_mutex() {
+  static std::mutex mu;
+  return mu;
+}
+
 std::string& frozen_node_name() {
   static std::string name;
   return name;
