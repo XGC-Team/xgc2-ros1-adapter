@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <google/protobuf/message.h>
@@ -44,6 +46,8 @@ struct RobotAdapterConfig {
   std::map<std::string, std::string> scope_attributes;
   std::string robot_selection_digest;
   std::vector<RobotConfig> robots;
+  // Published with the complete validated spec; entries refer to roster slots.
+  std::unordered_map<std::string, std::size_t> robot_indices;
 };
 
 struct MessageSchema {

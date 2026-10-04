@@ -223,6 +223,8 @@ TEST(RobotAdapterConfigDecoder, ProjectsTypedSpecAndFence) {
   EXPECT_EQ("run-123", decoded.scope_attributes.at("run-id"));
   EXPECT_EQ(kRobotSelectionDigest, decoded.robot_selection_digest);
   ASSERT_EQ(1u, decoded.robots.size());
+  ASSERT_EQ(1u, decoded.robot_indices.size());
+  EXPECT_EQ(0u, decoded.robot_indices.at("px4-01"));
   EXPECT_EQ("px4-01", decoded.robots[0].robot_id);
   EXPECT_EQ("/uav1", decoded.robots[0].parameters.at("namespace"));
   ASSERT_EQ(2u, decoded.robots[0].channels.size());
@@ -420,6 +422,7 @@ TEST(RobotAdapterConfigDecoder, EnforcesRobotParameterMapBounds) {
 TEST(RobotAdapterConfigDecoder, FailureDoesNotReplacePreviousConfig) {
   RobotAdapterConfig decoded;
   decoded.robot_selection_digest = "preserve-me";
+  decoded.robot_indices.emplace("preserve-me", 42u);
   auto invalid = makeValidInstanceSpec();
   invalid.set_revision(0u);
   std::string error;
@@ -427,6 +430,99 @@ TEST(RobotAdapterConfigDecoder, FailureDoesNotReplacePreviousConfig) {
   EXPECT_FALSE(DecodeRobotAdapterConfig(invalid, robotConfigSchema(), &decoded,
                                         &error));
   EXPECT_EQ("preserve-me", decoded.robot_selection_digest);
+  EXPECT_EQ(42u, decoded.robot_indices.at("preserve-me"));
+}
+
+TEST(RuntimeSupport, SubjectUsesWholeSpecIndexAcrossCopyMoveAndReplacement) {
+  auto instance = makeValidInstanceSpec();
+  auto robots = robotSpecFrom(instance);
+  const auto prototype = robots.robots(0);
+  robots.clear_robots();
+  for (std::size_t index = 0; index < 100u; ++index) {
+    auto* robot = robots.add_robots();
+    *robot = prototype;
+    robot->set_robot_id("px4-" + std::to_string(index));
+    (*robot->mutable_parameters())["namespace"] = "/uav" + std::to_string(index + 1);
+    (*robot->mutable_parameters())["mocap_rigid_body"] = "px4_" + std::to_string(index);
+  }
+  ASSERT_TRUE(replaceRobotSpec(robots, &instance));
+  RobotAdapterConfig decoded;
+  std::string error;
+  ASSERT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &decoded,
+                                       &error)) << error;
+  ASSERT_EQ(100u, decoded.robot_indices.size());
+  for (std::size_t index = 0; index < decoded.robots.size(); ++index)
+    EXPECT_EQ(index, decoded.robot_indices.at(decoded.robots[index].robot_id));
+  RobotAdapterConfig copied = decoded;
+  RobotAdapterConfig moved = std::move(copied);
+
+  xgc::adapter::v1::WorkContext context;
+  auto* subject = context.mutable_subject();
+  subject->set_kind("robot-resource");
+  subject->set_key(kSpecDigest);
+  (*subject->mutable_attributes())["target-id"] = "local";
+  (*subject->mutable_attributes())["run-id"] = "run-123";
+  (*subject->mutable_attributes())["robot-id"] = "px4-99";
+  std::string robot_id;
+  ASSERT_TRUE(ResolveRobotSubject(context, moved, &robot_id, &error)) << error;
+  EXPECT_EQ("px4-99", robot_id);
+  ASSERT_TRUE(ResolveRobotSubject(context, moved, &robot_id, &error)) << error;
+  EXPECT_EQ(100u, moved.robot_indices.size());
+
+  auto invalid = instance;
+  invalid.set_revision(0u);
+  EXPECT_FALSE(DecodeRobotAdapterConfig(invalid, robotConfigSchema(), &moved,
+                                        &error));
+  EXPECT_TRUE(ResolveRobotSubject(context, moved, &robot_id, &error));
+  robots.clear_robots();
+  *robots.add_robots() = prototype;
+  ASSERT_TRUE(replaceRobotSpec(robots, &instance));
+  ASSERT_TRUE(DecodeRobotAdapterConfig(instance, robotConfigSchema(), &moved,
+                                       &error)) << error;
+  EXPECT_EQ(1u, moved.robot_indices.size());
+  EXPECT_EQ(0u, moved.robot_indices.count("px4-99"));
+  EXPECT_FALSE(ResolveRobotSubject(context, moved, &robot_id, &error));
+  (*subject->mutable_attributes())["robot-id"] = "px4-01";
+  EXPECT_TRUE(ResolveRobotSubject(context, moved, &robot_id, &error));
+}
+
+TEST(RuntimeSupport, IndexedSubjectKeepsScopeAndMembershipFences) {
+  RobotAdapterConfig decoded;
+  std::string error;
+  ASSERT_TRUE(DecodeRobotAdapterConfig(makeValidInstanceSpec(), robotConfigSchema(),
+                                       &decoded, &error)) << error;
+  xgc::adapter::v1::WorkContext context;
+  auto* subject = context.mutable_subject();
+  subject->set_kind("robot-resource");
+  subject->set_key(kSpecDigest);
+  (*subject->mutable_attributes())["target-id"] = "local";
+  (*subject->mutable_attributes())["run-id"] = "run-123";
+  (*subject->mutable_attributes())["robot-id"] = "px4-01";
+  std::string robot_id;
+  ASSERT_TRUE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  subject->clear_key();
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  subject->set_key(kSpecDigest);
+  subject->set_kind("robot-group");
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  subject->set_kind("robot-resource");
+  (*subject->mutable_attributes())["extra"] = "untrusted";
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  subject->mutable_attributes()->erase("extra");
+  (*subject->mutable_attributes())["target-id"] = "other";
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  (*subject->mutable_attributes())["target-id"] = "local";
+  (*subject->mutable_attributes())["run-id"] = "other";
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  (*subject->mutable_attributes())["run-id"] = "run-123";
+  (*subject->mutable_attributes())["robot-id"] = "not-in-roster";
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  (*subject->mutable_attributes())["robot-id"] = "px4-01";
+  decoded.robot_indices["px4-01"] = decoded.robots.size();
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
+  decoded.robot_indices["px4-01"] = 0u;
+  decoded.robots[0].robot_id = "other";
+  EXPECT_FALSE(ResolveRobotSubject(context, decoded, &robot_id, &error));
 }
 
 TEST(RobotMessageBuilder, BuildsSchemaAwareRoutedProtobufMessage) {

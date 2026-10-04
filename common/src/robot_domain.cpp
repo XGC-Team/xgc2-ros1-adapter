@@ -221,12 +221,15 @@ bool DecodeRobotAdapterConfig(
   candidate.robot_selection_digest = robot_spec.robot_selection_digest();
   candidate.robots.reserve(static_cast<std::size_t>(robot_spec.robots_size()));
 
-  std::set<std::string> robot_ids;
+  candidate.robot_indices.reserve(
+      static_cast<std::size_t>(robot_spec.robots_size()));
   for (const auto &robot : robot_spec.robots()) {
     if (!validRobotId(robot.robot_id()))
       return fail(error, "RobotAdapterSpec contains an invalid robot_id: " +
                              robot.robot_id());
-    if (!robot_ids.insert(robot.robot_id()).second)
+    if (!candidate.robot_indices
+             .emplace(robot.robot_id(), candidate.robots.size())
+             .second)
       return fail(error, "RobotAdapterSpec repeats robot_id: " +
                              robot.robot_id());
     if (!validProfileId(robot.profile_id())) {

@@ -123,14 +123,10 @@ bool ResolveRobotSubject(const xgc::adapter::v1::WorkContext &context,
       target->second != expected_target->second || run->second != expected_run->second) {
     return fail(error, "robot subject crosses the applied target/run scope");
   }
-  bool found = false;
-  for (const auto &candidate : configuration.robots) {
-    if (candidate.robot_id == robot->second) {
-      found = true;
-      break;
-    }
-  }
-  if (!found)
+  const auto member = configuration.robot_indices.find(robot->second);
+  if (member == configuration.robot_indices.end() ||
+      member->second >= configuration.robots.size() ||
+      configuration.robots[member->second].robot_id != robot->second)
     return fail(error, "robot subject is not present in the applied instance spec");
   *robot_id = robot->second;
   if (error != nullptr)

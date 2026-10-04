@@ -726,12 +726,7 @@ private:
                               "source-generation-exhausted",
                               "telemetry source generation is exhausted");
       }
-      for (const auto &candidate : configuration_.robots) {
-        if (candidate.robot_id == robot_id) {
-          robot = candidate;
-          break;
-        }
-      }
+      robot = configuration_.robots[configuration_.robot_indices.at(robot_id)];
       fence = configuration_.fence;
       locator.robot_id = robot_id;
       locator.source_generation = ++next_source_generation_;
