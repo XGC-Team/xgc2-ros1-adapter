@@ -1417,6 +1417,9 @@ const xgc_plugin_descriptor kDescriptor = {
 
 }  // namespace
 
+// ros_sim_edge.cpp includes this file for `RosIo` and brings its own entry.
+#ifndef XGC_ROS_IO_NO_ENTRY
 extern "C" __attribute__((visibility("default"))) const xgc_plugin_descriptor* xgc_rt_plugin_v1(void) {
   return &kDescriptor;
 }
+#endif

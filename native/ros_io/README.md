@@ -69,3 +69,32 @@ python3 plugins/ros-io/lightweight_controller_live.py \
 ```
 
 The output directory receives separate plant and controller manifests, Host logs, audit directories, and `controller-live-result.json` with both process IDs and exit codes.
+
+## Batched simulation edge (`ros_sim_edge`)
+
+`ros_sim_edge.cpp` builds the plugin `ros-sim-edge` (second output of
+`build.sh OUTPUT.so SIM_EDGE_OUTPUT.so`). It serves up to six simulated robots
+of one lightweight-plant batch from one module thread: per robot and role it
+runs the unchanged `RosIo` of `ros_io.cpp` (the file is included as it is, only
+its plugin entry point is left out), so topics, types, frames, mocap noise
+streams, simulated MAVROS services and provider generations are those of the
+per-robot edges. What is shared is the thread, one non-blocking ROS pass per
+step and one read of the plant inputs (`sim_edge_batch.hpp`, `Tee`).
+
+Roles of one robot: `mavros` (the MAVROS-facing edge: map frame, FCU state,
+services, provider) and `mocap` (the simulated mocap source: world frame,
+measurement noise; for a ground robot it also takes `cmd_vel`). Both roles
+read the same plant samples. Ports are a stride-9 block per robot (`sim_pose`,
+`sim_velocity`, `sim_imu`, `sim_fcu_state`, `sim_attitude_target`,
+`alg_setpoint`, `sim_fcu_request`, `attitude_target_full`, `cmd_vel`; block r > 0
+appends `_r`) followed by the four shared batch ports `sim_fcu_result`,
+`sim_extended_state`, `sim_provider_request`, `sim_provider_result`: 58 of 64.
+A port is carried exactly when its role configured the topic. Config keys are
+`r<k>_<role>_<key>` for robot block k; all other keys are global.
+
+A failed step or module output write faults the instance, that is the robots of
+one batch (at most six), where a per-robot edge faulted its own one or two
+edges. `bash run-sim-edge-batch-test.sh` checks the layout, the config split,
+the tee and the per-robot host without ROS. `plant_graph_live.py` runs the real
+Host with a Core-generated manifest and prints the ROS graph the plant creates,
+to compare the per-robot and the batched layout.

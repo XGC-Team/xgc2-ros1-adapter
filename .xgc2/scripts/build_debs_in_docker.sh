@@ -417,7 +417,13 @@ docker exec "${container_name}" bash -lc '
     XGC_RIGID_STATE_WIRE_PREFIX=/opt/ros/noetic \
     XGC_REFERENCE_WIRE_PREFIX=/opt/ros/noetic \
     XGC_ROS_IO_HELPERS_PREFIX=/usr \
-      /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
+      /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so \
+        /tmp/work/build-ros-sim-edge/libros_sim_edge.so
+    # The batched simulation edge ships with the lightweight plant bundle, which
+    # builds it from this source; here it is only compiled and its ROS-free
+    # layout, config and tee checks are run.
+    XGC_RUNTIME_SDK_INCLUDE=/usr/include/xgc-runtime \
+      bash /tmp/work/native/ros_io/run-sim-edge-batch-test.sh
 
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Owning ROS edge build. Runtime is a header-only SDK dependency, not a source
 # location for this ROS/domain facade. SetProvider comes from the installed lightweight-sim interface package.
+# The optional second output is the batched simulation edge (ros_sim_edge.cpp,
+# plugin `ros-sim-edge`): the same sources and link line, no clock source.
 set -euo pipefail
-[[ $# == 1 ]] || { echo "usage: build.sh OUTPUT.so" >&2; exit 2; }
+[[ $# == 1 || $# == 2 ]] || { echo "usage: build.sh OUTPUT.so [SIM_EDGE_OUTPUT.so]" >&2; exit 2; }
 source_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
 sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-/usr/include/xgc-runtime}"
@@ -30,11 +32,20 @@ for msg in rigid_state_estimator_msgs/RigidStateEstimate \
     -I"$pkg:$source_dir/msg/$pkg" \
     -o "$gen/$pkg" -e "$prefix/share/gencpp" >/dev/null
 done
-"${CXX:-c++}" -std=c++17 -O2 -fPIC -Wall -Wextra -shared -fvisibility=hidden \
-  -I "$sdk_include" -I "$source_dir" -I "$gen" -I "$provider_prefix/include" \
-  -I "$robotics_prefix/include" -I "$simulation_prefix/include" -I "$rigid_prefix/include" \
-  -I "$hte_prefix/include" -I "$reference_prefix/include" -isystem "$prefix/include" \
-  "$source_dir/ros_io.cpp" "$source_dir/ros_clock_source.cpp" \
-  -L "$edge_prefix/lib" -Wl,-rpath,"$edge_prefix/lib" -lxgc_ros_edge \
-  -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization \
-  -lrosconsole -lrostime -lcpp_common -o "$output"
+build_plugin() {
+  local out="$1"
+  shift
+  "${CXX:-c++}" -std=c++17 -O2 -fPIC -Wall -Wextra -shared -fvisibility=hidden \
+    -I "$sdk_include" -I "$source_dir" -I "$gen" -I "$provider_prefix/include" \
+    -I "$robotics_prefix/include" -I "$simulation_prefix/include" -I "$rigid_prefix/include" \
+    -I "$hte_prefix/include" -I "$reference_prefix/include" -isystem "$prefix/include" \
+    "$@" \
+    -L "$edge_prefix/lib" -Wl,-rpath,"$edge_prefix/lib" -lxgc_ros_edge \
+    -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization \
+    -lrosconsole -lrostime -lcpp_common -o "$out"
+}
+build_plugin "$output" "$source_dir/ros_io.cpp" "$source_dir/ros_clock_source.cpp"
+if [[ $# == 2 ]]; then
+  mkdir -p "$(dirname -- "$2")"
+  build_plugin "$2" "$source_dir/ros_sim_edge.cpp"
+fi
