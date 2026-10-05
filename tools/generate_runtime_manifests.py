@@ -271,8 +271,8 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
                         "idleTimeoutNanos": 300000000000,
                     },
                     "scope": {
-                        "kind": "robot-group",
-                        "requiredAttributes": ["provider", "run-id", "target-id"],
+                        "kind": "robot-resource",
+                        "requiredAttributes": ["robot-id", "run-id", "target-id"],
                         "allowAdditionalAttributes": False,
                         "sharing": "shared",
                     },

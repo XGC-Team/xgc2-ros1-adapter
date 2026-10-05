@@ -448,6 +448,15 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(PX4_PROFILE)
         )
         self.assertEqual(
+            px4_adapter["adapters"][0]["definition"]["scope"],
+            {
+                "kind": "robot-resource",
+                "requiredAttributes": ["robot-id", "run-id", "target-id"],
+                "allowAdditionalAttributes": False,
+                "sharing": "shared",
+            },
+        )
+        self.assertEqual(
             {
                 capability["ref"]["id"]
                 for capability in px4_adapter["adapters"][0][
@@ -895,6 +904,19 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             profile_catalog=str(profile_path),
         )
         VERIFIER.verify(arguments)
+
+        for field, value in (
+            ("kind", "robot-group"),
+            ("requiredAttributes", ["provider", "run-id", "target-id"]),
+            ("requiredAttributes", ["robot-id", "run-id", "target-id", "provider"]),
+        ):
+            with self.subTest("retired scope " + field):
+                tampered_adapter = copy.deepcopy(adapter)
+                tampered_adapter["adapters"][0]["definition"]["scope"][field] = value
+                adapter_path.write_text(json.dumps(tampered_adapter), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "scope contract mismatch"):
+                    VERIFIER.verify(arguments)
+        adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
 
         for field, value in (
             ("artifact", "/tmp/removed-legacy-field"),

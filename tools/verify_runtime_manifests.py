@@ -187,8 +187,8 @@ def verify(args: argparse.Namespace) -> None:
     require(
         definition["scope"]
         == {
-            "kind": "robot-group",
-            "requiredAttributes": ["provider", "run-id", "target-id"],
+            "kind": "robot-resource",
+            "requiredAttributes": ["robot-id", "run-id", "target-id"],
             "allowAdditionalAttributes": False,
             "sharing": "shared",
         },
