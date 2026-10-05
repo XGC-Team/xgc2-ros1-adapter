@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include <google/protobuf/unknown_field_set.h>
+
 namespace xgc2_ros1_robot_adapter {
 namespace {
 
@@ -51,21 +53,25 @@ bool BootstrapFileFromArguments(int argc, char **argv, std::string *path,
 
 std::map<std::string, std::string> RosEnvironmentFromSpec(
     const xgc::adapter::v1::AdapterInstanceSpec &spec) {
-  xgc::robot::v1::RobotAdapterSpec robots;
-  if (!robots.ParseFromString(spec.configuration().value()))
-    throw std::runtime_error("invalid RobotAdapterSpec ROS configuration");
+  xgc::robot::v1::RobotAdapterSpec typed;
+  const auto &payload = spec.configuration();
+  if (payload.schema().type_name() != "xgc.robot.v1.RobotAdapterSpec" ||
+      payload.schema().schema_version() != kRobotAdapterSpecSchemaVersion ||
+      payload.encoding() != xgc::v1::PAYLOAD_ENCODING_PROTOBUF ||
+      !typed.ParseFromString(payload.value()) || !typed.has_robot())
+    throw std::runtime_error("invalid single-robot Adapter ROS configuration");
+  const auto &unknown = typed.GetReflection()->GetUnknownFields(typed);
+  for (int index = 0; index < unknown.field_count(); ++index) {
+    if (unknown.field(index).number() == 2)
+      throw std::runtime_error("retired robots configuration is not accepted");
+  }
   std::map<std::string, std::string> environment;
   const std::map<std::string, std::string> names{
       {"ros_master_uri", "ROS_MASTER_URI"}, {"ros_ip", "ROS_IP"}};
-  for (const auto &robot : robots.robots()) {
-    for (const auto &name : names) {
-      const auto value = robot.parameters().find(name.first);
-      if (value == robot.parameters().end() || value->second.empty())
-        continue;
-      const auto inserted = environment.emplace(name.second, value->second);
-      if (!inserted.second && inserted.first->second != value->second)
-        throw std::runtime_error("one ROS Adapter process cannot use different ROS endpoints");
-    }
+  for (const auto &name : names) {
+    const auto value = typed.robot().parameters().find(name.first);
+    if (value != typed.robot().parameters().end() && !value->second.empty())
+      environment.emplace(name.second, value->second);
   }
   return environment;
 }
@@ -123,11 +129,11 @@ bool ResolveRobotSubject(const xgc::adapter::v1::WorkContext &context,
       target->second != expected_target->second || run->second != expected_run->second) {
     return fail(error, "robot subject crosses the applied target/run scope");
   }
-  const auto member = configuration.robot_indices.find(robot->second);
-  if (member == configuration.robot_indices.end() ||
-      member->second >= configuration.robots.size() ||
-      configuration.robots[member->second].robot_id != robot->second)
-    return fail(error, "robot subject is not present in the applied instance spec");
+  const auto expected_robot = configuration.scope_attributes.find("robot-id");
+  if (expected_robot == configuration.scope_attributes.end() ||
+      robot->second != expected_robot->second ||
+      robot->second != configuration.robot.robot_id)
+    return fail(error, "robot subject is not the applied robot resource");
   *robot_id = robot->second;
   if (error != nullptr)
     error->clear();

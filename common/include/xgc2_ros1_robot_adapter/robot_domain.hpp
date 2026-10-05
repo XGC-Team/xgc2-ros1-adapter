@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <map>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <google/protobuf/message.h>
@@ -15,7 +14,7 @@
 
 namespace xgc2_ros1_robot_adapter {
 
-constexpr std::uint32_t kRobotAdapterSpecSchemaVersion = 3u;
+constexpr std::uint32_t kRobotAdapterSpecSchemaVersion = 4u;
 
 struct InstanceSpecFence {
   std::string instance_id;
@@ -45,9 +44,7 @@ struct RobotAdapterConfig {
   std::string scope_key;
   std::map<std::string, std::string> scope_attributes;
   std::string robot_selection_digest;
-  std::vector<RobotConfig> robots;
-  // Published with the complete validated spec; entries refer to roster slots.
-  std::unordered_map<std::string, std::size_t> robot_indices;
+  RobotConfig robot;
 };
 
 struct MessageSchema {

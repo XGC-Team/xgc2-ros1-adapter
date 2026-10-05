@@ -397,24 +397,10 @@ private:
             spec, expected_schema, &candidate, error)) {
       return false;
     }
-    const auto provider = candidate.scope_attributes.find("provider");
-    if (provider == candidate.scope_attributes.end() ||
-        provider->second != definition_id_) {
-      *error = "robot-group provider does not match this Adapter definition";
+    if (!validateRobotConfig(candidate.robot, error))
       return false;
-    }
-    std::set<std::string> namespaces;
-    for (const auto &robot : candidate.robots) {
-      if (!validateRobotConfig(robot, error))
-        return false;
-      if (!namespaces.insert(robot.parameters.at("namespace")).second) {
-        *error = "multiple Mecanum robots share ROS namespace " +
-                 robot.parameters.at("namespace");
-        return false;
-      }
-    }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!connected_.empty()) {
+    if (static_cast<bool>(connected_)) {
       *error = "instance spec cannot change while robot sources are active";
       return false;
     }
@@ -424,24 +410,23 @@ private:
   }
 
   void stopSources() {
-    std::map<std::string, ConnectedRobot> removed;
+    std::unique_ptr<ConnectedRobot> removed;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       removed.swap(connected_);
       queued_telemetry_items_ = 0;
       queued_telemetry_bytes_ = 0;
-      flush_cursor_ = 0;
     }
-    for (auto &entry : removed) {
-      if (entry.second.motion)
-        entry.second.motion->Stop();
-      if (entry.second.runtime)
-        entry.second.runtime->Stop();
+    if (removed) {
+      if (removed->motion)
+        removed->motion->Stop();
+      if (removed->runtime)
+        removed->runtime->Stop();
     }
   }
 
   void clearInstanceSpec() {
-    std::map<std::string, ConnectedRobot> removed;
+    std::unique_ptr<ConnectedRobot> removed;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       removed.swap(connected_);
@@ -449,28 +434,24 @@ private:
       queued_telemetry_bytes_ = 0;
       configuration_ = {};
       has_configuration_ = false;
-      flush_cursor_ = 0;
     }
-    for (auto &entry : removed) {
-      if (entry.second.motion)
-        entry.second.motion->Stop();
-      if (entry.second.runtime)
-        entry.second.runtime->Stop();
+    if (removed) {
+      if (removed->motion)
+        removed->motion->Stop();
+      if (removed->runtime)
+        removed->runtime->Stop();
     }
   }
 
   void stopMotionControllers() {
-    std::vector<std::shared_ptr<MotionCommandPublisher>> controllers;
+    std::shared_ptr<MotionCommandPublisher> motion;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      controllers.reserve(connected_.size());
-      for (const auto &entry : connected_) {
-        if (entry.second.motion)
-          controllers.push_back(entry.second.motion);
-      }
+      if (connected_)
+        motion = connected_->motion;
     }
-    for (const auto &controller : controllers)
-      controller->Stop();
+    if (motion)
+      motion->Stop();
   }
 
   xgc2::adapter_runtime::SourceOpenDecision handleSourceOpen(
@@ -512,7 +493,7 @@ private:
         return rejectSource(xgc::adapter::v1::ERROR_CLASS_REJECTED,
                             "invalid-robot-subject", subject_error);
       }
-      if (connected_.find(robot_id) != connected_.end()) {
+      if (connected_) {
         return rejectSource(xgc::adapter::v1::ERROR_CLASS_REJECTED,
                             "robot-source-already-open",
                             "a telemetry source already owns this robot");
@@ -523,17 +504,7 @@ private:
                             "source-generation-exhausted",
                             "telemetry source generation is exhausted");
       }
-      const auto found = std::find_if(
-          configuration_.robots.begin(), configuration_.robots.end(),
-          [&robot_id](const xgc2_ros1_robot_adapter::RobotConfig &candidate) {
-            return candidate.robot_id == robot_id;
-          });
-      if (found == configuration_.robots.end()) {
-        return rejectSource(xgc::adapter::v1::ERROR_CLASS_REJECTED,
-                            "robot-config-unavailable",
-                            "robot is absent from the current instance spec");
-      }
-      robot = *found;
+      robot = configuration_.robot;
       fence = configuration_.fence;
       source_generation = ++next_source_generation_;
 
@@ -543,12 +514,7 @@ private:
       connected.subject = context.subject();
       connected.fence = fence;
       connected.source_generation = source_generation;
-      const auto inserted = connected_.emplace(robot_id, std::move(connected));
-      if (!inserted.second) {
-        return rejectSource(xgc::adapter::v1::ERROR_CLASS_REJECTED,
-                            "robot-source-already-open",
-                            "robot source reservation raced with another open");
-      }
+      connected_ = std::make_unique<ConnectedRobot>(std::move(connected));
     }
 
     auto reservation =
@@ -608,14 +574,14 @@ private:
     bool installed = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      const auto found = connected_.find(robot_id);
-      if (found != connected_.end() &&
-          found->second.work_id == context.work_id() &&
-          found->second.source_generation == source_generation &&
-          found->second.fence.matches(fence) &&
-          sameSubject(found->second.subject, context.subject())) {
-        found->second.runtime = runtime;
-        found->second.motion = motion;
+      const auto found = connected_.get();
+      if (found != nullptr && found->robot.robot_id == robot_id &&
+          found->work_id == context.work_id() &&
+          found->source_generation == source_generation &&
+          found->fence.matches(fence) &&
+          sameSubject(found->subject, context.subject())) {
+        found->runtime = runtime;
+        found->motion = motion;
         installed = true;
       }
     }
@@ -644,29 +610,29 @@ private:
                                              const std::string &work_id,
                                              std::uint64_t source_generation) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(robot_id);
-    if (found == connected_.end() || found->second.work_id != work_id ||
-        found->second.source_generation != source_generation) {
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != robot_id || found->work_id != work_id ||
+        found->source_generation != source_generation) {
       return {};
     }
-    auto runtime = std::move(found->second.runtime);
-    if (found->second.motion)
-      found->second.motion->Stop();
-    queued_telemetry_items_ -= found->second.telemetry.size();
-    queued_telemetry_bytes_ -= found->second.queued_bytes;
-    connected_.erase(found);
+    auto runtime = std::move(found->runtime);
+    if (found->motion)
+      found->motion->Stop();
+    queued_telemetry_items_ -= found->telemetry.size();
+    queued_telemetry_bytes_ -= found->queued_bytes;
+    connected_.reset();
     return runtime;
   }
 
   void enqueueTelemetry(const std::string &robot_id,
                         std::uint64_t source_generation, std::string item) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(robot_id);
-    if (found == connected_.end() ||
-        found->second.source_generation != source_generation) {
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != robot_id ||
+        found->source_generation != source_generation) {
       return;
     }
-    auto &source = found->second;
+    auto &source = *found;
     const std::size_t item_bytes = item.size();
     if (item.empty() || item_bytes > kMaximumTelemetryBatchBytes ||
         item_bytes > kMaximumQueuedTelemetryBytesPerRobot) {
@@ -710,20 +676,15 @@ private:
     bool matched = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      for (auto found = connected_.begin(); found != connected_.end();
-           ++found) {
-        if (found->second.work_id != request.context().work_id() ||
-            found->second.fence.revision != request.context().spec_revision() ||
-            !sameSubject(found->second.subject, request.context().subject())) {
-          continue;
-        }
-        runtime = std::move(found->second.runtime);
-        motion = std::move(found->second.motion);
-        queued_telemetry_items_ -= found->second.telemetry.size();
-        queued_telemetry_bytes_ -= found->second.queued_bytes;
-        connected_.erase(found);
+      if (connected_ && connected_->work_id == request.context().work_id() &&
+          connected_->fence.revision == request.context().spec_revision() &&
+          sameSubject(connected_->subject, request.context().subject())) {
+        runtime = std::move(connected_->runtime);
+        motion = std::move(connected_->motion);
+        queued_telemetry_items_ -= connected_->telemetry.size();
+        queued_telemetry_bytes_ -= connected_->queued_bytes;
+        connected_.reset();
         matched = true;
-        break;
       }
     }
     if (motion)
@@ -732,8 +693,7 @@ private:
       runtime->Stop();
     if (matched) {
       ROS_WARN_STREAM("Mecanum telemetry source "
-                      << request.context().work_id()
-                      << " closed: " << error.message());
+                      << request.context().work_id() << " closed: " << error.message());
     }
   }
 
@@ -761,18 +721,18 @@ private:
               request.context(), configuration_, &robot_id, &error)) {
         return rejectOperation("invalid-robot-subject", error);
       }
-      const auto found = connected_.find(robot_id);
-      if (found == connected_.end() || !found->second.runtime ||
-          !found->second.fence.matches(configuration_.fence) ||
-          found->second.fence.revision !=
+      const auto found = connected_.get();
+      if (found == nullptr || found->robot.robot_id != robot_id || !found->runtime ||
+          !found->fence.matches(configuration_.fence) ||
+          found->fence.revision !=
               request.context().spec_revision() ||
-          !sameSubject(found->second.subject, request.context().subject())) {
+          !sameSubject(found->subject, request.context().subject())) {
         return rejectOperation(
             "telemetry-source-not-open",
             "Mecanum command requires the current robot source to be open");
       }
-      robot = found->second.robot;
-      motion = found->second.motion;
+      robot = found->robot;
+      motion = found->motion;
     }
     if (!motion) {
       return rejectOperation("command-disabled",
@@ -870,16 +830,16 @@ private:
                           std::size_t maximum_items,
                           TelemetrySnapshot *snapshot) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(robot_id);
-    if (found == connected_.end() || !found->second.runtime ||
-        found->second.telemetry.empty()) {
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != robot_id || !found->runtime ||
+        found->telemetry.empty()) {
       return false;
     }
     snapshot->robot_id = robot_id;
-    snapshot->work_id = found->second.work_id;
-    snapshot->source_generation = found->second.source_generation;
+    snapshot->work_id = found->work_id;
+    snapshot->source_generation = found->source_generation;
     snapshot->batch =
-        buildTelemetryBatch(found->second.telemetry, maximum_items);
+        buildTelemetryBatch(found->telemetry, maximum_items);
     return !snapshot->batch.items.empty();
   }
 
@@ -891,15 +851,15 @@ private:
       return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(snapshot.robot_id);
-    if (found == connected_.end() ||
-        found->second.work_id != snapshot.work_id ||
-        found->second.source_generation != snapshot.source_generation ||
-        !telemetryBatchMatchesPrefix(found->second.telemetry,
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != snapshot.robot_id ||
+        found->work_id != snapshot.work_id ||
+        found->source_generation != snapshot.source_generation ||
+        !telemetryBatchMatchesPrefix(found->telemetry,
                                      snapshot.batch.tokens)) {
       return false;
     }
-    auto &source = found->second;
+    auto &source = *found;
     const std::size_t batch_size = snapshot.batch.tokens.size();
     for (std::size_t index = 0; index < batch_size; ++index) {
       --queued_telemetry_items_;
@@ -915,81 +875,49 @@ private:
   void flushTelemetry() {
     if (!client_)
       return;
-    std::vector<std::string> robot_ids;
-    std::size_t start = 0;
+    std::string robot_id;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      robot_ids.reserve(connected_.size());
-      for (const auto &entry : connected_)
-        robot_ids.push_back(entry.first);
-      if (!robot_ids.empty()) {
-        start = flush_cursor_ % robot_ids.size();
-        flush_cursor_ = (start + 1) % robot_ids.size();
-      }
+      if (!connected_)
+        return;
+      robot_id = connected_->robot.robot_id;
     }
-    if (robot_ids.empty())
-      return;
-
-    std::set<std::pair<std::string, std::uint64_t>> blocked;
     std::size_t handled = 0;
     while (handled < kMaximumFlushItemsPerTick) {
-      bool made_progress = false;
-      for (std::size_t offset = 0;
-           offset < robot_ids.size() && handled < kMaximumFlushItemsPerTick;
-           ++offset) {
-        const std::size_t index = (start + offset) % robot_ids.size();
-        TelemetrySnapshot snapshot;
-        if (!readTelemetryBatch(robot_ids[index],
-                                kMaximumFlushItemsPerTick - handled, &snapshot))
-          continue;
-        const auto source_key =
-            std::make_pair(snapshot.robot_id, snapshot.source_generation);
-        if (blocked.find(source_key) != blocked.end())
-          continue;
-        const auto result = client_->PublishSource(
-            snapshot.work_id, std::move(snapshot.batch.items));
-        if (result == xgc2::adapter_runtime::SourceWriteResult::kNoCredit ||
-            result == xgc2::adapter_runtime::SourceWriteResult::kNotReady ||
-            result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull) {
-          blocked.insert(source_key);
-          continue;
-        }
-        if (consumeTelemetryBatch(snapshot, result)) {
-          handled += snapshot.batch.tokens.size();
-          made_progress = true;
-        }
-      }
-      if (!made_progress)
+      TelemetrySnapshot snapshot;
+      if (!readTelemetryBatch(robot_id, kMaximumFlushItemsPerTick - handled, &snapshot))
         break;
-      start = (start + 1) % robot_ids.size();
+      const auto result = client_->PublishSource(snapshot.work_id,
+                                                std::move(snapshot.batch.items));
+      if (result == xgc2::adapter_runtime::SourceWriteResult::kNoCredit ||
+          result == xgc2::adapter_runtime::SourceWriteResult::kNotReady ||
+          result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull)
+        break;
+      if (!consumeTelemetryBatch(snapshot, result))
+        break;
+      handled += snapshot.batch.tokens.size();
     }
   }
 
   void periodicTimer(const ros::WallTimerEvent &) {
     if (exitRequested())
       return;
-    std::unique_lock<std::mutex> periodic_lock(periodic_mutex_,
-                                               std::try_to_lock);
+    std::unique_lock<std::mutex> periodic_lock(periodic_mutex_, std::try_to_lock);
     if (!periodic_lock.owns_lock())
       return;
-    std::vector<std::shared_ptr<RobotRuntime>> runtimes;
-    std::vector<std::shared_ptr<MotionCommandPublisher>> controllers;
+    std::shared_ptr<RobotRuntime> runtime;
+    std::shared_ptr<MotionCommandPublisher> motion;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      runtimes.reserve(connected_.size());
-      controllers.reserve(connected_.size());
-      for (const auto &entry : connected_) {
-        if (entry.second.runtime)
-          runtimes.push_back(entry.second.runtime);
-        if (entry.second.motion)
-          controllers.push_back(entry.second.motion);
+      if (connected_) {
+        runtime = connected_->runtime;
+        motion = connected_->motion;
       }
     }
-    for (const auto &controller : controllers)
-      controller->PublishPeriodic();
-    const ros::WallTime now = ros::WallTime::now();
-    for (const auto &runtime : runtimes)
-      runtime->emitPeriodic(now);
+    if (motion)
+      motion->PublishPeriodic();
+    if (runtime)
+      runtime->emitPeriodic(ros::WallTime::now());
     flushTelemetry();
   }
 
@@ -1002,12 +930,11 @@ private:
   std::mutex periodic_mutex_;
   bool has_configuration_ = false;
   xgc2_ros1_robot_adapter::RobotAdapterConfig configuration_;
-  std::map<std::string, ConnectedRobot> connected_;
+  std::unique_ptr<ConnectedRobot> connected_;
   std::uint64_t next_source_generation_ = 0;
   std::uint64_t next_telemetry_token_ = 0;
   std::size_t queued_telemetry_items_ = 0;
   std::size_t queued_telemetry_bytes_ = 0;
-  std::size_t flush_cursor_ = 0;
   // Keep the callback-owning client last so construction failures destroy and
   // stop it before any state captured by its callbacks.
   std::unique_ptr<xgc2::adapter_runtime::Client> client_;

@@ -5,6 +5,8 @@
 #include <set>
 #include <utility>
 
+#include <google/protobuf/unknown_field_set.h>
+
 namespace xgc2_ros1_robot_adapter {
 namespace {
 
@@ -158,17 +160,17 @@ bool DecodeRobotAdapterConfig(
       instance_spec.scope().key().empty()) {
     return fail(error, "instance spec must contain a complete scope");
   }
-  if (instance_spec.scope().kind() != "robot-group" ||
+  if (instance_spec.scope().kind() != "robot-resource" ||
       instance_spec.scope().attributes_size() != 3 ||
       instance_spec.scope().attributes().find("target-id") ==
           instance_spec.scope().attributes().end() ||
       instance_spec.scope().attributes().find("run-id") ==
           instance_spec.scope().attributes().end() ||
-      instance_spec.scope().attributes().find("provider") ==
+      instance_spec.scope().attributes().find("robot-id") ==
           instance_spec.scope().attributes().end()) {
     return fail(error,
-                "robot Adapter scope must be robot-group with exactly "
-                "target-id, run-id, and provider");
+                "robot Adapter scope must be robot-resource with exactly "
+                "target-id, run-id, and robot-id");
   }
   if (!instance_spec.has_configuration() ||
       !instance_spec.configuration().has_schema()) {
@@ -206,8 +208,19 @@ bool DecodeRobotAdapterConfig(
                 "RobotAdapterSpec robot_selection_digest must be raw "
                 "lowercase SHA-256");
   }
-  if (robot_spec.robots().empty())
-    return fail(error, "RobotAdapterSpec must contain at least one robot");
+  const auto &unknown = robot_spec.GetReflection()->GetUnknownFields(robot_spec);
+  for (int index = 0; index < unknown.field_count(); ++index) {
+    if (unknown.field(index).number() == 2)
+      return fail(error, "RobotAdapterSpec contains the retired robots field");
+  }
+  if (!robot_spec.has_robot())
+    return fail(error, "RobotAdapterSpec must contain its robot resource");
+  const auto &robot = robot_spec.robot();
+  const auto &scope = instance_spec.scope().attributes();
+  if (scope.at("target-id").empty() || scope.at("run-id").empty() ||
+      scope.at("robot-id") != robot.robot_id()) {
+    return fail(error, "robot payload must match its target/run/robot owner scope");
+  }
 
   RobotAdapterConfig candidate;
   candidate.fence.instance_id = instance_spec.instance_id();
@@ -219,59 +232,41 @@ bool DecodeRobotAdapterConfig(
   candidate.scope_attributes.insert(instance_spec.scope().attributes().begin(),
                                     instance_spec.scope().attributes().end());
   candidate.robot_selection_digest = robot_spec.robot_selection_digest();
-  candidate.robots.reserve(static_cast<std::size_t>(robot_spec.robots_size()));
-
-  candidate.robot_indices.reserve(
-      static_cast<std::size_t>(robot_spec.robots_size()));
-  for (const auto &robot : robot_spec.robots()) {
-    if (!validRobotId(robot.robot_id()))
-      return fail(error, "RobotAdapterSpec contains an invalid robot_id: " +
-                             robot.robot_id());
-    if (!candidate.robot_indices
-             .emplace(robot.robot_id(), candidate.robots.size())
-             .second)
-      return fail(error, "RobotAdapterSpec repeats robot_id: " +
-                             robot.robot_id());
-    if (!validProfileId(robot.profile_id())) {
+  if (!validRobotId(robot.robot_id()))
+    return fail(error, "RobotAdapterSpec contains an invalid robot_id: " +
+                           robot.robot_id());
+  if (!validProfileId(robot.profile_id())) {
+    return fail(error, "robot " + robot.robot_id() +
+                           " contains an invalid profile_id");
+  }
+  if (!validRawSha256(robot.profile_digest())) {
+    return fail(error, "robot " + robot.robot_id() +
+                           " contains an invalid profile_digest");
+  }
+  if (!validateParameters(robot.parameters(),
+                          "robot " + robot.robot_id() + " parameters", error)) {
+    return false;
+  }
+  auto &local_robot = candidate.robot;
+  local_robot.robot_id = robot.robot_id();
+  local_robot.profile_id = robot.profile_id();
+  local_robot.profile_digest = robot.profile_digest();
+  local_robot.parameters.insert(robot.parameters().begin(), robot.parameters().end());
+  local_robot.channels.reserve(static_cast<std::size_t>(robot.channels_size()));
+  std::set<std::string> channel_ids;
+  for (const auto &channel : robot.channels()) {
+    if (!validChannelId(channel.channel_id())) {
       return fail(error, "robot " + robot.robot_id() +
-                             " contains an invalid profile_id");
+                             " contains an invalid channel_id: " + channel.channel_id());
     }
-    if (!validRawSha256(robot.profile_digest())) {
+    if (!channel_ids.insert(channel.channel_id()).second) {
       return fail(error, "robot " + robot.robot_id() +
-                             " contains an invalid profile_digest");
+                             " repeats channel: " + channel.channel_id());
     }
-    if (!validateParameters(robot.parameters(),
-                            "robot " + robot.robot_id() + " parameters",
-                            error)) {
-      return false;
-    }
-
-    RobotConfig local_robot;
-    local_robot.robot_id = robot.robot_id();
-    local_robot.profile_id = robot.profile_id();
-    local_robot.profile_digest = robot.profile_digest();
-    local_robot.parameters.insert(robot.parameters().begin(),
-                                  robot.parameters().end());
-    local_robot.channels.reserve(
-        static_cast<std::size_t>(robot.channels_size()));
-
-    std::set<std::string> channel_ids;
-    for (const auto &channel : robot.channels()) {
-      if (!validChannelId(channel.channel_id())) {
-        return fail(error, "robot " + robot.robot_id() +
-                               " contains an invalid channel_id: " +
-                               channel.channel_id());
-      }
-      if (!channel_ids.insert(channel.channel_id()).second) {
-        return fail(error, "robot " + robot.robot_id() +
-                               " repeats channel: " + channel.channel_id());
-      }
-      RobotChannelConfig local_channel;
-      local_channel.channel_id = channel.channel_id();
-      local_channel.enabled = channel.enabled();
-      local_robot.channels.push_back(std::move(local_channel));
-    }
-    candidate.robots.push_back(std::move(local_robot));
+    RobotChannelConfig local_channel;
+    local_channel.channel_id = channel.channel_id();
+    local_channel.enabled = channel.enabled();
+    local_robot.channels.push_back(std::move(local_channel));
   }
 
   *output = std::move(candidate);

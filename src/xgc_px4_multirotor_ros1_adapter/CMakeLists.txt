@@ -154,6 +154,7 @@ if(CATKIN_ENABLE_TESTING)
     ../../common/test/robot_domain_test.cpp
   )
   if(TARGET ${PROJECT_NAME}_robot_domain_test)
+    add_dependencies(${PROJECT_NAME}_robot_domain_test ${PROJECT_NAME}_contract_metadata)
     target_link_libraries(${PROJECT_NAME}_robot_domain_test
       ${PROJECT_NAME}_runtime_support
       ${catkin_LIBRARIES}

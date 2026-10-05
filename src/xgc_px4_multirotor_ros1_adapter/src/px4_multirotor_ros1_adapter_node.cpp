@@ -511,32 +511,11 @@ private:
     if (!xgc2_ros1_robot_adapter::DecodeRobotAdapterConfig(
             spec, expected_schema, &candidate, error))
       return false;
-    const auto provider = candidate.scope_attributes.find("provider");
-    if (provider == candidate.scope_attributes.end() ||
-        provider->second != definition_id_) {
-      *error = "robot-group provider does not match this Adapter definition";
+    if (!validateRobotConfig(candidate.robot, error))
       return false;
-    }
-    std::set<std::string> namespaces;
-    std::set<std::string> mocap_rigid_bodies;
-    for (const auto &robot : candidate.robots) {
-      if (!validateRobotConfig(robot, error))
-        return false;
-      if (!namespaces.insert(robot.parameters.at("namespace")).second) {
-        *error = "multiple PX4 robots share ROS namespace " +
-                 robot.parameters.at("namespace");
-        return false;
-      }
-      if (!mocap_rigid_bodies.insert(robot.parameters.at("mocap_rigid_body"))
-               .second) {
-        *error = "multiple PX4 robots share mocap rigid body " +
-                 robot.parameters.at("mocap_rigid_body");
-        return false;
-      }
-    }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!connected_.empty()) {
+    if (static_cast<bool>(connected_)) {
       *error =
           "instance spec cannot change while robot resources are connected";
       return false;
@@ -600,13 +579,13 @@ private:
   void releaseCommand(const std::string &robot_id,
                       std::uint64_t source_generation) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(robot_id);
-    if (found == connected_.end() ||
-        found->second.source_generation != source_generation ||
-        found->second.in_flight_commands == 0) {
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != robot_id ||
+        found->source_generation != source_generation ||
+        found->in_flight_commands == 0) {
       return;
     }
-    --found->second.in_flight_commands;
+    --found->in_flight_commands;
     command_condition_.notify_all();
   }
 
@@ -614,45 +593,41 @@ private:
       const SourceLocator &locator,
       const xgc::adapter::v1::SourceOpenRequest *expected_request,
       ConnectedRobot *removed) {
-    const auto found = connected_.find(locator.robot_id);
-    if (found == connected_.end() ||
-        found->second.source_generation != locator.source_generation ||
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != locator.robot_id ||
+        found->source_generation != locator.source_generation ||
         (expected_request != nullptr &&
-         !sameSourceRequest(found->second.source_request, *expected_request))) {
+         !sameSourceRequest(found->source_request, *expected_request))) {
       return false;
     }
 
     const auto source =
-        sources_by_work_.find(found->second.source_request.context().work_id());
+        sources_by_work_.find(found->source_request.context().work_id());
     if (source == sources_by_work_.end() ||
         source->second.robot_id != locator.robot_id ||
         source->second.source_generation != locator.source_generation) {
       return false;
     }
 
-    queued_telemetry_ -= found->second.telemetry.size();
-    queued_telemetry_bytes_ -= found->second.telemetry_bytes;
-    *removed = std::move(found->second);
-    connected_.erase(found);
+    queued_telemetry_ -= found->telemetry.size();
+    queued_telemetry_bytes_ -= found->telemetry_bytes;
+    *removed = std::move(*found);
+    connected_.reset();
     sources_by_work_.erase(source);
     return true;
   }
 
   void clearInstanceSpec() {
-    std::map<std::string, ConnectedRobot> removed;
+    std::unique_ptr<ConnectedRobot> removed;
     {
       std::unique_lock<std::mutex> lock(mutex_);
-      for (auto &entry : connected_) {
-        entry.second.active = false;
-        if (entry.second.runtime)
-          entry.second.runtime->Deactivate();
+      if (connected_) {
+        connected_->active = false;
+        if (connected_->runtime)
+          connected_->runtime->Deactivate();
       }
       command_condition_.wait(lock, [this] {
-        for (const auto &entry : connected_) {
-          if (entry.second.in_flight_commands != 0)
-            return false;
-        }
-        return true;
+        return !connected_ || connected_->in_flight_commands == 0;
       });
       removed.swap(connected_);
       sources_by_work_.clear();
@@ -661,8 +636,7 @@ private:
       configuration_ = {};
       has_configuration_ = false;
     }
-    for (auto &entry : removed)
-      stopNativeResources(&entry.second);
+    stopNativeResources(removed.get());
   }
 
   xgc2::adapter_runtime::SourceOpenDecision handleSourceOpen(
@@ -710,7 +684,7 @@ private:
         return rejectedSource(xgc::adapter::v1::ERROR_CLASS_REJECTED,
                               "invalid-robot-subject", error);
       }
-      if (connected_.find(robot_id) != connected_.end()) {
+      if (connected_) {
         return rejectedSource(
             xgc::adapter::v1::ERROR_CLASS_REJECTED, "robot-source-already-open",
             "robot already has an opening or active telemetry source");
@@ -726,7 +700,7 @@ private:
                               "source-generation-exhausted",
                               "telemetry source generation is exhausted");
       }
-      robot = configuration_.robots[configuration_.robot_indices.at(robot_id)];
+      robot = configuration_.robot;
       fence = configuration_.fence;
       locator.robot_id = robot_id;
       locator.source_generation = ++next_source_generation_;
@@ -736,25 +710,19 @@ private:
       opening.fence = fence;
       opening.source_request = request;
       opening.source_generation = locator.source_generation;
-      const auto connected_inserted =
-          connected_.emplace(robot_id, std::move(opening));
-      if (!connected_inserted.second) {
-        return rejectedSource(
-            xgc::adapter::v1::ERROR_CLASS_REJECTED, "robot-source-already-open",
-            "robot source reservation raced with another open");
-      }
+      connected_ = std::make_unique<ConnectedRobot>(std::move(opening));
       try {
         const auto source_inserted =
             sources_by_work_.emplace(context.work_id(), locator);
         if (!source_inserted.second) {
-          connected_.erase(connected_inserted.first);
+          connected_.reset();
           return rejectedSource(
               xgc::adapter::v1::ERROR_CLASS_REJECTED,
               "source-identity-conflict",
               "telemetry work_id reservation raced with another open");
         }
       } catch (...) {
-        connected_.erase(connected_inserted.first);
+        connected_.reset();
         throw;
       }
     }
@@ -888,17 +856,17 @@ private:
     bool committed = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      const auto found = connected_.find(robot_id);
+      const auto found = connected_.get();
       if (!cancellation.IsCancellationRequested() &&
-          found != connected_.end() &&
-          found->second.source_generation == locator.source_generation &&
-          found->second.fence.matches(fence) &&
-          sameSourceRequest(found->second.source_request, request)) {
-        found->second.runtime = runtime;
-        found->second.operations = operations;
-        found->second.remote_control = remote_control;
+          found != nullptr &&
+          found->source_generation == locator.source_generation &&
+          found->fence.matches(fence) &&
+          sameSourceRequest(found->source_request, request)) {
+        found->runtime = runtime;
+        found->operations = operations;
+        found->remote_control = remote_control;
         runtime->Activate();
-        found->second.active = true;
+        found->active = true;
         committed = true;
       } else {
         ConnectedRobot removed;
@@ -930,22 +898,22 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       const auto source = sources_by_work_.find(request.context().work_id());
       if (source != sources_by_work_.end()) {
-        const auto connected = connected_.find(source->second.robot_id);
-        if (connected != connected_.end() &&
-            connected->second.source_generation ==
+        const auto connected = connected_.get();
+        if (connected != nullptr &&
+            connected->source_generation ==
                 source->second.source_generation &&
-            sameSourceRequest(connected->second.source_request, request)) {
+            sameSourceRequest(connected->source_request, request)) {
           identified = true;
-          source_generation = connected->second.source_generation;
-          connected->second.active = false;
-          runtime_to_stop = connected->second.runtime;
+          source_generation = connected->source_generation;
+          connected->active = false;
+          runtime_to_stop = connected->runtime;
           if (runtime_to_stop)
             runtime_to_stop->Deactivate();
-          if (connected->second.in_flight_commands == 0u) {
-            queued_telemetry_ -= connected->second.telemetry.size();
-            queued_telemetry_bytes_ -= connected->second.telemetry_bytes;
-            removed = std::move(connected->second);
-            connected_.erase(connected);
+          if (connected->in_flight_commands == 0u) {
+            queued_telemetry_ -= connected->telemetry.size();
+            queued_telemetry_bytes_ -= connected->telemetry_bytes;
+            removed = std::move(*connected);
+            connected_.reset();
             sources_by_work_.erase(source);
             matched = true;
           }
@@ -967,22 +935,22 @@ private:
             source->second.source_generation != source_generation) {
           return true;
         }
-        const auto connected = connected_.find(source->second.robot_id);
-        return connected == connected_.end() ||
-               connected->second.source_generation != source_generation ||
-               connected->second.in_flight_commands == 0u;
+        const auto connected = connected_.get();
+        return connected == nullptr ||
+               connected->source_generation != source_generation ||
+               connected->in_flight_commands == 0u;
       });
       const auto source = sources_by_work_.find(request.context().work_id());
       if (source != sources_by_work_.end() &&
           source->second.source_generation == source_generation) {
-        const auto connected = connected_.find(source->second.robot_id);
-        if (connected != connected_.end() &&
-            connected->second.source_generation == source_generation &&
-            connected->second.in_flight_commands == 0u) {
-          queued_telemetry_ -= connected->second.telemetry.size();
-          queued_telemetry_bytes_ -= connected->second.telemetry_bytes;
-          removed = std::move(connected->second);
-          connected_.erase(connected);
+        const auto connected = connected_.get();
+        if (connected != nullptr &&
+            connected->source_generation == source_generation &&
+            connected->in_flight_commands == 0u) {
+          queued_telemetry_ -= connected->telemetry.size();
+          queued_telemetry_bytes_ -= connected->telemetry_bytes;
+          removed = std::move(*connected);
+          connected_.reset();
           sources_by_work_.erase(source);
           matched = true;
         }
@@ -1019,25 +987,25 @@ private:
               request.context(), configuration_, &robot_id, &error)) {
         return rejected("invalid-robot-subject", error);
       }
-      const auto found = connected_.find(robot_id);
-      if (found == connected_.end() || !found->second.active ||
-          !found->second.fence.matches(configuration_.fence) ||
-          found->second.fence.revision != request.context().spec_revision() ||
-          !sameSubject(found->second.source_request.context().subject(),
+      const auto found = connected_.get();
+      if (found == nullptr || !found->active ||
+          !found->fence.matches(configuration_.fence) ||
+          found->fence.revision != request.context().spec_revision() ||
+          !sameSubject(found->source_request.context().subject(),
                        request.context().subject())) {
         return rejected(
             "telemetry-source-not-open",
             "robot command requires the current telemetry source to be open");
       }
-      if (!found->second.operations) {
+      if (!found->operations) {
         return rejected("command-disabled",
                         "robot spec enables no native command channels");
       }
-      robot = found->second.robot;
-      source_generation = found->second.source_generation;
-      operation_executor = found->second.operations;
-      remote_control = found->second.remote_control;
-      ++found->second.in_flight_commands;
+      robot = found->robot;
+      source_generation = found->source_generation;
+      operation_executor = found->operations;
+      remote_control = found->remote_control;
+      ++found->in_flight_commands;
     }
     CommandLease operations(this, std::move(robot_id), source_generation,
                             std::move(operation_executor));
@@ -1169,12 +1137,12 @@ private:
   void enqueueTelemetry(const std::string &robot_id,
                         std::uint64_t source_generation, std::string item) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(robot_id);
-    if (found == connected_.end() ||
-        found->second.source_generation != source_generation)
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != robot_id ||
+        found->source_generation != source_generation)
       return;
 
-    auto &connected = found->second;
+    auto &connected = *found;
     const std::size_t item_bytes = item.size();
     if (item_bytes > kMaximumTelemetryBatchBytes) {
       ++connected.dropped;
@@ -1205,38 +1173,16 @@ private:
     queued_telemetry_bytes_ += item_bytes;
   }
 
-  bool nextTelemetrySnapshot(
-      const std::set<std::pair<std::string, std::uint64_t>> &blocked,
-      TelemetrySnapshot *snapshot) {
+  bool nextTelemetrySnapshot(TelemetrySnapshot *snapshot) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (connected_.empty())
+    if (!connected_ || !connected_->active || !connected_->runtime ||
+        connected_->telemetry.empty())
       return false;
-
-    auto iterator = connected_.upper_bound(flush_cursor_);
-    if (iterator == connected_.end())
-      iterator = connected_.begin();
-    for (std::size_t examined = 0; examined < connected_.size(); ++examined) {
-      const auto current = iterator;
-      ++iterator;
-      if (iterator == connected_.end())
-        iterator = connected_.begin();
-
-      const auto source_key =
-          std::make_pair(current->first, current->second.source_generation);
-      if (!current->second.active || !current->second.runtime ||
-          current->second.telemetry.empty() ||
-          blocked.find(source_key) != blocked.end()) {
-        continue;
-      }
-
-      flush_cursor_ = current->first;
-      snapshot->robot_id = current->first;
-      snapshot->stream_id = current->second.source_request.context().work_id();
-      snapshot->source_generation = current->second.source_generation;
-      snapshot->batch = buildTelemetryBatch(current->second.telemetry);
-      return !snapshot->batch.items.empty();
-    }
-    return false;
+    snapshot->robot_id = connected_->robot.robot_id;
+    snapshot->stream_id = connected_->source_request.context().work_id();
+    snapshot->source_generation = connected_->source_generation;
+    snapshot->batch = buildTelemetryBatch(connected_->telemetry);
+    return !snapshot->batch.items.empty();
   }
 
   void finishTelemetryAttempt(const TelemetrySnapshot &snapshot,
@@ -1248,64 +1194,56 @@ private:
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = connected_.find(snapshot.robot_id);
-    if (found == connected_.end() ||
-        found->second.source_generation != snapshot.source_generation ||
-        found->second.source_request.context().work_id() !=
+    const auto found = connected_.get();
+    if (found == nullptr || found->robot.robot_id != snapshot.robot_id ||
+        found->source_generation != snapshot.source_generation ||
+        found->source_request.context().work_id() !=
             snapshot.stream_id ||
-        !telemetryBatchMatchesPrefix(found->second.telemetry,
+        !telemetryBatchMatchesPrefix(found->telemetry,
                                      snapshot.batch.tokens)) {
       return;
     }
     const std::size_t batch_size = snapshot.batch.tokens.size();
     for (std::size_t index = 0; index < batch_size; ++index)
-      discardFrontTelemetryLocked(&found->second);
+      discardFrontTelemetryLocked(&*found);
     if (result != xgc2::adapter_runtime::SourceWriteResult::kAccepted)
-      found->second.dropped += batch_size;
+      found->dropped += batch_size;
   }
 
   void flushTelemetry() {
     if (!client_)
       return;
-    std::set<std::pair<std::string, std::uint64_t>> blocked;
     for (std::size_t attempted = 0; attempted < kMaximumPublishAttemptsPerTick;
          ++attempted) {
       TelemetrySnapshot snapshot;
-      if (!nextTelemetrySnapshot(blocked, &snapshot))
+      if (!nextTelemetrySnapshot(&snapshot))
         break;
       const auto result = client_->PublishSource(
           snapshot.stream_id, std::move(snapshot.batch.items));
       if (result == xgc2::adapter_runtime::SourceWriteResult::kNoCredit ||
           result == xgc2::adapter_runtime::SourceWriteResult::kNotReady ||
-          result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull) {
-        blocked.insert(
-            std::make_pair(snapshot.robot_id, snapshot.source_generation));
-        continue;
-      }
+          result == xgc2::adapter_runtime::SourceWriteResult::kQueueFull)
+        break;
       finishTelemetryAttempt(snapshot, result);
     }
   }
 
   void periodicTimer(const ros::WallTimerEvent &) {
-    std::unique_lock<std::mutex> periodic_lock(periodic_mutex_,
-                                               std::try_to_lock);
+    std::unique_lock<std::mutex> periodic_lock(periodic_mutex_, std::try_to_lock);
     if (!periodic_lock.owns_lock())
       return;
-    std::vector<std::shared_ptr<RobotRuntime>> runtimes;
-    std::vector<std::shared_ptr<RemoteControlPublisher>> remote_controls;
+    std::shared_ptr<RobotRuntime> runtime;
+    std::shared_ptr<RemoteControlPublisher> remote_control;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      for (const auto &entry : connected_) {
-        if (entry.second.active && entry.second.runtime)
-          runtimes.push_back(entry.second.runtime);
-        if (entry.second.active && entry.second.remote_control)
-          remote_controls.push_back(entry.second.remote_control);
+      if (connected_ && connected_->active) {
+        runtime = connected_->runtime;
+        remote_control = connected_->remote_control;
       }
     }
-    const ros::WallTime now = ros::WallTime::now();
-    for (const auto &runtime : runtimes)
-      runtime->emitPeriodic(now);
-    for (const auto &remote_control : remote_controls)
+    if (runtime)
+      runtime->emitPeriodic(ros::WallTime::now());
+    if (remote_control)
       remote_control->PublishPeriodic();
     flushTelemetry();
   }
@@ -1320,13 +1258,12 @@ private:
   std::condition_variable command_condition_;
   bool has_configuration_ = false;
   xgc2_ros1_robot_adapter::RobotAdapterConfig configuration_;
-  std::map<std::string, ConnectedRobot> connected_;
+  std::unique_ptr<ConnectedRobot> connected_;
   std::map<std::string, SourceLocator> sources_by_work_;
   std::uint64_t next_source_generation_ = 0;
   std::uint64_t next_telemetry_token_ = 0;
   std::size_t queued_telemetry_ = 0;
   std::size_t queued_telemetry_bytes_ = 0;
-  std::string flush_cursor_;
   // Keep the callback-owning client last so construction failures destroy and
   // stop it before any state captured by its callbacks.
   std::unique_ptr<xgc2::adapter_runtime::Client> client_;
