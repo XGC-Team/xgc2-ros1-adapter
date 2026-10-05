@@ -1,7 +1,8 @@
 // ros_io: the aggregator's ROS edge. It does ordinary ROS subscribe and
 // publish and copies data between topics and module I/O. It is not the
 // ros1_bridge package and there is no separate bridge process: domain
-// generic sensor, FCU and provider edges are owned here. Domain ROS plugins
+// generic physical sensor/control edges are owned here; simulated bodies
+// publish and receive control directly in their World owner. Domain ROS plugins
 // are assembled by their own algorithm workspace.
 //
 // Every port is optional and is enabled by `<port>_topic` in the config (an
@@ -41,16 +42,8 @@
 //     ref_active_sampled    xgc.ref.sampled/1       -> .../SampledReference (latched)
 //   (the ref_* outputs are latched, as the reference trajectory node's are)
 //     planar_pva       xgc.planar_pva/1             -> unicycle_reference_trajectory_msgs/PlanarPvaReference
-//     sim_pose         xgc.pose/1                   -> geometry_msgs/PoseStamped (frame `frame_id`)
-//     sim_velocity     xgc.twist/1                  -> geometry_msgs/TwistStamped (frame `frame_id`)
-//     sim_imu          xgc.imu/1                     -> sensor_msgs/Imu (orientation unknown)
-//     sim_fcu_state    xgc.fcu_state/1               -> mavros_msgs/State
-//   virtual MAVROS service facade -> module output
-//     sim_fcu_request  xgc.fcu_request/2; `_topic` is a virtual MAVROS namespace.
-//                      CommandBool and CommandLong ARM400 await an executed
-//                      sim_fcu_result; SetMode reports only host delivery.
-//     sim_fcu_result   xgc.fcu_result/1, shared batch EVENT input for the facade.
-//     sim_extended_state xgc.fcu_extended_state/1 -> mavros_msgs/ExtendedState.
+//     sim_hover_thrust xgc.hover_thrust/1 -> original HoverThrustEstimate;
+//                      this is the native estimator output, not a plant bridge.
 //
 // Threading: ROS callbacks run on this plugin's own queue. Each step first
 // publishes what the modules wrote since the last step, then services that
@@ -68,9 +61,6 @@
 // instead of a round. A slice
 // remainder shorter than the kernel's timer slack (50 us) is not waited, so
 // `slice_ms` = 0.001 is exactly one non-blocking pass (ros_slice.hpp).
-// `sim_mocap_position_stddev_m = [x,y,z]` enables publication-side mocap
-// position measurement noise on sim_pose only; absent means exact plant pose.
-// `sim_mocap_noise_seed` selects a reproducible per-robot stream (default 1).
 
 #include <algorithm>
 #include <cmath>
@@ -96,14 +86,7 @@
 #include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
-#include <nav_msgs/Odometry.h>
-#include "sim_odometry.hpp"
-#include "sim_imu.hpp"
-#include "attitude_target_full.hpp"
-#include "sim_mocap.hpp"
-#include "sim_fcu_rpc.hpp"
-#include "sim_provider_rpc.hpp"
-#include <xgc2_lightweight_sim_msgs/SetProvider.h>
+#include <xgc-ros-runtime-edge/attitude_target_full.hpp>
 #include <multirotor_reference_trajectory_msgs/AnalyticReference.h>
 #include <multirotor_reference_trajectory_msgs/ReferenceStatus.h>
 #include <multirotor_reference_trajectory_msgs/SampledReference.h>
@@ -118,11 +101,12 @@
 
 #include <flat_config.hpp>
 #include <multirotor_reference_trajectory/reference_wire.hpp>
-#include "ros_edge.hpp"
+#include <xgc-ros-runtime-edge/ros_edge.hpp>
 #include "ros_slice.hpp"
+#include <xgc-ros-runtime-edge/pose_stamped.hpp>
+#include <xgc-ros-runtime-edge/position_target_full.hpp>
 #include "xgc_rt.h"
 #include <xgc-robotics-interfaces/robotics_interfaces_v1.h>
-#include <xgc-lightweight-sim/simulation_records_v1.h>
 #include <estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h>
 #include <hover_thrust_estimator/native/hover_thrust_wire.h>
 
@@ -158,19 +142,9 @@ enum Port : uint32_t {
   kHoverThrust,
   kControllerState,
   kPlanarPva,
-  kSimPose,
-  kSimVelocity,
-  kSimImu,
-  kSimFcuState,
   kCmdVel,
-  kSimFcuRequest,
   kAttitudeTargetFull,
-  kSimAttitudeTarget,
   kSimHoverThrust,
-  kSimFcuResult,
-  kSimExtendedState,
-  kSimProviderRequest,
-  kSimProviderResult,
   kPortCount
 };
 
@@ -200,40 +174,10 @@ const char* const kPortNames[kPortCount] = {
     "hover_thrust",
     "controller_state",
     "planar_pva",
-    "sim_pose",
-    "sim_velocity",
-    "sim_imu",
-    "sim_fcu_state",
     "cmd_vel",
-    "sim_fcu_request",
     "attitude_target_full",
-    "sim_attitude_target",
     "sim_hover_thrust",
-    "sim_fcu_result",
-    "sim_extended_state",
-    "sim_provider_request",
-    "sim_provider_result",
 };
-
-// All simulated FCU services in this process share one low-frequency queue.
-// Its callbacks only use the thread-safe RPC helper, never RosIo or the Host.
-struct SimServiceLoop {
-  ros::CallbackQueue queue;
-  ros::AsyncSpinner spinner{1, &queue};
-  SimServiceLoop() { spinner.start(); }
-  ~SimServiceLoop() { spinner.stop(); }
-};
-
-std::shared_ptr<SimServiceLoop> shared_sim_service_loop() {
-  static const auto loop = std::make_shared<SimServiceLoop>();
-  return loop;
-}
-
-std::shared_ptr<SimServiceLoop> shared_provider_service_loop() {
-  // A provider stop must be able to finish while the FCU queue awaits an ACK.
-  static const auto loop = std::make_shared<SimServiceLoop>();
-  return loop;
-}
 
 double stamp_or_now(const ros::Time& t) { return (t.isZero() ? ros::Time::now() : t).toSec(); }
 
@@ -272,20 +216,6 @@ std::string text(const char (&in)[N]) {
 struct RosIo {
   const xgc_host_api* host;
   std::string topics[kPortCount];
-  std::string sim_odometry_topic;
-  std::string sim_odometry_child_frame;
-  std::string sim_body_pose_topic;
-  ros::Publisher sim_body_pose_pub;
-  xgc_pose_v1 sim_pose_cache{};
-  std::unique_ptr<SimMocapMeasurement> sim_mocap;
-  xgc_twist_v1 sim_velocity_cache{};
-  xgc_imu_v1 sim_imu_cache{};
-  bool have_sim_imu{false};
-  bool sim_imu_orientation_from_pose{false};
-  double last_sim_imu_stamp{0};
-  bool have_sim_pose{false}, have_sim_velocity{false};
-  double last_sim_odometry_stamp{0};
-  ros::Publisher sim_odometry_pub;
   std::string sim_hover_thrust_trace_topic;
   ros::Publisher sim_hover_thrust_trace_pub;
   std::string node_name{"xgc_ros_io"};
@@ -296,22 +226,6 @@ struct RosIo {
   std::unique_ptr<ros::NodeHandle> nh;
   std::vector<ros::Subscriber> subs;
   ros::Publisher pubs[kPortCount];
-  ros::ServiceServer sim_command_service;
-  ros::ServiceServer sim_arming_service;
-  ros::ServiceServer sim_set_mode_service;
-  std::shared_ptr<xgc_sim_fcu::Rpc> sim_rpc;
-  std::shared_ptr<SimServiceLoop> sim_service_loop;
-  std::string sim_provider_service;
-  std::string sim_provider_group;
-  bool sim_provider_request_owner{true};
-  std::shared_ptr<xgc_sim_provider::Rpc> provider_rpc;
-  std::shared_ptr<SimServiceLoop> provider_service_loop;
-  ros::ServiceServer provider_service;
-  ros::Subscriber provider_pva_sub, provider_attitude_sub;
-  xgc_sim_provider::State provider_state;
-  uint64_t provider_controls_epoch{0};
-  int sim_fcu_robot_index{0};
-  double last_sim_extended_stamp{-1};
   uint64_t round{0};
   uint64_t from_ros{0};
   uint64_t to_ros{0};
@@ -326,7 +240,7 @@ struct RosIo {
   std::vector<std::string> call_log;
   bool calls_stop{false};
 
-  ~RosIo() { stop_provider_services(); stop_sim_services(); stop_calls(); }
+  ~RosIo() { stop_calls(); }
 
 
 
@@ -457,21 +371,7 @@ struct RosIo {
   }
 
   void on_alg_setpoint(const mavros_msgs::PositionTarget::ConstPtr& m) {
-    xgc_position_target_v1 s{};
-    s.stamp = stamp_or_now(m->header.stamp);
-    s.position[0] = m->position.x;
-    s.position[1] = m->position.y;
-    s.position[2] = m->position.z;
-    s.velocity[0] = m->velocity.x;
-    s.velocity[1] = m->velocity.y;
-    s.velocity[2] = m->velocity.z;
-    s.acceleration[0] = m->acceleration_or_force.x;
-    s.acceleration[1] = m->acceleration_or_force.y;
-    s.acceleration[2] = m->acceleration_or_force.z;
-    s.yaw = m->yaw;
-    s.yaw_rate = m->yaw_rate;
-    s.type_mask = m->type_mask;
-    s.coordinate_frame = m->coordinate_frame;
+    const auto s = full_position_target(*m, stamp_or_now(m->header.stamp));
     write(kAlgSetpoint, s);
   }
 
@@ -554,198 +454,6 @@ struct RosIo {
     caller.join();
   }
 
-  static bool on_sim_command(const std::shared_ptr<xgc_sim_fcu::Rpc>& rpc, uint64_t epoch,
-                            mavros_msgs::CommandLong::Request& request,
-                            mavros_msgs::CommandLong::Response& response) {
-    response.success = false;
-    response.result = 4;
-    if (request.command != 400) {
-      response.result = 3;
-      return true;
-    }
-    if (request.param1 != 0.0f && request.param1 != 1.0f) {
-      response.result = 2;
-      return true;
-    }
-    if (request.broadcast || request.confirmation != 0 ||
-        (request.param2 != 0.0f && request.param2 != 21196.0f) || request.param3 != 0.0f ||
-        request.param4 != 0.0f || request.param5 != 0.0f || request.param6 != 0.0f || request.param7 != 0.0f) {
-      response.result = 3;  // Unsupported fields are not silently dropped.
-      return true;
-    }
-    if (!xgc_ros_edge::output_allowed()) return true;
-    xgc_fcu_request_v2 r{};
-    r.stamp = ros::Time::now().toSec();
-    r.kind = 1;
-    r.arm = request.param1 == 1.0f ? 1u : 0u;
-    r.flags = request.param2 == 21196.0f ? 1u : 0u;
-    const auto reply = rpc->call(r, true, epoch);
-    response.success = reply.has_result && reply.result == 0;
-    response.result = reply.result;
-    return true;
-  }
-
-  static bool on_sim_arming(const std::shared_ptr<xgc_sim_fcu::Rpc>& rpc, uint64_t epoch,
-                           mavros_msgs::CommandBool::Request& request,
-                           mavros_msgs::CommandBool::Response& response) {
-    response.success = false;
-    response.result = 4;
-    if (!xgc_ros_edge::output_allowed()) return true;
-    xgc_fcu_request_v2 r{};
-    r.stamp = ros::Time::now().toSec();
-    r.kind = 1;
-    r.arm = request.value ? 1u : 0u;
-    const auto reply = rpc->call(r, true, epoch);
-    response.success = reply.has_result && reply.result == 0;
-    response.result = reply.result;
-    return true;
-  }
-
-  static bool on_sim_set_mode(const std::shared_ptr<xgc_sim_fcu::Rpc>& rpc, uint64_t epoch,
-                             mavros_msgs::SetMode::Request& request, mavros_msgs::SetMode::Response& response) {
-    response.mode_sent = false;
-    if (!xgc_ros_edge::output_allowed() || request.base_mode != 0 || request.custom_mode.empty() ||
-        request.custom_mode.size() >= sizeof(xgc_fcu_request_v2::mode) ||
-        request.custom_mode.find('\0') != std::string::npos) return true;
-    xgc_fcu_request_v2 r{};
-    r.stamp = ros::Time::now().toSec();
-    r.kind = 2;
-    text(r.mode, request.custom_mode);
-    response.mode_sent = rpc->call(r, false, epoch).sent;
-    return true;
-  }
-
-  void stop_sim_services() {
-    if (sim_rpc) sim_rpc->close();
-    sim_arming_service.shutdown();
-    sim_command_service.shutdown();
-    sim_set_mode_service.shutdown();
-    sim_service_loop.reset();
-  }
-
-  void bind_sim_fcu_services() {
-    sim_command_service.shutdown();
-    sim_arming_service.shutdown();
-    sim_set_mode_service.shutdown();
-    if (!sim_rpc || !enabled(kSimFcuRequest)) return;
-    sim_service_loop = shared_sim_service_loop();
-    const auto rpc = sim_rpc;
-    const auto epoch = rpc->epoch();
-    const std::string ns = topics[kSimFcuRequest];
-    ros::AdvertiseServiceOptions command, arming, mode;
-    command.init<mavros_msgs::CommandLong::Request, mavros_msgs::CommandLong::Response>(
-        ns + "/cmd/command", [rpc, epoch](auto& request, auto& response) { return on_sim_command(rpc, epoch, request, response); });
-    arming.init<mavros_msgs::CommandBool::Request, mavros_msgs::CommandBool::Response>(
-        ns + "/cmd/arming", [rpc, epoch](auto& request, auto& response) { return on_sim_arming(rpc, epoch, request, response); });
-    mode.init<mavros_msgs::SetMode::Request, mavros_msgs::SetMode::Response>(
-        ns + "/set_mode", [rpc, epoch](auto& request, auto& response) { return on_sim_set_mode(rpc, epoch, request, response); });
-    command.callback_queue = arming.callback_queue = mode.callback_queue = &sim_service_loop->queue;
-    sim_command_service = nh->advertiseService(command);
-    sim_arming_service = nh->advertiseService(arming);
-    sim_set_mode_service = nh->advertiseService(mode);
-  }
-
-  void publish_sim_requests() {
-    if (!sim_rpc) return;
-    for (const auto& request : sim_rpc->take_requests()) {
-      if (!xgc_ros_edge::output_allowed()) {
-        sim_rpc->output_open(false);
-        break;
-      }
-      if (!sim_rpc->can_publish(request.request_id)) continue;
-      sim_rpc->published(request.request_id, write(kSimFcuRequest, request));
-    }
-  }
-
-  static bool on_provider(const std::shared_ptr<xgc_sim_provider::Rpc>& rpc,
-                          xgc2_lightweight_sim_msgs::SetProvider::Request& request, xgc2_lightweight_sim_msgs::SetProvider::Response& response) {
-    const auto current = rpc->state();
-    response.accepted = false;
-    response.generation = current.generation;
-    response.enabled = current.enabled;
-    response.reason = 2;
-    response.message = "invalid action";
-    if (request.action > 2) return true;
-    xgc_sim_provider_request_v1 wire{};
-    wire.stamp = ros::Time::now().toSec();
-    wire.action = request.action;
-    wire.generation = request.generation;
-    const auto reply = rpc->call(wire);
-    if (!reply.received) return false;  // No fabricated model reason on timeout/closed transport.
-    response.accepted = reply.result.accepted != 0;
-    response.generation = reply.result.generation;
-    response.enabled = reply.result.enabled != 0;
-    response.reason = reply.result.reason;
-    response.message = reply.result.reason == 0 ? "accepted" :
-                       reply.result.reason == 1 ? "stale generation" : "invalid action or body";
-    return true;
-  }
-
-  void bind_provider_controls() {
-    ++provider_controls_epoch;
-    provider_pva_sub.shutdown();
-    provider_attitude_sub.shutdown();
-    if (!provider_state.enabled) return;
-    const auto generation = provider_state.generation;
-    const auto epoch = provider_controls_epoch;
-    if (enabled(kAlgSetpoint))
-      provider_pva_sub = nh->subscribe<mavros_msgs::PositionTarget>(topics[kAlgSetpoint], queue_size,
-          [this, generation, epoch](const mavros_msgs::PositionTarget::ConstPtr& message) {
-            if (provider_state.enabled && provider_state.generation == generation && provider_controls_epoch == epoch)
-              on_alg_setpoint(message);
-          });
-    if (enabled(kAttitudeTargetFull))
-      provider_attitude_sub = nh->subscribe<mavros_msgs::AttitudeTarget>(topics[kAttitudeTargetFull], queue_size,
-          [this, generation, epoch](const mavros_msgs::AttitudeTarget::ConstPtr& message) {
-            if (provider_state.enabled && provider_state.generation == generation && provider_controls_epoch == epoch)
-              on_attitude_target_full(message);
-          });
-  }
-
-  void consume_provider_results() {
-    if (!provider_rpc) return;
-    xgc_sample_view view;
-    while (host->next(host->host, kSimProviderResult, &view) == XGC_OK) {
-      if (view.len != sizeof(xgc_sim_provider_result_v1)) continue;
-      xgc_sim_provider_result_v1 result;
-      std::memcpy(&result, view.data, sizeof result);
-      if (!provider_rpc->result(result)) continue;
-      const auto state = provider_rpc->state();
-      if (state.generation == provider_state.generation && state.enabled == provider_state.enabled) continue;
-      if (sim_rpc) sim_rpc->close();
-      provider_state = state;
-      bind_provider_controls();
-      if (provider_state.enabled && sim_rpc) sim_rpc->open();
-      bind_sim_fcu_services();
-    }
-  }
-
-  void publish_provider_requests() {
-    if (!provider_rpc) return;
-    if (!sim_provider_group.empty()) {
-      if (!sim_provider_request_owner) return;
-      for (const auto& work : xgc_sim_provider::Groups::instance().take(sim_provider_group)) {
-        if (!work.rpc->can_publish(work.request.request_id)) continue;
-        work.rpc->published(work.request.request_id, write(kSimProviderRequest, work.request));
-      }
-    } else {
-      for (const auto& request : provider_rpc->take_requests())
-        if (provider_rpc->can_publish(request.request_id))
-          provider_rpc->published(request.request_id, write(kSimProviderRequest, request));
-    }
-  }
-
-  void stop_provider_services() {
-    ++provider_controls_epoch;
-    if (provider_rpc) provider_rpc->close();
-    if (provider_rpc && !sim_provider_group.empty())
-      xgc_sim_provider::Groups::instance().remove(sim_provider_group, static_cast<uint32_t>(sim_fcu_robot_index), provider_rpc);
-    provider_service.shutdown();
-    provider_pva_sub.shutdown();
-    provider_attitude_sub.shutdown();
-    provider_service_loop.reset();
-  }
-
   void discard_pending_output() {
     xgc_sample_view v;
     for (uint32_t port = 0; port < kPortCount; ++port) {
@@ -769,129 +477,9 @@ struct RosIo {
       xgc_pose_v1 s;
       std::memcpy(&s, v.data, sizeof s);
       geometry_msgs::PoseStamped m;
-      m.header.stamp.fromSec(s.stamp);
       m.header.frame_id = frame_id;
-      m.pose.position.x = s.position[0];
-      m.pose.position.y = s.position[1];
-      m.pose.position.z = s.position[2];
-      m.pose.orientation.w = s.q_wxyz[0];
-      m.pose.orientation.x = s.q_wxyz[1];
-      m.pose.orientation.y = s.q_wxyz[2];
-      m.pose.orientation.z = s.q_wxyz[3];
+      assign_pose_stamped(s, &m);
       pubs[kVisionPose].publish(m);
-      ++to_ros;
-    }
-    while (host->next(host->host, kSimPose, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_pose_v1)) continue;
-      xgc_pose_v1 s;
-      std::memcpy(&s, v.data, sizeof s);
-      if (sim_body_pose_pub) {
-        geometry_msgs::PoseStamped truth;
-        truth.header.stamp.fromSec(s.stamp);
-        truth.header.frame_id = "world";
-        truth.pose.position.x = s.position[0];
-        truth.pose.position.y = s.position[1];
-        truth.pose.position.z = s.position[2];
-        truth.pose.orientation.w = s.q_wxyz[0];
-        truth.pose.orientation.x = s.q_wxyz[1];
-        truth.pose.orientation.y = s.q_wxyz[2];
-        truth.pose.orientation.z = s.q_wxyz[3];
-        sim_body_pose_pub.publish(truth);
-        ++to_ros;
-      }
-      // Only the explicitly configured mocap edge synthesizes a measurement.
-      // Other consumers of this plant sample retain the unmodified truth.
-      if (sim_mocap && !sim_mocap->sample(s, &s)) continue;
-      geometry_msgs::PoseStamped m;
-      m.header.stamp.fromSec(s.stamp);
-      m.header.frame_id = frame_id;
-      m.pose.position.x = s.position[0];
-      m.pose.position.y = s.position[1];
-      m.pose.position.z = s.position[2];
-      m.pose.orientation.w = s.q_wxyz[0];
-      m.pose.orientation.x = s.q_wxyz[1];
-      m.pose.orientation.y = s.q_wxyz[2];
-      m.pose.orientation.z = s.q_wxyz[3];
-      pubs[kSimPose].publish(m);
-      ++to_ros;
-      sim_pose_cache = s;
-      have_sim_pose = true;
-    }
-    while (host->next(host->host, kSimVelocity, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_twist_v1)) continue;
-      xgc_twist_v1 s;
-      std::memcpy(&s, v.data, sizeof s);
-      geometry_msgs::TwistStamped m;
-      m.header.stamp.fromSec(s.stamp);
-      m.header.frame_id = frame_id;
-      vec3(m.twist.linear, s.linear);
-      vec3(m.twist.angular, s.angular);
-      pubs[kSimVelocity].publish(m);
-      ++to_ros;
-      sim_velocity_cache = s;
-      have_sim_velocity = true;
-    }
-    if (sim_odometry_pub && have_sim_pose && have_sim_velocity) {
-      SimOdometry measured;
-      if (measured_sim_odometry(sim_pose_cache, sim_velocity_cache, last_sim_odometry_stamp, &measured)) {
-        nav_msgs::Odometry m;
-        m.header.stamp.fromSec(measured.pose.stamp);
-        m.header.frame_id = frame_id;
-        m.child_frame_id = sim_odometry_child_frame;
-        m.pose.pose.position.x = measured.pose.position[0];
-        m.pose.pose.position.y = measured.pose.position[1];
-        m.pose.pose.position.z = measured.pose.position[2];
-        m.pose.pose.orientation.w = measured.pose.q_wxyz[0];
-        m.pose.pose.orientation.x = measured.pose.q_wxyz[1];
-        m.pose.pose.orientation.y = measured.pose.q_wxyz[2];
-        m.pose.pose.orientation.z = measured.pose.q_wxyz[3];
-        vec3(m.twist.twist.linear, measured.linear);
-        vec3(m.twist.twist.angular, measured.angular);
-        sim_odometry_pub.publish(m);
-        last_sim_odometry_stamp = measured.pose.stamp;
-        ++to_ros;
-      }
-    }
-    const auto publish_imu = [&](const xgc_imu_v1& s, const xgc_pose_v1* pose) {
-      sensor_msgs::Imu m;
-      m.header.stamp.fromSec(s.stamp);
-      m.header.frame_id = sim_odometry_child_frame;
-      if (pose) {
-        m.orientation.w = pose->q_wxyz[0];
-        m.orientation.x = pose->q_wxyz[1];
-        m.orientation.y = pose->q_wxyz[2];
-        m.orientation.z = pose->q_wxyz[3];
-      } else {
-        // A stand-alone imu/1 input has no attitude in its wire schema.
-        m.orientation_covariance[0] = -1.0;
-      }
-      vec3(m.linear_acceleration, s.accel);
-      vec3(m.angular_velocity, s.gyro);
-      pubs[kSimImu].publish(m);
-      ++to_ros;
-    };
-    while (host->next(host->host, kSimImu, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_imu_v1)) continue;
-      std::memcpy(&sim_imu_cache, v.data, sizeof sim_imu_cache);
-      have_sim_imu = true;
-      if (!sim_imu_orientation_from_pose) publish_imu(sim_imu_cache, nullptr);
-    }
-    // State-QoS inputs retain the newest sample. Never attach another model
-    // step's quaternion, nor the commanded attitude, to measured IMU data.
-    if (sim_imu_orientation_from_pose && have_sim_pose && have_sim_imu &&
-        matched_sim_imu(sim_pose_cache, sim_imu_cache, last_sim_imu_stamp)) {
-      publish_imu(sim_imu_cache, &sim_pose_cache);
-      last_sim_imu_stamp = sim_imu_cache.stamp;
-    }
-    while (host->next(host->host, kSimAttitudeTarget, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_attitude_target_v2)) continue;
-      xgc_attitude_target_v2 sample;
-      std::memcpy(&sample, v.data, sizeof sample);
-      mavros_msgs::AttitudeTarget m;
-      if (!assign_full_attitude_target(sample, &m)) continue;
-      m.header.stamp.fromSec(sample.stamp);
-      m.header.frame_id = frame_id;
-      pubs[kSimAttitudeTarget].publish(m);
       ++to_ros;
     }
     while (host->next(host->host, kSimHoverThrust, &v) == XGC_OK) {
@@ -919,44 +507,6 @@ struct RosIo {
         ++to_ros;
       }
     }
-    while (host->next(host->host, kSimFcuState, &v) == XGC_OK) {
-      if (v.len != sizeof(xgc_fcu_state_v1)) continue;
-      xgc_fcu_state_v1 s;
-      std::memcpy(&s, v.data, sizeof s);
-      if (sim_rpc) sim_rpc->state(s.stamp, s.connected != 0);
-      mavros_msgs::State m;
-      m.header.stamp.fromSec(s.stamp);
-      m.connected = s.connected != 0;
-      m.armed = s.armed != 0;
-      m.guided = s.guided != 0;
-      m.manual_input = s.manual_input != 0;
-      m.system_status = s.system_status;
-      m.mode = text(s.mode);
-      pubs[kSimFcuState].publish(m);
-      ++to_ros;
-    }
-    while (host->next(host->host, kSimFcuResult, &v) == XGC_OK) {
-      if (!sim_rpc || v.len != sizeof(xgc_fcu_result_v1)) continue;
-      xgc_fcu_result_v1 result;
-      std::memcpy(&result, v.data, sizeof result);
-      sim_rpc->result(result);
-    }
-    while (host->next(host->host, kSimExtendedState, &v) == XGC_OK) {
-      if (!enabled(kSimExtendedState) || v.len != sizeof(xgc_fcu_extended_state_v1)) continue;
-      xgc_fcu_extended_state_v1 state;
-      std::memcpy(&state, v.data, sizeof state);
-      if (!std::isfinite(state.stamp) || state.stamp < 0 || state.stamp <= last_sim_extended_stamp ||
-          state.count > 6 || static_cast<uint32_t>(sim_fcu_robot_index) >= state.count) continue;
-      mavros_msgs::ExtendedState message;
-      message.header.stamp.fromSec(state.stamp);
-      message.landed_state = state.landed_state[sim_fcu_robot_index];
-      message.vtol_state = state.vtol_state[sim_fcu_robot_index];
-      pubs[kSimExtendedState].publish(message);
-      last_sim_extended_stamp = state.stamp;
-      ++to_ros;
-    }
-
-
 
     while (host->next(host->host, kPlanarPva, &v) == XGC_OK) {
       if (v.len != sizeof(xgc_planar_pva_v1)) continue;
@@ -1117,26 +667,9 @@ struct RosIo {
     if (enabled(kPose)) subs.push_back(nh->subscribe(topics[kPose], queue_size, &RosIo::on_pose, this));
     if (enabled(kAttitudeTarget))
       subs.push_back(nh->subscribe(topics[kAttitudeTarget], queue_size, &RosIo::on_attitude_target, this));
-    if (enabled(kAttitudeTargetFull) && !provider_rpc)
+    if (enabled(kAttitudeTargetFull))
       subs.push_back(nh->subscribe(topics[kAttitudeTargetFull], queue_size, &RosIo::on_attitude_target_full, this));
     if (enabled(kVisionPose)) pubs[kVisionPose] = nh->advertise<geometry_msgs::PoseStamped>(topics[kVisionPose], queue_size);
-    if (sim_imu_orientation_from_pose && (!enabled(kSimPose) || sim_odometry_child_frame.empty()))
-      throw std::invalid_argument("ros-io: oriented simulated IMU requires sim_pose and a body frame");
-    if (enabled(kSimPose)) pubs[kSimPose] = nh->advertise<geometry_msgs::PoseStamped>(topics[kSimPose], queue_size);
-    if (!sim_body_pose_topic.empty()) {
-      if (!enabled(kSimPose)) throw std::invalid_argument("sim_body_pose_topic requires sim_pose input");
-      sim_body_pose_pub = nh->advertise<geometry_msgs::PoseStamped>(sim_body_pose_topic, queue_size);
-    }
-    if (enabled(kSimVelocity))
-      pubs[kSimVelocity] = nh->advertise<geometry_msgs::TwistStamped>(topics[kSimVelocity], queue_size);
-    if (!sim_odometry_topic.empty()) {
-      if (!enabled(kSimPose) || !enabled(kSimVelocity) || sim_odometry_child_frame.empty())
-        throw std::invalid_argument("sim_odometry_topic requires sim_pose, sim_velocity and a child frame");
-      sim_odometry_pub = nh->advertise<nav_msgs::Odometry>(sim_odometry_topic, queue_size);
-    }
-    if (enabled(kSimImu)) pubs[kSimImu] = nh->advertise<sensor_msgs::Imu>(topics[kSimImu], queue_size);
-    if (enabled(kSimAttitudeTarget))
-      pubs[kSimAttitudeTarget] = nh->advertise<mavros_msgs::AttitudeTarget>(topics[kSimAttitudeTarget], queue_size);
     if (enabled(kSimHoverThrust))
       pubs[kSimHoverThrust] = nh->advertise<hover_thrust_estimator_msgs::HoverThrustEstimate>(topics[kSimHoverThrust], queue_size);
     if (!sim_hover_thrust_trace_topic.empty()) {
@@ -1144,9 +677,6 @@ struct RosIo {
         throw std::invalid_argument("sim_hover_thrust_trace_topic requires sim_hover_thrust_topic");
       sim_hover_thrust_trace_pub = nh->advertise<std_msgs::Float64MultiArray>(sim_hover_thrust_trace_topic, queue_size);
     }
-    if (enabled(kSimFcuState)) pubs[kSimFcuState] = nh->advertise<mavros_msgs::State>(topics[kSimFcuState], queue_size);
-    if (enabled(kSimExtendedState))
-      pubs[kSimExtendedState] = nh->advertise<mavros_msgs::ExtendedState>(topics[kSimExtendedState], queue_size);
     if (enabled(kRigidStateEstimate))
       pubs[kRigidStateEstimate] =
           nh->advertise<rigid_state_estimator_msgs::RigidStateEstimate>(topics[kRigidStateEstimate], queue_size);
@@ -1158,34 +688,13 @@ struct RosIo {
     if (enabled(kBattery)) subs.push_back(nh->subscribe(topics[kBattery], queue_size, &RosIo::on_battery, this));
     if (enabled(kCommand)) subs.push_back(nh->subscribe(topics[kCommand], queue_size, &RosIo::on_command, this));
     if (enabled(kCmdVel)) subs.push_back(nh->subscribe(topics[kCmdVel], queue_size, &RosIo::on_cmd_vel, this));
-    if (enabled(kAlgSetpoint) && !provider_rpc)
+    if (enabled(kAlgSetpoint))
       subs.push_back(nh->subscribe(topics[kAlgSetpoint], queue_size, &RosIo::on_alg_setpoint, this));
     if (enabled(kSetpoint)) pubs[kSetpoint] = nh->advertise<mavros_msgs::PositionTarget>(topics[kSetpoint], queue_size);
     if (enabled(kAttitudeRate))
       pubs[kAttitudeRate] = nh->advertise<mavros_msgs::AttitudeTarget>(topics[kAttitudeRate], queue_size);
     if (enabled(kStatus)) pubs[kStatus] = nh->advertise<std_msgs::String>(topics[kStatus], queue_size);
     if (enabled(kFcuRequest)) caller = std::thread([this] { call_loop(); });
-    if (enabled(kSimFcuRequest)) {
-      if (!enabled(kSimFcuState) || !sim_rpc)
-        throw std::invalid_argument("sim_fcu_request requires a configured sim_fcu_state feedback port");
-      sim_rpc->open();
-      if (provider_rpc) sim_rpc->close();
-      bind_sim_fcu_services();
-    }
-    if (provider_rpc) {
-      provider_state = {};
-      provider_rpc->open();
-      if (!sim_provider_group.empty())
-        xgc_sim_provider::Groups::instance().add(sim_provider_group, static_cast<uint32_t>(sim_fcu_robot_index), provider_rpc);
-      provider_service_loop = shared_provider_service_loop();
-      const auto rpc = provider_rpc;
-      ros::AdvertiseServiceOptions provider;
-      provider.init<xgc2_lightweight_sim_msgs::SetProvider::Request, xgc2_lightweight_sim_msgs::SetProvider::Response>(
-          sim_provider_service, [rpc](auto& request, auto& response) { return on_provider(rpc, request, response); });
-      provider.callback_queue = &provider_service_loop->queue;
-      provider_service = nh->advertiseService(provider);
-      bind_provider_controls();
-    }
     if (enabled(kRefAnalytic))
       subs.push_back(nh->subscribe(topics[kRefAnalytic], queue_size, &RosIo::on_ref_analytic, this));
     if (enabled(kRefSampled))
@@ -1210,9 +719,7 @@ struct RosIo {
 
   xgc_status step(const xgc_step_ctx* ctx) {
     round = ctx->round;
-    consume_provider_results();
     const bool output_open = xgc_ros_edge::output_allowed() && !xgc_ros_edge::take_suppress_backlog();
-    if (sim_rpc) sim_rpc->output_open(output_open);
     if (!output_open) {
       discard_pending_output();
     } else {
@@ -1232,8 +739,6 @@ struct RosIo {
       if (wait_ns == 0) break;
       queue.callAvailable(ros::WallDuration(wait_ns * 1e-9));
     }
-    publish_sim_requests();
-    publish_provider_requests();
     if (write_failed) {
       log(XGC_LOG_ERROR, "ros_io: a module output write failed");
       return XGC_ERR;
@@ -1242,13 +747,8 @@ struct RosIo {
   }
 
   void shutdown() {
-    stop_provider_services();
-    stop_sim_services();
     stop_calls();
-    sim_odometry_pub.shutdown();
-    sim_body_pose_pub.shutdown();
-    sim_command_service.shutdown();
-    sim_set_mode_service.shutdown();
+    sim_hover_thrust_trace_pub.shutdown();
     subs.clear();
     for (auto& p : pubs) p.shutdown();
     nh.reset();
@@ -1282,54 +782,16 @@ xgc_status configure(void* p, const char* config) {
   auto* self = static_cast<RosIo*>(p);
   return guarded(self->host, "configure", [&] {
     const std::string t = config ? config : "";
+    // Retired plant forwarding is not an optional generic-ROS fallback.
+    std::string retired;
+    for (const char* key : {"sim_pose_topic", "sim_velocity_topic", "sim_imu_topic", "sim_fcu_state_topic", "sim_fcu_request_topic", "sim_attitude_target_topic", "sim_fcu_result_topic", "sim_extended_state_topic", "sim_provider_request_topic", "sim_provider_result_topic", "sim_odometry_topic", "sim_odometry_child_frame", "sim_body_pose_topic", "sim_provider_service", "sim_provider_group", "sim_provider_request_owner", "sim_fcu_robot_index", "sim_fcu_timeout_ms", "sim_fcu_freshness_ms", "sim_imu_orientation_from_pose", "sim_mocap_position_stddev_m", "sim_mocap_noise_seed"}) {
+      if (cfg::value(t, key, &retired))
+        throw std::invalid_argument(std::string("ros-io: retired simulation forwarding key ") + key);
+    }
     for (uint32_t i = 0; i < kPortCount; ++i) self->topics[i] = cfg::text_or(t, (std::string(kPortNames[i]) + "_topic").c_str(), "");
-    self->sim_odometry_topic = cfg::text_or(t, "sim_odometry_topic", "");
-    self->sim_odometry_child_frame = cfg::text_or(t, "sim_odometry_child_frame", "base_link");
-    self->sim_body_pose_topic = cfg::text_or(t, "sim_body_pose_topic", "");
     self->sim_hover_thrust_trace_topic = cfg::text_or(t, "sim_hover_thrust_trace_topic", "");
-    self->sim_provider_service = cfg::text_or(t, "sim_provider_service", "");
-    self->sim_provider_group = cfg::text_or(t, "sim_provider_group", "");
-    self->sim_provider_request_owner = true;
-    if (!cfg::boolean(t, "sim_provider_request_owner", &self->sim_provider_request_owner))
-      throw std::invalid_argument("sim_provider_request_owner must be boolean");
-    double rpc_index = 0, rpc_timeout_ms = 1000, rpc_freshness_ms = 500;
-    if (!cfg::number(t, "sim_fcu_robot_index", &rpc_index) || !std::isfinite(rpc_index) ||
-        rpc_index < 0 || rpc_index >= 6 || std::floor(rpc_index) != rpc_index ||
-        !cfg::number(t, "sim_fcu_timeout_ms", &rpc_timeout_ms) || !std::isfinite(rpc_timeout_ms) ||
-        rpc_timeout_ms < 1 || rpc_timeout_ms > 5000 || std::floor(rpc_timeout_ms) != rpc_timeout_ms ||
-        !cfg::number(t, "sim_fcu_freshness_ms", &rpc_freshness_ms) || !std::isfinite(rpc_freshness_ms) ||
-        rpc_freshness_ms < 1 || rpc_freshness_ms > 5000 || std::floor(rpc_freshness_ms) != rpc_freshness_ms)
-      throw std::invalid_argument("invalid sim FCU index or RPC deadlines");
-    self->sim_fcu_robot_index = static_cast<int>(rpc_index);
-    if (self->enabled(kSimFcuRequest)) {
-      self->topics[kSimFcuResult] = "fcu-result";  // Host-only batch result, no ROS topic.
-      self->sim_rpc = std::make_shared<xgc_sim_fcu::Rpc>(
-          static_cast<uint32_t>(self->sim_fcu_robot_index), std::chrono::milliseconds(static_cast<int>(rpc_timeout_ms)),
-          std::chrono::milliseconds(static_cast<int>(rpc_freshness_ms)));
-    } else self->sim_rpc.reset();
-    if (!self->sim_provider_service.empty()) {
-      self->provider_rpc = std::make_shared<xgc_sim_provider::Rpc>(static_cast<uint32_t>(self->sim_fcu_robot_index));
-      self->topics[kSimProviderRequest] = self->topics[kSimProviderResult] = "provider";
-    } else self->provider_rpc.reset();
-    if (!cfg::boolean(t, "sim_imu_orientation_from_pose", &self->sim_imu_orientation_from_pose))
-      throw std::invalid_argument("ros-io: sim_imu_orientation_from_pose must be boolean");
     self->node_name = cfg::text_or(t, "node_name", "xgc_ros_io");
     self->frame_id = cfg::text_or(t, "frame_id", "world");
-    std::string noise_config;
-    if (cfg::value(t, "sim_mocap_position_stddev_m", &noise_config)) {
-      std::array<double, 3> stddev{};
-      double seed = 1.0;
-      if (self->topics[kSimPose].empty() || !self->sim_odometry_topic.empty() ||
-          !cfg::numbers(t, "sim_mocap_position_stddev_m", stddev.data(), stddev.size()) ||
-          !cfg::number(t, "sim_mocap_noise_seed", &seed) ||
-          !std::isfinite(seed) || seed < 0.0 || seed > UINT32_MAX || std::floor(seed) != seed)
-        throw std::invalid_argument("sim mocap requires sim_pose, no sim_odometry, and valid noise parameters");
-      self->sim_mocap = std::make_unique<SimMocapMeasurement>(stddev, static_cast<uint32_t>(seed));
-    } else {
-      if (cfg::value(t, "sim_mocap_noise_seed", &noise_config))
-        throw std::invalid_argument("sim_mocap_noise_seed requires sim_mocap_position_stddev_m");
-      self->sim_mocap.reset();
-    }
     if (!cfg::number(t, "slice_ms", &self->slice_ms) || self->slice_ms < 0.0) {
       self->log(XGC_LOG_ERROR, "ros_io: invalid slice_ms");
       return XGC_ERR;
@@ -1394,19 +856,9 @@ const xgc_port_decl kPorts[kPortCount] = {
     {"hover_thrust", XGC_PORT_OUT_OPTIONAL, "xgc.hover_thrust/1", XGC_QOS_STATE},
     {"controller_state", XGC_PORT_OUT_OPTIONAL, "xgc.controller_status/1", XGC_QOS_STATE},
     {"planar_pva", XGC_PORT_IN_OPTIONAL, "xgc.planar_pva/1", XGC_QOS_CONTROL},
-    {"sim_pose", XGC_PORT_IN_OPTIONAL, "xgc.pose/1", XGC_QOS_STATE},
-    {"sim_velocity", XGC_PORT_IN_OPTIONAL, "xgc.twist/1", XGC_QOS_STATE},
-    {"sim_imu", XGC_PORT_IN_OPTIONAL, "xgc.imu/1", XGC_QOS_STATE},
-    {"sim_fcu_state", XGC_PORT_IN_OPTIONAL, "xgc.fcu_state/1", XGC_QOS_STATE},
     {"cmd_vel", XGC_PORT_OUT_OPTIONAL, "xgc.twist/1", XGC_QOS_CONTROL},
-    {"sim_fcu_request", XGC_PORT_OUT_OPTIONAL, "xgc.fcu_request/2", XGC_QOS_EVENT},
     {"attitude_target_full", XGC_PORT_OUT_OPTIONAL, "xgc.attitude_target/2", XGC_QOS_CONTROL},
-    {"sim_attitude_target", XGC_PORT_IN_OPTIONAL, "xgc.attitude_target/2", XGC_QOS_STATE},
     {"sim_hover_thrust", XGC_PORT_IN_OPTIONAL, "xgc.hover_thrust/1", XGC_QOS_STATE},
-    {"sim_fcu_result", XGC_PORT_IN_OPTIONAL, "xgc.fcu_result/1", XGC_QOS_EVENT},
-    {"sim_extended_state", XGC_PORT_IN_OPTIONAL, "xgc.fcu_extended_state/1", XGC_QOS_STATE},
-    {"sim_provider_request", XGC_PORT_OUT_OPTIONAL, "xgc.sim_provider_request/1", XGC_QOS_EVENT},
-    {"sim_provider_result", XGC_PORT_IN_OPTIONAL, "xgc.sim_provider_result/1", XGC_QOS_EVENT},
 };
 
 const xgc_plugin_vtbl kVtbl = {create, configure, activate, step, deactivate, destroy, domain_state};

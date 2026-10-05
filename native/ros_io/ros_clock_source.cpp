@@ -1,7 +1,7 @@
 // Clock-source service exported from libros_io.so. The host polls it on one
 // thread before domain activation. It does not stamp messages in Unix time
 // and does not spin the ordinary ros_io callback queue.
-#include "ros_edge.hpp"
+#include <xgc-ros-runtime-edge/ros_edge.hpp>
 
 #include <ros/callback_queue.h>
 #include <ros/message_event.h>

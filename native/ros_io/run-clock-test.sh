@@ -4,7 +4,6 @@ set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
 sdk_include="${XGC_RUNTIME_SDK_INCLUDE:-/usr/include/xgc-runtime}"
 robotics_prefix="${XGC_ROBOTICS_INTERFACES_PREFIX:-/usr}"
-simulation_prefix="${XGC_LIGHTWEIGHT_SIM_INTERFACES_PREFIX:-/usr}"
 prefix="${ROS_PREFIX:-/opt/ros/noetic}"
 port="${ROS_CLOCK_TEST_PORT:-11531}"
 work="${ROS_CLOCK_TEST_OUTPUT:-$(mktemp -d /tmp/ros-clock-test.XXXXXX)}"
@@ -32,8 +31,8 @@ ros_lib="${ROS_IO_LIB:-$work/libros_io.so}"
 if [[ -z "${ROS_IO_LIB:-}" ]]; then "$source_dir/build.sh" "$ros_lib"; fi
 cxx="${CXX:-c++}"
 "$cxx" -std=c++17 -O2 -Wall -Wextra \
-  -I "$sdk_include" -I "$robotics_prefix/include" -I "$simulation_prefix/include" -I "$source_dir" -isystem "$prefix/include" \
+  -I "$sdk_include" -I "$robotics_prefix/include" -I "$source_dir" -isystem "$prefix/include" \
   -o "$work/ros_clock_source_test" "$source_dir/ros_clock_source_test.cpp" \
-  -L "${XGC_ROS_IO_HELPERS_PREFIX:-/usr}/lib" -Wl,-rpath,"${XGC_ROS_IO_HELPERS_PREFIX:-/usr}/lib" -lxgc_ros_edge \
+  -L "${XGC_ROS_RUNTIME_EDGE_PREFIX:-/usr}/lib" -Wl,-rpath,"${XGC_ROS_RUNTIME_EDGE_PREFIX:-/usr}/lib" -lxgc_ros_edge \
   -L "$prefix/lib" -Wl,-rpath,"$prefix/lib" -lroscpp -lroscpp_serialization -lrosconsole -lrostime -lcpp_common -ldl
 "$work/ros_clock_source_test" "$ros_lib"

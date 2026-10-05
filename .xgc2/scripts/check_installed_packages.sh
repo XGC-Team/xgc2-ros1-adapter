@@ -35,25 +35,19 @@ test "$(dpkg-query -W -f='${Version}' "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge
 test -f "${PREFIX}/lib/libros_io.so"
 dpkg-query -S "${PREFIX}/lib/libros_io.so" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
 nm -D --defined-only "${PREFIX}/lib/libros_io.so" | awk '$3 == "xgc_rt_plugin_v1" {found=1} END {exit !found}'
-NATIVE_UTILITY_PATHS=(
-  "/usr/lib/libxgc_ros_edge.so"
-  "/usr/include/xgc-ros-io/ros_edge.hpp"
-  "/usr/include/xgc-ros-io/ros_slice.hpp"
-  "/usr/include/xgc-ros-io/sim_odometry.hpp"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets-release.cmake"
-)
-for path in "${NATIVE_UTILITY_PATHS[@]}"; do
-  test -f "${path}"
-  dpkg-query -S "${path}" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
+dpkg -s libxgc2-ros-runtime-edge libxgc2-ros-runtime-edge-dev >/dev/null
+dpkg-query -S /usr/lib/libxgc_ros_edge.so | grep -Fq 'libxgc2-ros-runtime-edge:'
+for header in ros_edge.hpp attitude_target_full.hpp pose_stamped.hpp position_target_full.hpp; do
+  dpkg-query -S "/usr/include/xgc-ros-runtime-edge/$header" | grep -Fq 'libxgc2-ros-runtime-edge-dev:'
 done
+test -f /usr/share/cmake/XgcRosRuntimeEdge/XgcRosRuntimeEdgeConfig.cmake
+if dpkg-query -L "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge" | grep -Eq '^/usr/(lib/libxgc_ros_edge[.]so|include/xgc-ros-io|share/cmake/XgcRosIoHelpers)(/|$)'; then
+  echo 'native bridge still owns foreign/retired Edge/Helpers payload' >&2; exit 1
+fi
 file -b /usr/lib/libxgc_ros_edge.so | grep -q '^ELF'
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
-for package in xgc2-lightweight-sim libxgc2-hover-thrust-dev \
+for package in libxgc2-hover-thrust-dev \
   "ros-${ROS_DISTRO}-xgc2-estimator-rigid-state" \
   "ros-${ROS_DISTRO}-xgc2-multirotor-controller"; do
   dpkg -s "${package}" >/dev/null

@@ -38,12 +38,12 @@ apt:
   - ros-noetic-xgc2-mocap-rotor-forwarder
   depends:
   - libxgc2-runtime-sdk-dev (>= 0.1.0-2~focal)
+  - libxgc2-ros-runtime-edge (>= 0.1.0-1)
+  - libxgc2-ros-runtime-edge-dev (>= 0.1.0-1)
   - libxgc2-robotics-interfaces-dev (>= 0.1.0-1~focal)
-  - xgc2-lightweight-sim
   - libxgc2-hover-thrust-dev
   - ros-noetic-xgc2-estimator-rigid-state
   - ros-noetic-xgc2-multirotor-controller
-  - ros-noetic-xgc2-lightweight-sim-msgs (>= 0.3.0-1)
   - libxgc2-adapter-runtime-client2
   - ros-noetic-diagnostic-msgs
   - ros-noetic-geometry-msgs
@@ -110,9 +110,6 @@ usage:
 ownership:
   paths:
   - /opt/ros/noetic/lib/libros_io.so
-  - /usr/lib/libxgc_ros_edge.so
-  - /usr/include/xgc-ros-io
-  - /usr/share/cmake/XgcRosIoHelpers
   - /opt/ros/noetic/include/xgc_px4_multirotor_ros1_adapter
   - /opt/ros/noetic/lib/libxgc_px4_multirotor_ros1_adapter_operations.a
   - /opt/ros/noetic/lib/pkgconfig/xgc_px4_multirotor_ros1_adapter.pc
@@ -151,7 +148,7 @@ release:
   - xgc2-estimator-rigid-state
   - xgc2-multirotor-controller
   - libxgc2-runtime-sdk-dev
-  - xgc2-lightweight-sim
+  - xgc2-ros-runtime-edge
   - libxgc2-adapter-runtime-client-dev
   - xgc2-protobuf
   dependency_policy:
@@ -160,7 +157,7 @@ release:
     xgc2-estimator-rigid-state: rebuild
     xgc2-multirotor-controller: rebuild
     libxgc2-runtime-sdk-dev: rebuild
-    xgc2-lightweight-sim: rebuild
+    xgc2-ros-runtime-edge: rebuild
     libxgc2-adapter-runtime-client-dev: rebuild
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild

@@ -1,4 +1,4 @@
-#include "attitude_target_full.hpp"
+#include <xgc-ros-runtime-edge/attitude_target_full.hpp>
 #include <mavros_msgs/AttitudeTarget.h>
 #include <cassert>
 #include <cmath>
