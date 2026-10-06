@@ -762,7 +762,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "24ea6962c6560c200c6a2a9b500c4aaf60a92e37",
+            "3e8ec42e34fcd5397e4c12e1505797c621ff9967",
             docker_build,
         )
         self.assertIn(
