@@ -258,7 +258,6 @@ docker exec "${container_name}" bash -lc '
     apt_update
     apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
-      xgc2-lightweight-sim ros-noetic-xgc2-lightweight-sim-msgs \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
       ros-noetic-xgc2-multirotor-controller
     dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
@@ -275,7 +274,6 @@ docker exec "${container_name}" bash -lc '
     for header in robotics_interfaces_v1.h control_records_v1.h paired_state_v1.h; do
       require_owned_header libxgc2-robotics-interfaces-dev "/usr/include/xgc-robotics-interfaces/${header}"
     done
-    require_owned_header xgc2-lightweight-sim /usr/include/xgc-lightweight-sim/simulation_records_v1.h
     require_owned_header libxgc2-hover-thrust-dev /opt/ros/noetic/include/hover_thrust_estimator/native/hover_thrust_wire.h
     require_owned_header ros-noetic-xgc2-estimator-rigid-state /opt/ros/noetic/include/estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h
     for header in reference_wire_v1.h reference_wire.hpp; do
@@ -283,10 +281,7 @@ docker exec "${container_name}" bash -lc '
     done
     test -f /usr/include/xgc-runtime/xgc_rt.h
     test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
-    test -f /opt/ros/noetic/include/xgc2_lightweight_sim_msgs/SetProvider.h
-    test -f /opt/ros/noetic/share/xgc2_lightweight_sim_msgs/srv/SetProvider.srv
-    dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h \
-      /opt/ros/noetic/include/xgc2_lightweight_sim_msgs/SetProvider.h
+    dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h
     apt_candidate_version() {
       local package="$1"
       local candidate
@@ -410,14 +405,18 @@ docker exec "${container_name}" bash -lc '
     ldconfig
     mkdir -p /tmp/work/install-root/opt/ros/noetic/lib
     XGC_RUNTIME_SDK_INCLUDE=/usr/include/xgc-runtime \
-    XGC_LIGHTWEIGHT_SIM_MSGS_PREFIX=/opt/ros/noetic \
     XGC_ROBOTICS_INTERFACES_PREFIX=/usr \
-    XGC_LIGHTWEIGHT_SIM_INTERFACES_PREFIX=/usr \
     XGC_HOVER_THRUST_WIRE_PREFIX=/opt/ros/noetic \
     XGC_RIGID_STATE_WIRE_PREFIX=/opt/ros/noetic \
     XGC_REFERENCE_WIRE_PREFIX=/opt/ros/noetic \
     XGC_ROS_IO_HELPERS_PREFIX=/usr \
       /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
+
+    # Original generic/physical transport regressions use this exact built DSO.
+    /tmp/work/native/ros_io/run-slice-test.sh
+    /tmp/work/native/ros_io/run-attitude-target-test.sh
+    ROS_IO_LIB=/tmp/work/install-root/opt/ros/noetic/lib/libros_io.so \
+      /tmp/work/native/ros_io/run-clock-test.sh
 
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results

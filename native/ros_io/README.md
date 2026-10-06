@@ -1,71 +1,43 @@
-# Lightweight vehicle live check
+# Native ROS1 edge checks
 
-`lightweight_vehicle_live.py` checks the ROS/Host boundary and the native FS150, Scout, and Mecanum lightweight vehicle models. It covers their ROS state/command topics, simulated MAVROS arm/mode services, motion, and pose/velocity timestamp alignment. It does not run a controller, planner, SITL, or Gazebo.
+This owner adapts physical ROS1 telemetry and command topics to the existing
+module records. The process ROS initialization and clock/output guard remain
+in `ros_edge`, shared with `ros_clock_source`; no second guard is introduced.
+The native edge retains the existing sensor, MAVROS command, reference,
+planar-PVA and estimator projections. `attitude_target_full` preserves every
+MAVROS mask bit and payload field. The historical `sim_hover_thrust` port is
+the controller's native hover-thrust-estimator output and keeps its existing
+ROS topic and trace configuration.
 
-Source the ROS environment and prepare a reachable ROS master before running. The script does not start `roscore` or Docker. All four arguments are required; the host and plugin paths are resolved to absolute paths, and the output directory is created if needed.
+The adapter no longer owns an embedded simulator, simulated FCU facade,
+provider ROS service, simulated sensor publishers, or plant/public simulation
+headers. The old simulator-only helper tests and per-body Host live drivers
+retired with that implementation. The standalone `xsim` product owns its
+original FS150/Scout/Mecanum model and native management API tests.
+Retired simulation config keys are rejected rather than ignored.
 
-Run from the `sync-runtime` directory with the built artifacts:
+Run the original local arithmetic and full-attitude wire checks:
 
-```sh
-python3 plugins/ros-io/lightweight_vehicle_live.py \
-  --host /absolute/path/to/xgc-rt-host \
-  --plant /absolute/path/to/liblightweight_vehicle.so \
-  --ros-io /absolute/path/to/libros_io.so \
-  --output-dir /absolute/path/to/lightweight-vehicle-live-output
+```bash
+bash native/ros_io/run-slice-test.sh
+bash native/ros_io/run-attitude-target-test.sh
 ```
 
-The output directory receives the generated manifest, Host log, model audit data, and `ros-model-result.json`.
+`run-attitude-target-test.sh` requires the installed Robotics Interfaces
+headers and real MAVROS message headers. Use the existing prefix environment
+variables when the owning headers are in a private test prefix.
 
-An optional `sim_odometry_topic` publishes MAVROS-compatible `nav_msgs/Odometry`
-from the existing measured `sim_pose` and `sim_velocity` channels. It pairs only
-equal, increasing model timestamps. The pose uses `frame_id`; measured world
-velocity is rotated into `sim_odometry_child_frame` (default `base_link`). It
-does not differentiate positions or expose a new ABI port. The live check also
-checks same-step stamps, measured poses and body twists at zero and 90-degree
-yaw. `bash plugins/ros-io/run-odometry-test.sh` checks coordinate and rejection
-cases without ROS; neither test certifies an algorithm experiment.
+The original clock test builds/loads the real native edge and uses its own
+private ROS master. It checks publisher identity, reset/backward-time gates,
+queue-overflow behavior, suppressed backlog, and normal command/setpoint
+recovery. It also checks that retired simulation ports/config are unavailable:
 
-`sim_imu` always carries body-frame specific force and angular velocity, with
-`sim_odometry_child_frame` as its ROS header frame (default `base_link`). Set
-`sim_imu_orientation_from_pose = true` for the MAVROS `/imu/data` edge to attach
-the full quaternion from an exactly matching, increasing `sim_pose` timestamp.
-Different model steps are never paired. The default is `false`, preserving
-the unknown-orientation convention for `/imu/data_raw` and stand-alone IMU
-inputs; no quaternion is added to the existing `xgc.imu/1` wire schema.
-The odometry test entry also checks IMU pose pairing and invalid samples.
-
-The optional `attitude_target_full_topic` input publishes
-`attitude_target_full` with schema `xgc.attitude_target/2`: full quaternion,
-body rates, normalized thrust and the original MAVROS type mask. The existing
-`attitude_target` port and `/1` layout remain unchanged for hover-thrust
-observers. The new port preserves even ignored payload fields; an actuator
-consumer must explicitly interpret or reject unsupported masks.
-`bash plugins/ros-io/run-attitude-target-test.sh` checks all 256 mask values
-using the installed MAVROS message type. This input conversion alone does not
-provide NMPC/DFBC actuator control in the lightweight plant.
-
-Each step services the plugin's ROS queue once without blocking and then
-keeps servicing it, in waits of at most 1 ms, for `slice_ms` (never past 1 ms
-before the round's deadline; without `slice_ms`, until then). A remainder
-shorter than the kernel's 50 us timer slack is not waited, so the lightweight
-plant's `slice_ms = 0.001` steps are one non-blocking pass.
-`bash plugins/ros-io/run-slice-test.sh` checks this arithmetic without ROS.
-
-## Lightweight controller live check
-
-`lightweight_controller_live.py` runs the FS150 plant and the real ctl-px4 SMC controller in separate `xgc-rt-host` processes. It sends the plant/controller channels over Zenoh TCP and uses the existing ROS master only for test commands, PVA setpoints, and observed ROS outputs. Source the ROS environment and prepare a reachable ROS master first; this script does not start ROS, MAVROS, or Docker. It checks the existing takeoff, 10-second trajectory tracking, endpoint error, and landing sequence. It does not validate DMPC or a complete experiment.
-
-Run from the `sync-runtime` directory with the built artifacts and two unused loopback TCP ports:
-
-```sh
-python3 plugins/ros-io/lightweight_controller_live.py \
-  --host /absolute/path/to/xgc-rt-host \
-  --plant /absolute/path/to/liblightweight_vehicle.so \
-  --controller /absolute/path/to/libctl_px4.so \
-  --ros-io /absolute/path/to/libros_io.so \
-  --plant-endpoint tcp/127.0.0.1:17441 \
-  --controller-endpoint tcp/127.0.0.1:17442 \
-  --output-dir /absolute/path/to/lightweight-controller-live-output
+```bash
+bash native/ros_io/run-clock-test.sh
 ```
 
-The output directory receives separate plant and controller manifests, Host logs, audit directories, and `controller-live-result.json` with both process IDs and exit codes.
+The normal package CI runs these three checks against its exact source-built
+DSO before packaging, alongside the original catkin robot Adapter tests.
+The Edge library, `ros_slice.hpp`, and their Helpers CMake exports remain
+owned and packaged here. The retired `sim_odometry.hpp` export and both old
+simulator Debian dependencies are absent from the new native-bridge payload.

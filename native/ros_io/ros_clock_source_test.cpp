@@ -79,6 +79,12 @@ int load(Loaded* loaded, const char* path) {
   loaded->clock = clock->vtbl;
   loaded->plugin = plugin->vtbl;
   for (uint32_t i = 0; i < plugin->port_count; ++i) {
+    for (const char* retired : {"sim_pose", "sim_velocity", "sim_imu", "sim_fcu_state",
+         "sim_fcu_request", "sim_attitude_target", "sim_fcu_result", "sim_extended_state",
+         "sim_provider_request", "sim_provider_result"}) {
+      if (std::strcmp(plugin->ports[i].name, retired) == 0)
+        return fail(std::string("retired simulation port remains: ") + retired);
+    }
     if (std::strcmp(plugin->ports[i].name, "command") == 0) loaded->command_port = i;
     if (std::strcmp(plugin->ports[i].name, "setpoint") == 0) loaded->setpoint_port = i;
   }
@@ -307,6 +313,14 @@ int main(int argc, char** argv) {
   host.api.port_origins = host_origins;
   host.api.node_id = host_node;
   loaded.plugin_self = loaded.plugin->create(&host.api);
+  for (const char* retired_config : {
+       "sim_provider_service = \"/private_old_sim/provider\"\n",
+       "sim_pose_topic = \"/private_old_sim/pose\"\n",
+       "sim_odometry_topic = \"/private_old_sim/odom\"\n",
+       "sim_mocap_noise_seed = 1\n"}) {
+    if (loaded.plugin->configure(loaded.plugin_self, retired_config) != XGC_ERR)
+      return fail("retired simulation config was accepted");
+  }
   const char* plugin_config =
       "setpoint_topic = \"/clock_test/setpoint\"\n"
       "command_topic = \"/clock_test/command\"\n"

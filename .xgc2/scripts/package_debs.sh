@@ -93,7 +93,6 @@ NATIVE_UTILITY_PATHS=(
   "/usr/lib/libxgc_ros_edge.so"
   "/usr/include/xgc-ros-io/ros_edge.hpp"
   "/usr/include/xgc-ros-io/ros_slice.hpp"
-  "/usr/include/xgc-ros-io/sim_odometry.hpp"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
@@ -401,11 +400,11 @@ Section: misc
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: XGC2 <apt@example.com>
-Description: XGC2 owning native ROS1 edge and lightweight lifecycle bridge
+Description: XGC2 owning native ROS1 sensor and physical FCU edge
 EOF
 bridge_depends="$(BRIDGE_PRIVATE_ROOT="${bridge_root}" binary_dependencies \
   "${bridge_root}${NATIVE_BRIDGE}" "${bridge_root}/usr/lib/libxgc_ros_edge.so")"
-printf '%s\n' "Depends: ${bridge_depends}, ros-${ROS_DISTRO}-roscpp, libxgc2-runtime-sdk-dev (>= 0.1.0-2~focal), libxgc2-robotics-interfaces-dev (>= 0.1.0-1~focal), xgc2-lightweight-sim, ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs (>= 0.3.0-1), libxgc2-hover-thrust-dev, ros-${ROS_DISTRO}-xgc2-estimator-rigid-state, ros-${ROS_DISTRO}-xgc2-multirotor-controller" >>"${bridge_root}/DEBIAN/control"
+printf '%s\n' "Depends: ${bridge_depends}, ros-${ROS_DISTRO}-roscpp, libxgc2-runtime-sdk-dev (>= 0.1.0-2~focal), libxgc2-robotics-interfaces-dev (>= 0.1.0-1~focal), libxgc2-hover-thrust-dev, ros-${ROS_DISTRO}-xgc2-estimator-rigid-state, ros-${ROS_DISTRO}-xgc2-multirotor-controller" >>"${bridge_root}/DEBIAN/control"
 append_source_digest "${bridge_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
 fakeroot dpkg-deb --build "${bridge_root}" \
   "${OUTPUT_DIR}/${bridge_package}_${VERSION}_${ARCH}.deb" >/dev/null

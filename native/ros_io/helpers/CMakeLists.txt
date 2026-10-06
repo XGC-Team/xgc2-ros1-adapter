@@ -40,7 +40,7 @@ install(EXPORT XgcRosIoEdgeTargets
   NAMESPACE XgcRosIo:: DESTINATION "${helper_package_dir}")
 install(FILES ../ros_edge.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/xgc-ros-io")
 
-install(FILES ../ros_slice.hpp ../sim_odometry.hpp
+install(FILES ../ros_slice.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/xgc-ros-io")
 install(TARGETS xgc_ros_io_helpers EXPORT XgcRosIoHelpersTargets)
 install(EXPORT XgcRosIoHelpersTargets

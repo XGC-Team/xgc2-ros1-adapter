@@ -19,7 +19,6 @@ NATIVE_UTILITY_PATHS=(
   "/usr/lib/libxgc_ros_edge.so"
   "/usr/include/xgc-ros-io/ros_edge.hpp"
   "/usr/include/xgc-ros-io/ros_slice.hpp"
-  "/usr/include/xgc-ros-io/sim_odometry.hpp"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
@@ -30,6 +29,11 @@ for utility in "${NATIVE_UTILITY_PATHS[@]}"; do
   cmp "$install_root$utility" "$work/payload$utility"
 done
 file -b "$work/payload/usr/lib/libxgc_ros_edge.so" | grep -q '^ELF'
+test ! -e "$work/payload/usr/include/xgc-ros-io/sim_odometry.hpp"
+bridge_depends="$(dpkg-deb -f "${debs[0]}" Depends)"
+if grep -Eq "(^|, )(xgc2-lightweight-sim|ros-${ROS_DISTRO:-noetic}-xgc2-lightweight-sim-msgs)( |[(,]|$)" <<<"$bridge_depends"; then
+  echo "retired simulator dependency remains in native bridge Deb" >&2; exit 1
+fi
 # Reject each missing Edge/header/export before producing any Deb.
 for utility in "${NATIVE_UTILITY_PATHS[@]}"; do
   missing="$work/missing-utility"

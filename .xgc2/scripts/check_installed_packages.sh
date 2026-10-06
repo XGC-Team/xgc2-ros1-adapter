@@ -39,7 +39,6 @@ NATIVE_UTILITY_PATHS=(
   "/usr/lib/libxgc_ros_edge.so"
   "/usr/include/xgc-ros-io/ros_edge.hpp"
   "/usr/include/xgc-ros-io/ros_slice.hpp"
-  "/usr/include/xgc-ros-io/sim_odometry.hpp"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
   "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
@@ -51,9 +50,14 @@ for path in "${NATIVE_UTILITY_PATHS[@]}"; do
   dpkg-query -S "${path}" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
 done
 file -b /usr/lib/libxgc_ros_edge.so | grep -q '^ELF'
+test ! -e /usr/include/xgc-ros-io/sim_odometry.hpp
+bridge_depends="$(dpkg-query -W -f='${Depends}' "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge")"
+if grep -Eq "(^|, )(xgc2-lightweight-sim|ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs)( |[(,]|$)" <<<"$bridge_depends"; then
+  echo "installed native bridge retains retired simulator dependency" >&2; exit 1
+fi
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
-for package in xgc2-lightweight-sim libxgc2-hover-thrust-dev \
+for package in libxgc2-hover-thrust-dev \
   "ros-${ROS_DISTRO}-xgc2-estimator-rigid-state" \
   "ros-${ROS_DISTRO}-xgc2-multirotor-controller"; do
   dpkg -s "${package}" >/dev/null
