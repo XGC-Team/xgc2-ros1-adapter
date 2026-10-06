@@ -42,7 +42,7 @@ apt:
   - libxgc2-hover-thrust-dev
   - ros-noetic-xgc2-estimator-rigid-state
   - ros-noetic-xgc2-multirotor-controller
-  - libxgc2-adapter-runtime-client2
+  - libxgc2-adapter-runtime-client2 (>= 0.6.0-16~focal)
   - ros-noetic-diagnostic-msgs
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs

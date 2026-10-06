@@ -11,8 +11,16 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-}"
-XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-}"
+EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-16"
+EXPECTED_RUNTIME_CLIENT_DEB_VERSION="${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}~focal"
+PINNED_RUNTIME_CLIENT_SHA="24ea6962c6560c200c6a2a9b500c4aaf60a92e37"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}}"
+XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF="${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-${PINNED_RUNTIME_CLIENT_SHA}}"
+EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-19"
+EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
+PINNED_PROTOBUF_SHA="952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453"
+XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
+XGC2_PROTOBUF_GIT_REF="${XGC2_PROTOBUF_GIT_REF:-${PINNED_PROTOBUF_SHA}}"
 XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
 XGC2_PROTOBUF_SOURCE_ROOT="${XGC2_PROTOBUF_SOURCE_ROOT:-}"
 XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
@@ -85,6 +93,23 @@ if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && -z "${XGC2_DEPENDENCY_SET_DIGEST}" ]]; t
   echo "XGC2_APT_OVERLAY_URL requires XGC2_DEPENDENCY_SET_DIGEST" >&2
   exit 1
 fi
+if [[ "${XGC2_PROTOBUF_DEB_VERSION}" != "${EXPECTED_PROTOBUF_DEB_VERSION}" ||
+      "${XGC2_PROTOBUF_GIT_REF}" != "${PINNED_PROTOBUF_SHA}" ]]; then
+  echo "Adapter requires ${EXPECTED_PROTOBUF_DEB_VERSION} from protobuf ${PINNED_PROTOBUF_SHA}" >&2
+  exit 1
+fi
+if [[ "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" != "${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}" ||
+      "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}" != "${PINNED_RUNTIME_CLIENT_SHA}" ]]; then
+  echo "Adapter requires client ${EXPECTED_RUNTIME_CLIENT_DEB_VERSION} from ${PINNED_RUNTIME_CLIENT_SHA}" >&2
+  exit 1
+fi
+if [[ -n "${XGC2_PROTOBUF_SOURCE_ROOT}" ]]; then
+  [[ "$(git -C "${XGC2_PROTOBUF_SOURCE_ROOT}" rev-parse HEAD)" == "${PINNED_PROTOBUF_SHA}" &&
+     -z "$(git -C "${XGC2_PROTOBUF_SOURCE_ROOT}" status --porcelain)" ]] || {
+    echo "XGC2_PROTOBUF_SOURCE_ROOT must be the clean pinned protobuf source" >&2
+    exit 1
+  }
+fi
 
 if [[ -z "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" ]]; then
   if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
@@ -100,11 +125,10 @@ case "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" in
     exit 1
     ;;
 esac
-if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
-  ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-13~focal}"
-  XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-17~focal}"
+if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
+  echo "Release-train overlay must use the staged protobuf and client packages" >&2
+  exit 1
 fi
-
 expected_deb_arch=""
 case "${DOCKER_PLATFORM}" in
   "")
@@ -155,12 +179,14 @@ docker_env_args=(
   -e "EXPECTED_DEB_ARCH=${expected_deb_arch}"
   -e "INSTALL_CHECK=${INSTALL_CHECK}"
   -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
+  -e "EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION=${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}"
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
+  -e "EXPECTED_PROTOBUF_PRODUCT_VERSION=${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
   -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
   -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/XGC-Team/xgc2-protobuf.git}"
-  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF:-cd0b18754f6fb4d66fcd99b5d95032f693c391b4}"
+  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF}"
   -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/XGC-Team/xgc2-adapter-runtime-client-cpp.git}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-320de43c8c71dded21936f7ecd23f66cb17a13a2}"
+  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -282,31 +308,20 @@ docker exec "${container_name}" bash -lc '
     test -f /usr/include/xgc-runtime/xgc_rt.h
     test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
     dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h
-    apt_candidate_version() {
-      local package="$1"
-      local candidate
-      candidate="$(apt-cache policy "${package}" | awk "/Candidate:/ {print \$2; exit}")"
-      if [[ -z "${candidate}" || "${candidate}" == "(none)" ]]; then
-        echo "APT has no candidate for ${package}" >&2
-        exit 1
-      fi
-      printf "%s\n" "${candidate}"
-    }
-    if [[ -z "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
-      ADAPTER_RUNTIME_CLIENT_DEB_VERSION="$(
-        apt_candidate_version libxgc2-adapter-runtime-client-dev
-      )"
-    fi
-    if [[ -z "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
-      XGC2_PROTOBUF_DEB_VERSION="$(
+    if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "false" ]]; then
+      client_protobuf_version="$(
         apt-cache show \
           "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" |
           sed -nE \
             "s/^Depends:.*xgc2-protobuf-dev \\(= ([^)]+)\\).*/\\1/p" |
           head -n 1
       )"
-      if [[ -z "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+      if [[ -z "${client_protobuf_version}" ]]; then
         echo "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency" >&2
+        exit 1
+      fi
+      if [[ "${client_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+        echo "Adapter Runtime client ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION} requires protobuf ${client_protobuf_version}; Adapter requires ${XGC2_PROTOBUF_DEB_VERSION}" >&2
         exit 1
       fi
     fi
@@ -325,6 +340,8 @@ docker exec "${container_name}" bash -lc '
         test "$(git -C /tmp/xgc2-common-bootstrap/protobuf rev-parse HEAD)" = \
           "${XGC2_PROTOBUF_GIT_REF}"
       fi
+      test "$(awk -F": *" "/^version:/ {print \$2; exit}" /tmp/xgc2-common-bootstrap/protobuf/.xgc2/product.yml)" = \
+        "${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
       PACKAGE_DISTRIBUTION=focal \
       PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
       XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
@@ -340,6 +357,8 @@ docker exec "${container_name}" bash -lc '
       git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp checkout -q --detach FETCH_HEAD
       test "$(git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp rev-parse HEAD)" = \
         "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
+      test "$(awk -F": *" "/^version:/ {print \$2; exit}" /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/product.yml)" = \
+        "${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}"
       PACKAGE_DISTRIBUTION=focal \
       PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \

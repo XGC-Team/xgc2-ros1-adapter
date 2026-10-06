@@ -754,7 +754,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-13~focal}"',
+            'EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-16"',
             docker_build,
         )
         self.assertIn(
@@ -762,11 +762,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "320de43c8c71dded21936f7ecd23f66cb17a13a2",
+            "24ea6962c6560c200c6a2a9b500c4aaf60a92e37",
             docker_build,
         )
         self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-13~focal}"',
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-16~focal}"',
             installed_gate,
         )
         bootstrap_contract = docker_build + installed_gate
@@ -777,7 +777,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertEqual(bootstrap_contract.count(retired_literal), 0)
         self.assertIn(
-            'XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-0.5.0-17~focal}"',
+            'EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-19"',
             docker_build,
         )
         self.assertIn(
@@ -785,7 +785,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "cd0b18754f6fb4d66fcd99b5d95032f693c391b4",
+            "952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453",
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)

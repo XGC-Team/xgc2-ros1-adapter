@@ -252,8 +252,12 @@ installed runtime manifest:
 ```
 
 All adapters are compiled against the exact
-`libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Their
-installed Debian packages deliberately omit those build-only dependencies:
+`libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Push-CI
+bootstrap and release-train builds both require protobuf `0.5.0-19~focal`
+from source `952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453`. The staged client SDK must
+declare that same exact protobuf dependency. Both paths require client
+`0.6.0-16~focal`; a different version stops the build.
+Installed Debian packages deliberately omit those build-only dependencies:
 `dpkg-shlibdeps` derives a lower-bounded
 `libxgc2-adapter-runtime-client2` dependency from the ELF SONAME, while the ROS
 message packages remain explicit runtime dependencies. Compatible ABI-1 SDK
