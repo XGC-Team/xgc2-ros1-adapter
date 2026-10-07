@@ -1,9 +1,9 @@
 #pragma once
 
 #include <cstddef>
-#include <deque>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <geometry_msgs/AccelStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -36,8 +36,8 @@ public:
 
 private:
   double target_rate_hz_;
-  std::size_t window_;
-  std::deque<double> published_times_;
+  std::vector<double> published_times_;
+  std::size_t first_ = 0u, retained_ = 0u;
 };
 
 } // namespace xgc2_ros1_robot_adapter

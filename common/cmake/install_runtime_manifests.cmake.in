@@ -1,4 +1,5 @@
 set(_artifact "$ENV{DESTDIR}@XGC2_INSTALLED_EXECUTABLE@")
+set(_profile_args "@XGC2_PROFILE_ARGS@")
 set(_adapter_output
     "$ENV{DESTDIR}/usr/share/xgc2/adapter-definitions/@XGC2_ADAPTER_DEFINITION_ID@.json")
 set(_process_output
@@ -18,7 +19,7 @@ execute_process(
           --ros-package "@XGC2_ROS_PACKAGE@"
           --ros-executable "@XGC2_ROS_EXECUTABLE@"
           --registry "@XGC2_PROTOBUF_REGISTRY_JSON@"
-          --profile-file "@XGC2_PROFILE_FILE@"
+          ${_profile_args}
           --profile-schema "@XGC2_PROFILE_SCHEMA@"
           --definition-id "@XGC2_ADAPTER_DEFINITION_ID@"
           --version "@XGC2_ADAPTER_VERSION@"
@@ -41,7 +42,7 @@ execute_process(
           --ros-executable "@XGC2_ROS_EXECUTABLE@"
           --definition-id "@XGC2_ADAPTER_DEFINITION_ID@"
           --registry "@XGC2_PROTOBUF_REGISTRY_JSON@"
-          --profile-file "@XGC2_PROFILE_FILE@"
+          ${_profile_args}
           --profile-schema "@XGC2_PROFILE_SCHEMA@"
           --adapter-manifest "${_adapter_output}"
           --process-manifest "${_process_output}"

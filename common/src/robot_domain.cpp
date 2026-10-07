@@ -26,7 +26,7 @@ bool validRobotId(const std::string &value) {
 
 bool validProfileId(const std::string &value) {
   static const std::regex pattern(
-      "^[a-z][a-z0-9]*([.-][a-z0-9]+)*\\.v[1-9][0-9]*$");
+      "^[a-z][a-z0-9]*([.-][a-z0-9]+)*$");
   return !value.empty() && value.size() <= kMaximumProfileIdBytes &&
          std::regex_match(value, pattern);
 }
@@ -305,6 +305,12 @@ bool BuildRobotMessage(const RobotMessageContext &context,
     return fail(error, "semantic payload type does not match schema metadata");
   }
 
+  return EncodeRobotMessage(context, schema, semantic_payload, output, error);
+}
+bool ValidRobotIdentity(const std::string &robot_id) { return validRobotId(robot_id); }
+bool EncodeRobotMessage(const RobotMessageContext &context, const MessageSchema &schema,
+                        const google::protobuf::Message &semantic_payload,
+                        xgc::robot::v1::RobotMessage *output, std::string *error) {
   std::string encoded_payload;
   if (!semantic_payload.SerializeToString(&encoded_payload))
     return fail(error, "failed to serialize semantic protobuf payload");

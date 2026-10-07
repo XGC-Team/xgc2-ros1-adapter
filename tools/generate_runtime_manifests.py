@@ -12,7 +12,7 @@ from typing import Any
 
 from generate_contract_metadata import (
     catalog_profile_body,
-    load_profile,
+    load_profiles,
     load_registry,
     profile_contract_digest,
 )
@@ -194,10 +194,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
 
     registry_fingerprint, messages = load_registry(Path(args.registry))
     del registry_fingerprint
-    profile_file = Path(args.profile_file)
-    profiles = load_profile(profile_file, Path(args.profile_schema), messages)
-    if len(profiles) != 1:
-        raise ValueError("one robot profile is required")
+    profiles = load_profiles(args.profile_file, Path(args.profile_schema), messages)
     _, generated_profile = next(iter(profiles.items()))
     operation_channels = sorted(
         [
@@ -250,6 +247,9 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
     capability_manifest = {"formatVersion": 1, "capabilities": contracts}
     manifest_digest = sha256_bytes(canonical_json(capability_manifest))
 
+    type_server = args.definition_id in {
+        "xgc2-px4-multirotor-ros1-adapter", "xgc2-scout-mini-ros1-adapter", "xgc2-mecanum-ugv-ros1-adapter"
+    }
     adapter_manifest = {
         "apiVersion": "xgc.adapter.definition/v1",
         "adapters": [
@@ -271,8 +271,8 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
                         "idleTimeoutNanos": 300000000000,
                     },
                     "scope": {
-                        "kind": "robot-group",
-                        "requiredAttributes": ["provider", "run-id", "target-id"],
+                        "kind": "robot-server" if type_server else "robot-group",
+                        "requiredAttributes": ["provider", "ros-master-uri", "target-id"] if type_server else ["provider", "run-id", "target-id"],
                         "allowAdditionalAttributes": False,
                         "sharing": "shared",
                     },
@@ -314,28 +314,20 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
                 "readiness": {"kind": "process"},
                 "liveness": {"kind": "process"},
                 "stop": {"gracePeriod": 10000000000},
-                "restart": {"mode": "never"},
+                "restart": {"mode": "on-failure", "maxRestarts": 5, "backoff": 1000000000} if type_server else {"mode": "never"},
                 "internal": True,
             }
         ],
     }
 
-    profile_body = catalog_profile_body(
-        generated_profile, messages, args.definition_id
-    )
-    validate_profile_operation_endpoints(profile_body, capability_manifest)
-    installed_profile = {
-        "profileId": profile_body["profileId"],
-        "profileDigest": profile_contract_digest(profile_body),
-        **{
-            key: value
-            for key, value in profile_body.items()
-            if key != "profileId"
-        },
-    }
+    installed_profiles = []
+    for source_profile in profiles.values():
+        profile_body = catalog_profile_body(source_profile, messages, args.definition_id)
+        validate_profile_operation_endpoints(profile_body, capability_manifest)
+        installed_profiles.append({"profileDigest": profile_contract_digest(profile_body), **profile_body})
     profile_catalog = {
         "schema": "xgc.robot.adapter-profile-catalog/v4",
-        "profiles": [installed_profile],
+        "profiles": installed_profiles,
     }
     return adapter_manifest, process_manifest, profile_catalog
 
@@ -346,7 +338,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ros-package", required=True)
     parser.add_argument("--ros-executable", required=True)
     parser.add_argument("--registry", required=True)
-    parser.add_argument("--profile-file", required=True)
+    parser.add_argument("--profile-file", required=True, action="append")
     parser.add_argument("--profile-schema", required=True)
     parser.add_argument("--definition-id", required=True)
     parser.add_argument("--version", required=True)

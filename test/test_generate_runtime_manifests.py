@@ -30,9 +30,9 @@ VERIFIER = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFIER)
 
 SCHEMA = REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v4.schema.json"
-PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-ros1-v9.yaml"
-SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-ros1-v10.yaml"
-MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-ros1-v7.yaml"
+PX4_PROFILE = REPOSITORY_ROOT / "profiles/ros1/px4-multirotor-physical-vrpn.yaml"
+SCOUT_PROFILE = REPOSITORY_ROOT / "profiles/ros1/scout-mini-physical-vrpn.yaml"
+MECANUM_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mecanum-ugv-physical-vrpn.yaml"
 B2_PROFILE = REPOSITORY_ROOT / "profiles/ros1/unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE = REPOSITORY_ROOT / "profiles/ros1/mocap-rotor-ros1-v1.yaml"
 ROS_NOETIC_ENVIRONMENT = {
@@ -184,7 +184,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             },
         )
         self.assertEqual(profile["robotKind"], "px4_multirotor")
-        self.assertEqual(profile["profileId"], "px4.multirotor.ros1.v9")
+        self.assertEqual(profile["profileId"], "px4-multirotor.physical.vrpn")
         self.assertEqual(
             profile["parameters"]["namespace"],
             {
@@ -269,7 +269,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(SCOUT_PROFILE)
         )
         scout = scout_catalog["profiles"][0]
-        self.assertEqual(scout["profileId"], "scout-mini.ros1.v10")
+        self.assertEqual(scout["profileId"], "scout-mini.physical.vrpn")
         self.assertEqual(scout["robotKind"], "scout_mini")
         self.assertEqual(
             scout["semantics"]["operations"],
@@ -294,7 +294,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.arguments(MECANUM_PROFILE)
         )
         mecanum = mecanum_catalog["profiles"][0]
-        self.assertEqual(mecanum["profileId"], "mecanum-ugv.ros1.v7")
+        self.assertEqual(mecanum["profileId"], "mecanum-ugv.physical.vrpn")
         self.assertEqual(mecanum["robotKind"], "mecanum_ugv")
         self.assertEqual(
             mecanum["semantics"]["onlineConditions"],
@@ -754,7 +754,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            'EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-16"',
+            'EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-17"',
             docker_build,
         )
         self.assertIn(
@@ -762,11 +762,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "3e8ec42e34fcd5397e4c12e1505797c621ff9967",
+            "1aa878d182297778271745543e8b8129507327a7",
             docker_build,
         )
         self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-16~focal}"',
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-17~focal}"',
             installed_gate,
         )
         bootstrap_contract = docker_build + installed_gate
@@ -777,7 +777,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertEqual(bootstrap_contract.count(retired_literal), 0)
         self.assertIn(
-            'EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-19"',
+            'EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-20"',
             docker_build,
         )
         self.assertIn(
@@ -785,7 +785,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            "952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453",
+            "99f301ee8725e91ae8149becce92377ea8fbecb0",
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)
@@ -822,15 +822,20 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn("/usr/share/xgc2/process-definitions/", installed_gate)
         self.assertIn(".worktrees", installed_gate)
 
-    def test_ground_adapters_stop_motion_before_ros_transport_shutdown(self):
-        for package, node_source in (
-            ("scout", "xgc_scout_mini_ros1_adapter/src/scout_mini_ros1_adapter_node.cpp"),
-            ("mecanum", "xgc_mecanum_ugv_ros1_adapter/src/mecanum_ugv_ros1_adapter_node.cpp"),
+    def test_three_type_servers_share_actual_ros_environment_scope(self):
+        for profile, provider in (
+            (PX4_PROFILE, "xgc2-px4-multirotor-ros1-adapter"),
+            (SCOUT_PROFILE, "xgc2-scout-mini-ros1-adapter"),
+            (MECANUM_PROFILE, "xgc2-mecanum-ugv-ros1-adapter"),
         ):
-            with self.subTest(package=package):
-                source = (REPOSITORY_ROOT / "src" / node_source).read_text(encoding="utf-8")
-                self.assertIn("client_.reset();", source)
-                self.assertLess(source.index("node.Shutdown();"), source.index("ros::shutdown();"))
+            args = self.arguments(profile); args.definition_id = provider
+            adapter, process, _ = GENERATOR.build_documents(args)
+            scope = adapter["adapters"][0]["definition"]["scope"]
+            self.assertEqual(scope["kind"], "robot-server")
+            self.assertEqual(scope["requiredAttributes"], ["provider", "ros-master-uri", "target-id"])
+            self.assertFalse(scope["allowAdditionalAttributes"])
+            self.assertEqual(scope["sharing"], "shared")
+            self.assertEqual(process["definitions"][0]["restart"]["mode"], "on-failure")
 
     def test_duplicate_operation_identity_is_rejected_without_fallback(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))

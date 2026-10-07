@@ -490,8 +490,11 @@ bool validateNativeProfileContract(std::string *error) {
     const std::string channel_id(binding.channel_id);
     const bool positioning_health = channel_id == "state.health";
     const bool power = channel_id == "state.power";
-    bool invalid_policy = power ? channel.policy_count > 1u
-                                : channel.policy_count != 0u;
+    const bool pose = channel_id == "vrpn.position";
+    bool apply_offset = false;
+    bool invalid_policy = pose
+        ? channel.policy_count != 1u || !contract::channelPolicyBoolean(channel, "apply_world_offset", &apply_offset)
+        : power ? channel.policy_count > 1u : channel.policy_count != 0u;
     if (power && channel.policy_count == 1u) {
       const auto *curve = contract::channelPolicy(
           channel, "battery_voltage_percentage_curve");
@@ -661,7 +664,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     std::uint64_t spec_revision, EnvelopeEmitter emitter, std::string *error) {
   if (!validateNativeProfileContract(error))
     return nullptr;
-  if (config.profile_id != contract::kProfileId) {
+  if (!contract::profileDigest(config.profile_id)) {
     if (error != nullptr) {
       *error = "unsupported profile: " + config.profile_id;
     }
@@ -682,10 +685,12 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     }
     return nullptr;
   }
+  contract::ParameterMetadata mocap_parameter{};
+  const bool canonical_input = !contract::parameterMetadata(config.profile_id, "mocap_rigid_body", &mocap_parameter);
   const auto mocap_it = config.parameters.find("mocap_rigid_body");
   std::string mocap_error;
-  if (mocap_it == config.parameters.end() ||
-      !validMocapRigidBodyName(mocap_it->second, &mocap_error)) {
+  if (!canonical_input && (mocap_it == config.parameters.end() ||
+      !validMocapRigidBodyName(mocap_it->second, &mocap_error))) {
     if (error != nullptr) {
       *error = mocap_it == config.parameters.end()
                    ? "robot configuration is missing required "
@@ -737,14 +742,14 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.velocity", "velocity",
                             &vrpn_velocity_endpoint, error) ||
-      !resolveInputEndpoint(config, "vrpn.acceleration", "acceleration",
-                            &vrpn_acceleration_endpoint, error) ||
-      !resolveOutputEndpoint(config, "vrpn.position", &canonical_pose_endpoint,
-                             error) ||
-      !resolveOutputEndpoint(config, "vrpn.velocity", &canonical_velocity_endpoint,
-                             error) ||
-      !resolveOutputEndpoint(config, "vrpn.acceleration",
-                             &canonical_acceleration_endpoint, error) ||
+      (!canonical_input && !resolveInputEndpoint(config, "vrpn.acceleration", "acceleration",
+                            &vrpn_acceleration_endpoint, error)) ||
+      (!canonical_input && !resolveOutputEndpoint(config, "vrpn.position", &canonical_pose_endpoint,
+                             error)) ||
+      (!canonical_input && !resolveOutputEndpoint(config, "vrpn.velocity", &canonical_velocity_endpoint,
+                             error)) ||
+      (!canonical_input && !resolveOutputEndpoint(config, "vrpn.acceleration",
+                             &canonical_acceleration_endpoint, error)) ||
       !resolveInputEndpoint(config, "vrpn.speed", "velocity",
                             &speed_endpoint, error) ||
       !resolveInputEndpoint(config, "vrpn.speed", "pose",
@@ -764,14 +769,25 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     return nullptr;
   }
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
-  if (!xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+  if (!canonical_input && !xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
           config.parameters, &localization, error))
     return nullptr;
-  pose_endpoint = topicName(localization.source_root, pose_endpoint);
-  vrpn_velocity_endpoint = topicName(localization.source_root, vrpn_velocity_endpoint);
-  vrpn_acceleration_endpoint = topicName(localization.source_root, vrpn_acceleration_endpoint);
-  speed_endpoint = topicName(localization.source_root, speed_endpoint);
-  speed_pose_endpoint = topicName(localization.source_root, speed_pose_endpoint);
+  contract::ChannelMetadata pose_channel{};
+  bool apply_world_offset = false;
+  if (!contract::channelMetadata(config.profile_id, "vrpn.position", &pose_channel) ||
+      !contract::channelPolicyBoolean(pose_channel, "apply_world_offset", &apply_world_offset)) {
+    fail(error, "localization offset policy is missing");
+    return nullptr;
+  }
+  if (!apply_world_offset)
+    localization.offset_x = localization.offset_y = localization.offset_z = 0.0;
+  if (!canonical_input) {
+    pose_endpoint = topicName(localization.source_root, pose_endpoint);
+    vrpn_velocity_endpoint = topicName(localization.source_root, vrpn_velocity_endpoint);
+    vrpn_acceleration_endpoint = topicName(localization.source_root, vrpn_acceleration_endpoint);
+    speed_endpoint = topicName(localization.source_root, speed_endpoint);
+    speed_pose_endpoint = topicName(localization.source_root, speed_pose_endpoint);
+  }
   if (vrpn_velocity_endpoint != speed_endpoint ||
       pose_endpoint != speed_pose_endpoint ||
       health_endpoint != chassis_endpoint) {
@@ -793,7 +809,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        config.profile_id, namespace_it->second, spec_revision,
                        std::move(enabled_channels),
                        std::move(required_channels),
-                       mocap_it->second, std::move(pose_endpoint),
+                       canonical_input ? std::string() : mocap_it->second, std::move(pose_endpoint),
                        std::move(vrpn_velocity_endpoint),
                        std::move(vrpn_acceleration_endpoint),
                        std::move(canonical_pose_endpoint),
@@ -928,7 +944,7 @@ bool RobotRuntime::channelEnabled(const std::string &channel_id) const {
 }
 
 bool RobotRuntime::install(std::string *error) {
-  if (profile_id_ != contract::kProfileId) {
+  if (!contract::profileDigest(profile_id_)) {
     if (error != nullptr) {
       *error = "unsupported profile: " + profile_id_;
     }
@@ -936,18 +952,20 @@ bool RobotRuntime::install(std::string *error) {
   }
 
   const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
-  canonical_pose_publisher_ =
-      node_handle_.advertise<geometry_msgs::PoseStamped>(canonical_pose_endpoint_, 20, false);
-  canonical_velocity_publisher_ =
-      node_handle_.advertise<geometry_msgs::TwistStamped>(canonical_velocity_endpoint_, 20, false);
-  canonical_acceleration_publisher_ =
-      node_handle_.advertise<geometry_msgs::AccelStamped>(canonical_acceleration_endpoint_, 20, false);
-  if (!requireRosRegistration(canonical_pose_publisher_, canonical_pose_endpoint_, error) ||
-      !requireRosRegistration(canonical_velocity_publisher_, canonical_velocity_endpoint_, error) ||
-      !requireRosRegistration(canonical_acceleration_publisher_, canonical_acceleration_endpoint_, error))
-    return false;
+  if (!canonical_pose_endpoint_.empty()) {
+    canonical_pose_publisher_ =
+        node_handle_.advertise<geometry_msgs::PoseStamped>(canonical_pose_endpoint_, 20, false);
+    canonical_velocity_publisher_ =
+        node_handle_.advertise<geometry_msgs::TwistStamped>(canonical_velocity_endpoint_, 20, false);
+    canonical_acceleration_publisher_ =
+        node_handle_.advertise<geometry_msgs::AccelStamped>(canonical_acceleration_endpoint_, 20, false);
+    if (!requireRosRegistration(canonical_pose_publisher_, canonical_pose_endpoint_, error) ||
+        !requireRosRegistration(canonical_velocity_publisher_, canonical_velocity_endpoint_, error) ||
+        !requireRosRegistration(canonical_acceleration_publisher_, canonical_acceleration_endpoint_, error))
+      return false;
+  }
   {
-    // AsyncSpinner callbacks may start immediately after subscribe(). Keep
+    // Shared ROS callbacks may start immediately after subscribe(). Keep
     // tracking state and subscriber registration behind the callback mutex.
     std::lock_guard<std::mutex> lock(mutex_);
     if (required_channels_.count("vrpn.position") != 0u ||
@@ -961,7 +979,7 @@ bool RobotRuntime::install(std::string *error) {
             if (const auto self = weak_self.lock()) {
               self->poseCallback(message);
             }
-          });
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
         return false;
     }
@@ -981,7 +999,7 @@ bool RobotRuntime::install(std::string *error) {
                 if (const auto self = weak_self.lock()) {
                   self->vrpnVelocityCallback(message);
                 }
-              });
+              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(vrpn_velocity_subscriber_,
                                   vrpn_velocity_endpoint_, error))
         return false;
@@ -997,7 +1015,7 @@ bool RobotRuntime::install(std::string *error) {
                 if (const auto self = weak_self.lock()) {
                   self->vrpnAccelerationCallback(message);
                 }
-              });
+              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(vrpn_acceleration_subscriber_,
                                   vrpn_acceleration_endpoint_, error))
         return false;
@@ -1013,7 +1031,7 @@ bool RobotRuntime::install(std::string *error) {
                 if (const auto self = weak_self.lock()) {
                   self->commandVelocityCallback(message);
                 }
-              });
+              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(command_velocity_subscriber_,
                                   command_velocity_endpoint_, error))
         return false;
@@ -1027,7 +1045,7 @@ bool RobotRuntime::install(std::string *error) {
             if (const auto self = weak_self.lock()) {
               self->imuCallback(message);
             }
-          });
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(imu_subscriber_, imu_endpoint_, error))
         return false;
     }
@@ -1041,7 +1059,7 @@ bool RobotRuntime::install(std::string *error) {
             if (const auto self = weak_self.lock()) {
               self->voltageCallback(message);
             }
-          });
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(voltage_subscriber_, voltage_endpoint_,
                                   error))
         return false;
@@ -1062,7 +1080,7 @@ bool RobotRuntime::install(std::string *error) {
             if (const auto self = weak_self.lock()) {
               self->chassisStateCallback(message);
             }
-          });
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(chassis_state_subscriber_,
                                   chassis_state_endpoint_, error))
         return false;
@@ -1077,7 +1095,7 @@ bool RobotRuntime::install(std::string *error) {
             if (const auto self = weak_self.lock()) {
               self->controllerStatusCallback(message);
             }
-          });
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(controller_status_subscriber_,
                                     controller_status_endpoint_, error))
         return false;
@@ -1109,22 +1127,28 @@ bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
 xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
     const std::string &channel_id, const ros::Time &source_stamp,
     const google::protobuf::Message &payload) {
-  contract::ChannelMetadata channel{};
-  if (!contract::channelMetadata(profile_id_, channel_id, &channel) ||
-      channel.output_message_id == 0u) {
-    throw std::logic_error(
-        "channel output is absent from generated XGC2 contract metadata");
+  auto cached = message_schemas_.find(channel_id);
+  if (cached == message_schemas_.end()) {
+    contract::ChannelMetadata channel{};
+    if (!contract::channelMetadata(profile_id_, channel_id, &channel) ||
+        channel.output_message_id == 0u) {
+      throw std::logic_error(
+          "channel output is absent from generated XGC2 contract metadata");
+    }
+    contract::MessageMetadata metadata{};
+    if (!contract::messageMetadata(channel.output_message_id, &metadata)) {
+      throw std::logic_error(
+          "message ID is absent from generated XGC2 contract metadata");
+    }
+    xgc2_ros1_robot_adapter::MessageSchema schema;
+    schema.message_id = channel.output_message_id;
+    schema.type_name = metadata.type_name;
+    schema.version = metadata.version;
+    schema.fingerprint = metadata.fingerprint;
+
+    cached = message_schemas_.emplace(channel_id, std::move(schema)).first;
   }
-  contract::MessageMetadata metadata{};
-  if (!contract::messageMetadata(channel.output_message_id, &metadata)) {
-    throw std::logic_error(
-        "message ID is absent from generated XGC2 contract metadata");
-  }
-  xgc2_ros1_robot_adapter::MessageSchema schema;
-  schema.message_id = channel.output_message_id;
-  schema.type_name = metadata.type_name;
-  schema.version = metadata.version;
-  schema.fingerprint = metadata.fingerprint;
+  const auto &schema = cached->second;
 
   xgc2_ros1_robot_adapter::RobotMessageContext context;
   context.robot_id = robot_id_;
@@ -1143,7 +1167,7 @@ xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
 
   xgc::robot::v1::RobotMessage envelope;
   std::string error;
-  if (!xgc2_ros1_robot_adapter::BuildRobotMessage(
+  if (!xgc2_ros1_robot_adapter::EncodeRobotMessage(
           context, schema, payload, &envelope, &error)) {
     throw std::runtime_error("failed to build robot telemetry item: " + error);
   }
@@ -1151,13 +1175,7 @@ xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
 }
 
 void RobotRuntime::emit(std::vector<xgc::robot::v1::RobotMessage> messages) {
-  for (auto &message : messages) {
-    std::string item;
-    if (!message.SerializeToString(&item)) {
-      throw std::runtime_error("failed to serialize robot telemetry item");
-    }
-    emitter_(std::move(item));
-  }
+  for (auto &message : messages) emitter_(std::move(message));
 }
 
 void RobotRuntime::ensureSourceLocked(const std::string &endpoint,
@@ -1232,12 +1250,13 @@ void RobotRuntime::poseCallback(
       ++sources_["vrpn.position"].dropped_samples;
     }
   }
-  canonical_pose_publisher_.publish(projected);
+  if (canonical_pose_publisher_) canonical_pose_publisher_.publish(projected);
   emit(std::move(output));
 }
 
 void RobotRuntime::commandVelocityCallback(
     const geometry_msgs::Twist::ConstPtr &message) {
+  static const std::string command_velocity_channel = "command.velocity";
   CallbackGuard callback(this);
   if (!callback)
     return;
@@ -1245,17 +1264,17 @@ void RobotRuntime::commandVelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("command.velocity", now);
-    if (channelEnabled("command.velocity") &&
-        shouldEmitLocked("command.velocity", now)) {
+    recordSourceLocked(command_velocity_channel, now);
+    if (channelEnabled(command_velocity_channel) &&
+        shouldEmitLocked(command_velocity_channel, now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       copyVector(message->linear, payload.mutable_linear());
       copyVector(message->angular, payload.mutable_angular());
       output.push_back(
-          makeEnvelopeLocked("command.velocity", ros::Time(), payload));
-      recordOutputLocked("command.velocity");
-    } else if (channelEnabled("command.velocity")) {
-      ++sources_["command.velocity"].dropped_samples;
+          makeEnvelopeLocked(command_velocity_channel, ros::Time(), payload));
+      recordOutputLocked(command_velocity_channel);
+    } else if (channelEnabled(command_velocity_channel)) {
+      ++sources_[command_velocity_channel].dropped_samples;
     }
   }
   emit(std::move(output));
@@ -1311,12 +1330,13 @@ void RobotRuntime::vrpnVelocityCallback(
       ++sources_["vrpn.speed"].dropped_samples;
     }
   }
-  canonical_velocity_publisher_.publish(*message);
+  if (canonical_velocity_publisher_) canonical_velocity_publisher_.publish(*message);
   emit(std::move(output));
 }
 
 void RobotRuntime::vrpnAccelerationCallback(
     const geometry_msgs::AccelStamped::ConstPtr &message) {
+  static const std::string vrpn_acceleration_channel = "vrpn.acceleration";
   CallbackGuard callback(this);
   if (!callback)
     return;
@@ -1326,18 +1346,18 @@ void RobotRuntime::vrpnAccelerationCallback(
     return;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("vrpn.acceleration", now);
-    if (channelEnabled("vrpn.acceleration") &&
-        shouldEmitLocked("vrpn.acceleration", now)) {
+    recordSourceLocked(vrpn_acceleration_channel, now);
+    if (channelEnabled(vrpn_acceleration_channel) &&
+        shouldEmitLocked(vrpn_acceleration_channel, now)) {
       output.push_back(makeEnvelopeLocked(
-          "vrpn.acceleration", message->header.stamp,
+          vrpn_acceleration_channel, message->header.stamp,
           vrpnAccelerationEstimate(*message)));
-      recordOutputLocked("vrpn.acceleration");
-    } else if (channelEnabled("vrpn.acceleration")) {
-      ++sources_["vrpn.acceleration"].dropped_samples;
+      recordOutputLocked(vrpn_acceleration_channel);
+    } else if (channelEnabled(vrpn_acceleration_channel)) {
+      ++sources_[vrpn_acceleration_channel].dropped_samples;
     }
   }
-  canonical_acceleration_publisher_.publish(*message);
+  if (canonical_acceleration_publisher_) canonical_acceleration_publisher_.publish(*message);
   emit(std::move(output));
 }
 
@@ -1449,6 +1469,7 @@ void RobotRuntime::chassisStateCallback(
 
 void RobotRuntime::controllerStatusCallback(
     const std_msgs::String::ConstPtr &message) {
+  static const std::string state_controller_channel = "state.controller";
   CallbackGuard callback(this);
   if (!callback)
     return;
@@ -1457,15 +1478,15 @@ void RobotRuntime::controllerStatusCallback(
   const ros::Time stamp = ros::Time::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.controller", now);
-    if (channelEnabled("state.controller") &&
-        shouldEmitLocked("state.controller", now)) {
+    recordSourceLocked(state_controller_channel, now);
+    if (channelEnabled(state_controller_channel) &&
+        shouldEmitLocked(state_controller_channel, now)) {
       xgc::semantic::common::v1::ControllerStatus payload;
       payload.set_text(message->data);
-      output.push_back(makeEnvelopeLocked("state.controller", stamp, payload));
-      recordOutputLocked("state.controller");
-    } else if (channelEnabled("state.controller")) {
-      ++sources_["state.controller"].dropped_samples;
+      output.push_back(makeEnvelopeLocked(state_controller_channel, stamp, payload));
+      recordOutputLocked(state_controller_channel);
+    } else if (channelEnabled(state_controller_channel)) {
+      ++sources_[state_controller_channel].dropped_samples;
     }
   }
   emit(std::move(output));

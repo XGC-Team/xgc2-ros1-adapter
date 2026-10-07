@@ -60,70 +60,9 @@ TEST(Px4OperationTiming, SaturatesUnrepresentableUnixDeadlines) {
       operationDeadlineFromUnixNanos(std::numeric_limits<std::int64_t>::max()));
 }
 
-TEST(Px4ServiceProtocol, RoundTripsTypedFixedSizeFrames) {
-  const Px4ServiceRequestFrame arm = makePx4SetArmedRequest(41u, true);
-  EXPECT_TRUE(validatePx4ServiceRequest(arm));
-  EXPECT_EQ(static_cast<std::uint16_t>(Px4ServiceOperation::kSetArmed),
-            arm.operation);
-  EXPECT_EQ(1u, arm.armed);
 
-  Px4ServiceRequestFrame mode{};
-  ASSERT_TRUE(makePx4SetModeRequest(42u, "OFFBOARD", &mode));
-  EXPECT_TRUE(validatePx4ServiceRequest(mode));
-  EXPECT_EQ("OFFBOARD", px4ServiceRequestMode(mode));
 
-  const Px4ServiceRequestFrame reboot = makePx4RebootRequest(43u);
-  EXPECT_TRUE(validatePx4ServiceRequest(reboot));
 
-  const Px4ServiceRequestFrame kill = makePx4ForceDisarmRequest(44u);
-  EXPECT_TRUE(validatePx4ServiceRequest(kill));
-  EXPECT_EQ(static_cast<std::uint16_t>(Px4ServiceOperation::kForceDisarm),
-            kill.operation);
-
-  const Px4ServiceResponseFrame arm_response = makePx4ServiceResponse(
-      arm, Px4ServiceResponseStatus::kCompleted, true, true, 0u);
-  EXPECT_TRUE(validatePx4ServiceResponse(arm_response, arm));
-  EXPECT_EQ(kPx4ServiceResponseHasNativeResult, arm_response.flags);
-
-  const Px4ServiceResponseFrame mode_response =
-      makePx4ServiceResponse(mode, Px4ServiceResponseStatus::kCompleted, true);
-  EXPECT_TRUE(validatePx4ServiceResponse(mode_response, mode));
-  EXPECT_EQ(0u, mode_response.flags);
-}
-
-TEST(Px4ServiceProtocol, RejectsMalformedAndMismatchedFrames) {
-  Px4ServiceRequestFrame request = makePx4SetArmedRequest(0u, true);
-  EXPECT_FALSE(validatePx4ServiceRequest(request));
-
-  request = makePx4SetArmedRequest(1u, true);
-  request.reserved[3] = 1u;
-  EXPECT_FALSE(validatePx4ServiceRequest(request));
-
-  Px4ServiceRequestFrame noncanonical_mode{};
-  ASSERT_TRUE(makePx4SetModeRequest(2u, "POSCTL", &noncanonical_mode));
-  noncanonical_mode.mode[20] = 'X';
-  EXPECT_FALSE(validatePx4ServiceRequest(noncanonical_mode));
-
-  Px4ServiceRequestFrame oversized_mode{};
-  EXPECT_FALSE(makePx4SetModeRequest(
-      2u, std::string(kPx4ServiceModeCapacity, 'X'), &oversized_mode));
-
-  request = makePx4SetArmedRequest(3u, false);
-  Px4ServiceResponseFrame response = makePx4ServiceResponse(
-      request, Px4ServiceResponseStatus::kCompleted, true, true, 0u);
-  response.request_id = 4u;
-  EXPECT_FALSE(validatePx4ServiceResponse(response, request));
-
-  response =
-      makePx4ServiceResponse(request, Px4ServiceResponseStatus::kCallFailed);
-  EXPECT_TRUE(validatePx4ServiceResponse(response, request));
-  response.logical_success = 1u;
-  EXPECT_FALSE(validatePx4ServiceResponse(response, request));
-
-  response = makePx4ServiceResponse(
-      request, Px4ServiceResponseStatus::kCompleted, true, false, 0u);
-  EXPECT_FALSE(validatePx4ServiceResponse(response, request));
-}
 
 TEST(Px4OperationTiming, UsesTheEarliestBoundedDeadline) {
   const ros::WallTime started_at(100u, 0u);

@@ -235,7 +235,7 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
                                         &mocap_pose));
   EXPECT_STREQ("px4.mocap-pose", mocap_pose.processor);
   EXPECT_EQ(2u, mocap_pose.endpoint_count);
-  EXPECT_EQ(0u, mocap_pose.policy_count);
+  EXPECT_EQ(1u, mocap_pose.policy_count);
 
   contract::ChannelMetadata vision_pose{};
   ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.vision.pose",
@@ -310,32 +310,32 @@ TEST(InstalledProfile, VisionForwardingIsOptionalAndRequiresAnExplicitBoolean) {
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
-  const char *digest = contract::profileDigest("px4.multirotor.ros1.v9");
+  const char *digest = contract::profileDigest("px4-multirotor.physical.vrpn");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("px4.multirotor.ros1.v9", "state.pose", &pose));
+      contract::channelMetadata("px4-multirotor.physical.vrpn", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata controller;
-  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("px4-multirotor.physical.vrpn",
                                         "state.controller", &controller));
   EXPECT_EQ(2012u, controller.output_message_id);
   EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
   EXPECT_EQ("px4.controller-status", std::string(controller.processor));
 
   contract::ChannelMetadata arm;
-  ASSERT_TRUE(contract::channelMetadata("px4.multirotor.ros1.v9",
+  ASSERT_TRUE(contract::channelMetadata("px4-multirotor.physical.vrpn",
                                         "operation.arm", &arm));
   EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
   EXPECT_EQ(3201u, arm.input_message_id);
 
   contract::OperationMetadata mode;
   ASSERT_TRUE(contract::operationMetadata(
-      "px4.multirotor.ros1.v9", "set-flight-mode", &mode));
+      "px4-multirotor.physical.vrpn", "set-flight-mode", &mode));
   EXPECT_EQ(5000u, mode.timeout_millis);
   const std::string parameter_schema(mode.parameter_schema_json);
   EXPECT_NE(std::string::npos, parameter_schema.find("additionalProperties"));

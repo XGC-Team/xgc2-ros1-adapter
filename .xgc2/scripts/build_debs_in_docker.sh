@@ -4,21 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.0}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.3}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
-EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-16"
+EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-17"
 EXPECTED_RUNTIME_CLIENT_DEB_VERSION="${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}~focal"
-PINNED_RUNTIME_CLIENT_SHA="3e8ec42e34fcd5397e4c12e1505797c621ff9967"
+PINNED_RUNTIME_CLIENT_SHA="1aa878d182297778271745543e8b8129507327a7"
 ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}}"
 XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF="${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-${PINNED_RUNTIME_CLIENT_SHA}}"
-EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-19"
+EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-20"
 EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
-PINNED_PROTOBUF_SHA="952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453"
+PINNED_PROTOBUF_SHA="99f301ee8725e91ae8149becce92377ea8fbecb0"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
 XGC2_PROTOBUF_GIT_REF="${XGC2_PROTOBUF_GIT_REF:-${PINNED_PROTOBUF_SHA}}"
 XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
@@ -260,7 +260,8 @@ docker exec "${container_name}" bash -lc '
     echo "Building Debian package for ${actual_deb_arch}"
 
     missing_image_packages=()
-    for package in nlohmann-json3-dev patch; do
+    for package in nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
+        protobuf-compiler-grpc python3-grpcio python3-protobuf; do
       dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
         | grep -Fxq "install ok installed" \
         || missing_image_packages+=("${package}")
@@ -467,6 +468,10 @@ docker exec "${container_name}" bash -lc '
         echo "Installed-package gate failed; replaying it with command tracing" >&2
         bash -x /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
       fi
+      ROS_MASTER_URI=http://127.0.0.1:11331 ROS_IP=127.0.0.1 \
+      ROBOT_SERVER_PRIVATE_TEST=1 \
+        /tmp/ros1-adapter/.xgc2/scripts/test_robot_servers.sh \
+        /tmp/work/build /tmp/out/robot-server-tests
     fi
   '
 

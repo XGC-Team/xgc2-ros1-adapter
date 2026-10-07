@@ -1,6 +1,6 @@
 # XGC2 ROS1 Robot Adapters
 
-This Catkin workspace contains five robot-domain Adapter Runtime applications
+This Catkin workspace contains five robot-domain adapters
 and one separately deployable onboard Forwarder. An Adapter is a general
 capability plugin for Core or Agent; these applications specialize that
 abstraction for PX4 multirotors, Scout Mini robots, Mecanum UGVs, the read-only
@@ -9,39 +9,74 @@ Adapter Runtime application and is installed only on the Mocap Rotor Orin NX.
 
 | ROS package | Debian package | Provider definition | Robot profile |
 | --- | --- | --- | --- |
-| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4.multirotor.ros1.v9` |
-| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.ros1.v10` |
-| `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.ros1.v7` |
+| `xgc_px4_multirotor_ros1_adapter` | `ros-noetic-xgc2-px4-multirotor-adapter` | `xgc2-px4-multirotor-ros1-adapter` | `px4-multirotor.physical.vrpn` |
+| `xgc_scout_mini_ros1_adapter` | `ros-noetic-xgc2-scout-mini-adapter` | `xgc2-scout-mini-ros1-adapter` | `scout-mini.physical.vrpn` |
+| `xgc_mecanum_ugv_ros1_adapter` | `ros-noetic-xgc2-mecanum-ugv-adapter` | `xgc2-mecanum-ugv-ros1-adapter` | `mecanum-ugv.physical.vrpn` |
 | `xgc_unitree_b2_ros1_adapter` | `ros-noetic-xgc2-unitree-b2-adapter` | `xgc2-unitree-b2-ros1-adapter` | `unitree.b2.v1` |
 | `xgc_mocap_rotor_ros1_adapter` | `ros-noetic-xgc2-mocap-rotor-adapter` | `xgc2-mocap-rotor-ros1-adapter` | `px4.mocap-rotor.ros1.v1` |
 | `xgc_mocap_rotor_zenoh_forwarder` | `ros-noetic-xgc2-mocap-rotor-forwarder` | `xgc2-mocap-rotor-link` | onboard process only |
 
-The generic C++ Adapter Runtime SDK owns registration, trusted bootstrap,
-session fencing, capability dispatch, flow control, reconnects, and terminal
-result delivery. This repository owns robot semantics, ROS1-native mappings,
-profile contracts, and native safety policy.
+PX4, Scout Mini and Mecanum each run one lightweight server per provider and
+actual ROS master environment. Core uses a private UDS and the protobuf
+`RobotAdapterServer` service to batch member updates, invoke operations and
+receive current state. The Process Supervisor still owns process lifecycle.
+Unitree B2 and Mocap Rotor retain the C++ Adapter Runtime Link protocol.
+
+Each of these three providers installs three source profiles. A server can
+hold members from all three profiles at once:
+
+| Source | PX4 | Scout Mini | Mecanum |
+| --- | --- | --- | --- |
+| Physical VRPN | `px4-multirotor.physical.vrpn` | `scout-mini.physical.vrpn` | `mecanum-ugv.physical.vrpn` |
+| Gazebo VRPN | `px4-multirotor.gazebo.vrpn` | `scout-mini.gazebo.vrpn` | `mecanum-ugv.gazebo.vrpn` |
+| xsim ROS | `px4-multirotor.xsim.ros` | `scout-mini.xsim.ros` | `mecanum-ugv.xsim.ros` |
+
+Physical members subscribe to the selected tracker and apply the world offset.
+Gazebo members subscribe to the slot's simulated tracker with zero additional
+offset. Both retain the original ROS publication and PX4 vision behavior.
+xsim members subscribe directly to `localization_pose_topic` and
+`localization_twist_topic`, normally `/<slot>/pose` and `/<slot>/twist`, and use
+these measurements for instruments and positioning health. They create no
+VRPN subscription, pose/twist forwarding publisher or vision publisher. xsim
+FS150 retains MAVROS state/local-position/IMU inputs. xsim Scout and Mecanum
+retain the original IMU subscriptions and online conditions; position gates
+operational readiness. Their simulator publishes IMU on the vehicle's original
+ROS interface.
 
 ## Runtime contract
 
-Core resolves each provider from the installed robot profile catalog. A
-provider instance uses a `robot-group` scope containing `target-id`, `run-id`,
-and `provider`; each invocation and telemetry source uses a separate
-`robot-resource` subject containing `target-id`, `run-id`, and `robot-id`.
+The three type servers use `robot-server` scope (`target-id`, `provider`,
+`ros-master-uri`). Neither Run IDs nor robot membership affect process identity.
+Individual member routes retain target, Run, robot and connection epoch. Native
+ROS resources are shared only with compatible configuration; removing one
+route leaves other uses active.
 
-All five Adapter Runtime applications expose:
+Each server has five application threads: one gRPC completion queue, two ROS
+callback workers, one command event loop and one registration/cleanup worker.
+ROS and gRPC library threads are counted separately. Members own data and ROS
+handles, without their own process, helper, executor or worker thread.
+The callback workers take one callback at a time from the server's two shared
+ROS queues. Subscriptions request TCP_NODELAY and retain their original bounded
+queue sizes. Each member's callbacks stay on one of the two shared workers,
+avoiding two workers contending for a single member's mutex. A burst fills that
+topic's queue rather than creating more workers
+or retaining an unbounded history; member registration and command waits do not
+occupy these callback workers.
 
-- `xgc.robot.telemetry@1`: `telemetry` source of serialized
-  `xgc.robot.v1.RobotMessage`
+All five providers expose `xgc.robot.telemetry@1` with serialized
+`xgc.robot.v1.RobotMessage`. Original native subscribers, canonical publishers,
+coordinate offsets, vision injection and command mappings remain in their
+robot-specific processors. Status streams keep current values by channel and
+coalesce slow consumers; canonical ROS publication follows its original cadence.
 
-The PX4 product also exposes `xgc.robot.command@1`:
-
-- `arm` with `xgc.semantic.aerial.v1.ArmRequest`
-- `set-flight-mode` with `xgc.semantic.aerial.v1.ModeRequest`
-- `reboot-autopilot` with `xgc.semantic.aerial.v1.AutopilotRebootRequest`
-
-PX4 command operations require deadlines and idempotency keys. A successful
-operation returns the registry-owned `xgc.v1.Empty` payload. Native ROS service
-calls are not advertised as cancellable after dispatch.
+PX4 exposes `arm`, `set-flight-mode` and `reboot-autopilot`. Its shared event loop
+can keep multiple native TCPROS requests in flight. Discovery, DNS, connection,
+request and response share an absolute deadline, and cancellation closes the
+actual I/O. Side effects for one robot execute in order. A timeout or disconnect
+after request bytes may have reached ROS returns uncertain and blocks subsequent
+conflicting commands. Core records dispatch and results in the existing operation
+attempt ledger; reconnect never replays commands. Success retains the registered
+`xgc.v1.Empty` return contract.
 
 The installed Profile catalog owns each operation's closed JSON parameter
 schema and timeout. The flight-mode enum is projected directly from the PX4
@@ -208,9 +243,10 @@ Package-local C++ headers are implementation details used only while building
 each executable. The Debian packages intentionally export no Catkin header or
 library interface.
 
-The application accepts no socket, token, identity, inventory, or ROS-parameter
-fallback. The binary bootstrap is owner-only mode `0600` and contains the exact
-initial instance specification and granted capability contracts.
+The binary bootstrap is owner-only mode `0600`. The three servers receive
+only their provider, UDS and ROS environment; members arrive through gRPC.
+The two Runtime Link providers retain their initial instance specification
+and granted capability contracts in the bootstrap.
 
 ## Build and test
 
@@ -251,18 +287,13 @@ installed runtime manifest:
 .xgc2/scripts/check_public_apt_install.sh
 ```
 
-All adapters are compiled against the exact
-`libxgc2-adapter-runtime-client-dev` and `xgc2-protobuf-dev` inputs. Push-CI
-bootstrap and release-train builds both require protobuf `0.5.0-19~focal`
-from source `952ed81c7ef0a9a7650f6d0d72ac8deb4a93f453`. The staged client SDK must
-declare that same exact protobuf dependency. Both paths require client
-`0.6.0-16~focal`; a different version stops the build.
-Installed Debian packages deliberately omit those build-only dependencies:
-`dpkg-shlibdeps` derives a lower-bounded
-`libxgc2-adapter-runtime-client2` dependency from the ELF SONAME, while the ROS
-message packages remain explicit runtime dependencies. Compatible ABI-1 SDK
-updates can therefore be compatibility-verified without republishing these
-adapters. An ABI break must use a new SONAME/runtime package and rebuild them.
+Builds require protobuf `0.5.0-20~focal` from source
+`99f301ee8725e91ae8149becce92377ea8fbecb0` and client SDK
+`0.6.0-17~focal` from source `1aa878d182297778271745543e8b8129507327a7`.
+The staged SDK must declare the exact same protobuf dependency. The three type
+servers link gRPC and c-ares directly; they do not link the legacy client runtime.
+B2 and Mocap Rotor retain their ELF-derived client runtime dependency. Installed
+packages omit protobuf and client development dependencies.
 
 ## Supervisor launch
 
@@ -287,18 +318,34 @@ rosrun xgc_px4_multirotor_ros1_adapter \
 
 The repository is distributed under the BSD 3-Clause License in `LICENSE`.
 
-### Reusing bounded PX4 service operations
+### PX4 operation helpers
 
 The PX4 catkin package exports `xgc_px4_multirotor_ros1_adapter_operations` and
-`px4_operations.hpp` for existing ROS1 controllers. Consumers use the same
-`Px4OperationExecutor` and versioned helper transport as the Adapter. A caller
-outside the Adapter executable directory supplies a trusted absolute
-`Config::helper_executable`; an empty path preserves the Adapter's existing
-sibling lookup. The installed helper remains owned by this package. Relative
-helper paths are rejected. Command acceptance is not fresh FCU state confirmation;
-a dispatched timeout is uncertain and must not be retried blindly. Callers own
-intent authorization, admission bounds, and absolute enqueue deadlines.
+`px4_operations.hpp` with pure request builders, response mapping and state
+readiness checks. Native service I/O belongs to the type server's shared event
+loop. The former service helper and synchronous executor are removed. The
+static operations archive links ROS/MAVROS without an Adapter Runtime SDK
+runtime dependency.
 
-The package installs the narrow headers, static operations archive and
-catkin/pkg-config export. The operations archive links ROS/MAVROS only; it does
-not expose the Adapter Runtime SDK as a downstream controller dependency.
+Private acceptance uses `common/test/test_async_ros_services.py` and
+`common/test/test_robot_server.py`; the latter requires an explicitly isolated
+ROS test environment and writes startup, registration, forwarding latency,
+thread/process, CPU and RSS measurements alongside its log. Never point these
+tests at an active station's ROS master.
+
+The source-owned installed-package acceptance entry is
+`.xgc2/scripts/test_robot_servers.sh <catkin-build-directory> <empty-results-directory>`.
+Run it inside a disposable, network-isolated ROS container after installing
+the three packages, with `ROBOT_SERVER_PRIVATE_TEST=1` and
+`ROS_MASTER_URI=http://127.0.0.1:11331`. Set
+`ROBOT_SERVER_XSIM_BINARY` to the production xsim executable to include its
+three-model custom-topic integration, and `ROBOT_SERVER_CORE_TEST_BINARY` to
+the compiled Core native-client test to include its 1/20/100 measurements.
+The suite exercises actual TCPROS request barriers and cancellation, single
+member loss/removal, reconnect, ROS forwarding and vision rates, native command
+results, mixed member profiles and slow gRPC consumers. Direct-input pressure
+tests use 100 members at 125 Hz pose/twist plus 30 Hz IMU and a separate
+single-member burst. Production xsim integration compares actual ROS IMU
+fields, covariances and timestamps with semantic telemetry for all three types.
+Its JSON measurements report startup/registration, application/library threads,
+CPU/RSS and latency.

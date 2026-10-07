@@ -105,31 +105,33 @@ bool validLocalizationAcceleration(const geometry_msgs::AccelStamped &source) {
 
 VisionPublishCadence::VisionPublishCadence(double target_rate_hz,
                                            std::size_t window)
-    : target_rate_hz_(target_rate_hz), window_(window) {
-  if (!finite(target_rate_hz_) || target_rate_hz_ <= 0.0 || window_ == 0u)
+    : target_rate_hz_(target_rate_hz) {
+  if (!finite(target_rate_hz_) || target_rate_hz_ <= 0.0 || window == 0u)
     throw std::invalid_argument("vision publish cadence is invalid");
+  published_times_.resize(window);
 }
 
 bool VisionPublishCadence::take(double now_seconds) {
   if (!finite(now_seconds))
     return false;
-  bool emit = published_times_.empty();
+  bool emit = retained_ == 0u;
   if (!emit) {
-    const double since_last = now_seconds - published_times_.back();
+    const double since_last = now_seconds - published_times_[
+        (first_ + retained_ - 1u) % published_times_.size()];
     if (since_last < 0.0 || since_last >= 1.0 / target_rate_hz_) {
       emit = true;
     } else {
-      const double span = now_seconds - published_times_.front();
+      const double span = now_seconds - published_times_[first_];
       emit = span > 0.0 &&
-             static_cast<double>(published_times_.size()) / span <
+             static_cast<double>(retained_) / span <
                  target_rate_hz_;
     }
   }
   if (!emit)
     return false;
-  published_times_.push_back(now_seconds);
-  while (published_times_.size() > window_)
-    published_times_.pop_front();
+  published_times_[(first_ + retained_) % published_times_.size()] = now_seconds;
+  if (retained_ < published_times_.size()) ++retained_;
+  else if (++first_ == published_times_.size()) first_ = 0u;
   return true;
 }
 

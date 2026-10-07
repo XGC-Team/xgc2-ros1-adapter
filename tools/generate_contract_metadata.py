@@ -74,7 +74,7 @@ def parse_args():
         description="Generate compile-time metadata from one local ROS1 profile"
     )
     parser.add_argument("--registry", required=True)
-    parser.add_argument("--profile-file", required=True)
+    parser.add_argument("--profile-file", required=True, action="append")
     parser.add_argument("--profile-schema", required=True)
     parser.add_argument("--definition-id", required=True)
     parser.add_argument("--cpp-namespace", required=True)
@@ -488,12 +488,6 @@ def validate_profile_document(profile_path, profile, schema, messages):
     if profile["native_protocol"] != "ros1":
         raise ValueError("{}: profile is not a ROS1 native mapping".format(profile_path))
 
-    version_match = re.search(r"\.v([1-9][0-9]*)$", profile["profile_id"])
-    if not version_match or int(version_match.group(1)) != profile["profile_version"]:
-        raise ValueError(
-            "{}: profile_id suffix and profile_version disagree".format(profile_path)
-        )
-
     for parameter_name, definition in profile["parameters"].items():
         if "pattern" in definition:
             validate_portable_parameter_pattern(
@@ -800,6 +794,20 @@ def load_profile(profile_path, schema_path, messages):
     }
 
 
+def load_profiles(paths, schema_path, messages):
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    profiles = {}
+    for path in paths:
+        loaded = load_profile(Path(path), schema_path, messages)
+        if profiles.keys() & loaded.keys():
+            raise ValueError("duplicate robot profile identity")
+        profiles.update(loaded)
+    if not profiles or len({p["robot_kind"] for p in profiles.values()}) != 1:
+        raise ValueError("a native Adapter serves profiles for one robot kind")
+    return profiles
+
+
 def catalog_parameters(source_profile):
     return {
         name: {
@@ -936,8 +944,8 @@ def generate(
 ):
     if not CPP_NAMESPACE.fullmatch(cpp_namespace):
         raise ValueError("invalid C++ namespace: {}".format(cpp_namespace))
-    if len(profiles) != 1:
-        raise ValueError("one robot profile is required per native Adapter binary")
+    if not profiles:
+        raise ValueError("a native Adapter requires a robot profile")
     required_messages = sorted(
         {1, 4001, 4002}
         | {
@@ -1525,8 +1533,8 @@ def generate(
 def main():
     args = parse_args()
     registry_fingerprint, messages = load_registry(Path(args.registry))
-    profiles = load_profile(
-        Path(args.profile_file), Path(args.profile_schema), messages
+    profiles = load_profiles(
+        args.profile_file, Path(args.profile_schema), messages
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

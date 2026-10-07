@@ -191,7 +191,7 @@ bool parsePositioningHealthConfig(
 }
 
 PositioningHealthWindow::PositioningHealthWindow(PositioningHealthConfig config)
-    : config_(config) {}
+    : config_(config), registers_(config.frame_number + 1u) {}
 
 void PositioningHealthWindow::recordPose(double observed_seconds, double x,
                                          double y, double z) {
@@ -200,20 +200,19 @@ void PositioningHealthWindow::recordPose(double observed_seconds, double x,
     return;
   }
   if (has_observation_ && observed_seconds < last_observed_seconds_) {
-    for (auto &values : registers_)
-      values.clear();
+    first_ = retained_ = 0u;
     active_ = false;
     comparison_metric_m_ = 0.0;
   }
   last_observed_seconds_ = observed_seconds;
   has_observation_ = true;
   const std::array<double, 3> newest{{x, y, z}};
-  for (std::size_t axis = 0u; axis < registers_.size(); ++axis)
-    registers_[axis].push_back(newest[axis]);
+  registers_[(first_ + retained_) % registers_.size()] = newest;
+  ++retained_;
 
   // XGC1 evaluates after frame_number retained samples plus the newest frame,
   // then removes the oldest frame. Keep this order exactly.
-  if (registers_[0].size() <= config_.frame_number) {
+  if (retained_ <= config_.frame_number) {
     active_ = false;
     comparison_metric_m_ = 0.0;
     return;
@@ -222,11 +221,13 @@ void PositioningHealthWindow::recordPose(double observed_seconds, double x,
   comparison_metric_m_ = 0.0;
   const double threshold_squared =
       config_.comparison_threshold_m * config_.comparison_threshold_m;
-  for (std::size_t axis = 0u; axis < registers_.size(); ++axis) {
+  for (std::size_t axis = 0u; axis < newest.size(); ++axis) {
     double sum_squared_difference = 0.0;
-    for (const double value : registers_[axis]) {
-      const double difference = value - newest[axis];
+    std::size_t index = first_;
+    for (std::size_t sample = 0u; sample < retained_; ++sample) {
+      const double difference = registers_[index][axis] - newest[axis];
       sum_squared_difference += difference * difference;
+      if (++index == registers_.size()) index = 0u;
     }
     comparison_metric_m_ =
         std::max(comparison_metric_m_, std::sqrt(sum_squared_difference));
@@ -234,15 +235,15 @@ void PositioningHealthWindow::recordPose(double observed_seconds, double x,
     // variation on any axis proves that the source is not replaying one pose.
     active_ = active_ || sum_squared_difference > threshold_squared;
   }
-  for (auto &values : registers_)
-    values.pop_front();
+  if (++first_ == registers_.size()) first_ = 0u;
+  --retained_;
 }
 
 PositioningHealthResult
 PositioningHealthWindow::evaluate(double now_seconds) const {
   PositioningHealthResult result;
   result.comparison_metric_m = comparison_metric_m_;
-  result.sample_count = registers_[0].size();
+  result.sample_count = retained_;
   result.state = PositioningHealthState::kTimedOut;
   result.reason = PositioningHealthReason::kVrpnTimeout;
   if (!has_observation_ || !std::isfinite(now_seconds) ||

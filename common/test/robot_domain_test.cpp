@@ -3,37 +3,16 @@
 #include <string>
 #include <stdexcept>
 #include <utility>
+#include <limits>
 
 #include "xgc/semantic/aerial/v1/control.pb.h"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
-#include "xgc2_ros1_robot_adapter/runtime_support.hpp"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
+#include "xgc2_ros1_robot_adapter/native_command.hpp"
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
-
-TEST(RuntimeSupport, ROSConnectionComesFromExperimentBootstrap) {
-  xgc::adapter::v1::AdapterInstanceSpec instance;
-  xgc::robot::v1::RobotAdapterSpec robots;
-  auto *robot = robots.add_robots();
-  (*robot->mutable_parameters())["ros_master_uri"] = "http://10.68.3.250:11311";
-  (*robot->mutable_parameters())["ros_ip"] = "10.68.3.251";
-  instance.mutable_configuration()->set_value(robots.SerializeAsString());
-  const auto environment = RosEnvironmentFromSpec(instance);
-  EXPECT_EQ(environment.at("ROS_MASTER_URI"), "http://10.68.3.250:11311");
-  EXPECT_EQ(environment.at("ROS_IP"), "10.68.3.251");
-
-  auto *other = robots.add_robots();
-  *other = *robot;
-  (*other->mutable_parameters())["ros_master_uri"] = "http://10.68.4.250:11311";
-  instance.mutable_configuration()->set_value(robots.SerializeAsString());
-  EXPECT_THROW(RosEnvironmentFromSpec(instance), std::runtime_error);
-
-  robots.clear_robots();
-  robots.add_robots();
-  instance.mutable_configuration()->set_value(robots.SerializeAsString());
-  EXPECT_TRUE(RosEnvironmentFromSpec(instance).empty());
-}
 
 TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig config;
@@ -93,6 +72,36 @@ TEST(LocalizationProjection, VisionCadenceUsesActualCallbackEmits) {
   EXPECT_FALSE(cadence.take(119.5 / 120.0));
 }
 
+TEST(LocalizationProjection, VisionCadenceSurvivesLongRunsAndClockRewind) {
+  VisionPublishCadence cadence(30.0, 5u);
+  for (int frame = 0; frame < 2400; ++frame) cadence.take(frame / 120.0);
+  EXPECT_FALSE(cadence.take(std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_TRUE(cadence.take(0.0));
+  EXPECT_FALSE(cadence.take(0.005));
+  EXPECT_TRUE(cadence.take(0.035));
+}
+
+TEST(PositioningLiveness, RepeatedFramesAgeOutAndClockRewindStartsANewWindow) {
+  PositioningHealthWindow health({3u, 0.1, 0.1});
+  for (int frame = 0; frame < 64; ++frame)
+    health.recordPose(1.0 + frame * .001, 1.0, 2.0, 3.0);
+  EXPECT_EQ(PositioningHealthState::kFrozen, health.evaluate(1.063).state);
+  // One-axis movement proves freshness until the last different old frame
+  // leaves the original three-frame comparison window.
+  for (int frame = 0; frame < 3; ++frame) {
+    health.recordPose(1.064 + frame * .001, 1.0, 3.0, 3.0);
+    EXPECT_EQ(PositioningHealthState::kActive, health.evaluate(1.064 + frame * .001).state);
+  }
+  health.recordPose(1.067, 1.0, 3.0, 3.0);
+  EXPECT_EQ(PositioningHealthState::kFrozen, health.evaluate(1.067).state);
+  EXPECT_EQ(3u, health.evaluate(1.067).sample_count);
+  health.recordPose(.01, 5.0, 6.0, 7.0);
+  EXPECT_EQ(1u, health.evaluate(.01).sample_count);
+  EXPECT_EQ(PositioningHealthState::kFrozen, health.evaluate(.01).state);
+  EXPECT_DOUBLE_EQ(0.0, health.evaluate(.01).comparison_metric_m);
+  EXPECT_EQ(PositioningHealthState::kTimedOut, health.evaluate(.111).state);
+}
+
 constexpr const char *kProfileDigest =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 constexpr const char *kSpecDigest =
@@ -118,7 +127,7 @@ xgc::adapter::v1::AdapterInstanceSpec makeValidInstanceSpec() {
   robot_spec.set_robot_selection_digest(kRobotSelectionDigest);
   auto *robot = robot_spec.add_robots();
   robot->set_robot_id("px4-01");
-  robot->set_profile_id("px4.multirotor.ros1.v9");
+  robot->set_profile_id("px4-multirotor.physical.vrpn");
   robot->set_profile_digest(kProfileDigest);
   (*robot->mutable_parameters())["namespace"] = "/uav1";
   (*robot->mutable_parameters())["mocap_rigid_body"] = "px4_01";
@@ -512,20 +521,20 @@ TEST(RobotMessageBuilder, EnforcesRosClockDomainWhenSourceTimeExists) {
   EXPECT_FALSE(output.message().has_source_time());
 }
 
-TEST(RuntimeSupport, SuccessfulOperationCarriesRegisteredEmptyPayload) {
-  constexpr std::uint64_t kEmptyFingerprint = 11009224659857530918ULL;
-  const auto result = EmptyOperationSuccess(1u, kEmptyFingerprint);
-
-  EXPECT_EQ(xgc::adapter::v1::OPERATION_PHASE_SUCCEEDED, result.phase);
-  ASSERT_TRUE(result.has_output);
-  EXPECT_EQ(1u, result.output.schema().message_id());
-  EXPECT_EQ("xgc.v1.Empty", result.output.schema().type_name());
-  EXPECT_EQ(1u, result.output.schema().schema_version());
-  EXPECT_EQ(kEmptyFingerprint,
-            result.output.schema().schema_fingerprint());
-  EXPECT_EQ(xgc::v1::PAYLOAD_ENCODING_PROTOBUF, result.output.encoding());
-  xgc::v1::Empty empty;
-  EXPECT_TRUE(empty.ParseFromString(result.output.value()));
+TEST(RobotServer, SuccessfulOperationCarriesRegisteredEmptyPayload) {
+  struct Channel { unsigned output_message_id = 1; } channel;
+  struct Metadata { const char *type_name = "xgc.v1.Empty"; unsigned version = 1; std::uint64_t fingerprint = 11009224659857530918ULL; } metadata;
+  xgc::adapter::v1::OperationRequest request; request.mutable_context()->set_work_id("native-result");
+  const auto result = CommandSuccess(request, channel, metadata);
+  EXPECT_EQ(xgc::adapter::v1::OPERATION_PHASE_SUCCEEDED, result.phase());
+  EXPECT_EQ("native-result", result.work_id());
+  ASSERT_TRUE(result.has_output());
+  EXPECT_EQ(1u, result.output().schema().message_id());
+  EXPECT_EQ("xgc.v1.Empty", result.output().schema().type_name());
+  EXPECT_EQ(1u, result.output().schema().schema_version());
+  EXPECT_EQ(metadata.fingerprint, result.output().schema().schema_fingerprint());
+  EXPECT_EQ(xgc::v1::PAYLOAD_ENCODING_PROTOBUF, result.output().encoding());
+  xgc::v1::Empty empty; EXPECT_TRUE(empty.ParseFromString(result.output().value()));
 }
 
 } // namespace

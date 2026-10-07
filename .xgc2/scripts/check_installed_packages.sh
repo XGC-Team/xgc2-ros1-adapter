@@ -15,7 +15,7 @@ MOCAP_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-adapter"
 MOCAP_ROS_PACKAGE="xgc_mocap_rotor_ros1_adapter"
 MOCAP_FORWARDER_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-forwarder"
 MOCAP_FORWARDER_ROS_PACKAGE="xgc_mocap_rotor_zenoh_forwarder"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-16~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-17~focal}"
 EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
     "$(dirname "$0")/../product.yml"
@@ -94,12 +94,19 @@ mecanum_depends="$(dpkg-query -W -f='${Depends}' "${MECANUM_PACKAGE}")"
 b2_depends="$(dpkg-query -W -f='${Depends}' "${B2_PACKAGE}")"
 mocap_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_PACKAGE}")"
 mocap_forwarder_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_FORWARDER_PACKAGE}")"
-for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}" "${b2_depends}" "${mocap_depends}"; do
+for depends in "${b2_depends}" "${mocap_depends}"; do
   grep -Eq '(^|, )libxgc2-adapter-runtime-client2( |[(])' <<<"${depends}"
   if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${depends}"; then
     echo "Adapter runtime dependencies leaked SDK/schema packages" >&2
     exit 1
+  fi
+done
+for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
+  grep -Eq '(^|, )libgrpc\+\+1( |[(])' <<<"${depends}"
+  grep -Eq '(^|, )libc-ares2( |[(])' <<<"${depends}"
+  if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev' <<<"${depends}"; then
+    echo "Robot type server retains the old Runtime Link dependency" >&2; exit 1
   fi
 done
 if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf|scout-msgs|libzenohc' \
@@ -177,17 +184,34 @@ check_ros_package() {
     test ! -e "${PREFIX}/include/${ros_package}"
   fi
   test -x "${executable}"
-  ldd "${executable}" | grep -q 'libxgc2_adapter_runtime_client'
+  local libraries
+  libraries="$(ldd "${executable}")"
+  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" || "${ros_package}" == "${SCOUT_ROS_PACKAGE}" || "${ros_package}" == "${MECANUM_ROS_PACKAGE}" ]]; then
+    grep -q 'libgrpc++' <<<"${libraries}"
+    grep -q 'libcares' <<<"${libraries}"
+    ! grep -q 'libxgc2_adapter_runtime_client' <<<"${libraries}"
+  else
+    grep -q 'libxgc2_adapter_runtime_client' <<<"${libraries}"
+  fi
   test -f "/usr/share/xgc2/adapter-definitions/${definition_id}.json"
   test -f "/usr/share/xgc2/process-definitions/${definition_id}.json"
   test -f "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"
+  local profile_args=(--profile-file "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}")
+  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" || "${ros_package}" == "${SCOUT_ROS_PACKAGE}" || "${ros_package}" == "${MECANUM_ROS_PACKAGE}" ]]; then
+    local profile_kind="${profile_file%-physical-vrpn.yaml}"
+    for variant in gazebo-vrpn xsim-ros; do
+      local variant_path="${PREFIX}/share/${ros_package}/profiles/ros1/${profile_kind}-${variant}.yaml"
+      test -f "${variant_path}"
+      profile_args+=(--profile-file "${variant_path}")
+    done
+  fi
   python3 "$(dirname "$0")/../../tools/verify_runtime_manifests.py" \
     --executable "${executable}" \
     --ros-package "${ros_package}" \
     --ros-executable "${ros_package}_node" \
     --definition-id "${definition_id}" \
     --registry "${PROTOBUF_REGISTRY}" \
-    --profile-file "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" \
+    "${profile_args[@]}" \
     --profile-schema "${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}" \
     --adapter-manifest "/usr/share/xgc2/adapter-definitions/${definition_id}.json" \
     --process-manifest "/usr/share/xgc2/process-definitions/${definition_id}.json" \
@@ -197,22 +221,19 @@ check_ros_package() {
 check_ros_package \
   "${PX4_ROS_PACKAGE}" \
   "px4_multirotor_ros1_adapter.launch" \
-  "px4-multirotor-ros1-v9.yaml" \
+  "px4-multirotor-physical-vrpn.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-px4-multirotor-ros1-adapter"
-PX4_SERVICE_HELPER="${PREFIX}/lib/${PX4_ROS_PACKAGE}/${PX4_ROS_PACKAGE}_service_helper"
-test -x "${PX4_SERVICE_HELPER}"
-ldd "${PX4_SERVICE_HELPER}" | grep -q 'libroscpp'
 check_ros_package \
   "${SCOUT_ROS_PACKAGE}" \
   "scout_mini_ros1_adapter.launch" \
-  "scout-mini-ros1-v10.yaml" \
+  "scout-mini-physical-vrpn.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-scout-mini-ros1-adapter"
 check_ros_package \
   "${MECANUM_ROS_PACKAGE}" \
   "mecanum_ugv_ros1_adapter.launch" \
-  "mecanum-ugv-ros1-v7.yaml" \
+  "mecanum-ugv-physical-vrpn.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-mecanum-ugv-ros1-adapter"
 check_ros_package \

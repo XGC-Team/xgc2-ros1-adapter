@@ -13,7 +13,6 @@
 #include <mavros_msgs/State.h>
 #include <ros/ros.h>
 
-#include "xgc_px4_multirotor_ros1_adapter/px4_service_protocol.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 
@@ -43,7 +42,7 @@ struct OperationResult {
 
   OperationOutcome outcome;
   std::string detail;
-  // True once the helper accepted the request frame. Any non-success outcome
+  // True once native request bytes may have reached the service. Any non-success outcome
   // with this flag set is indeterminate and must not be retried blindly.
   bool dispatched = false;
   bool has_native_result = false;
@@ -123,69 +122,5 @@ Px4RebootReadiness evaluatePx4RebootReadiness(
     const Px4StateSnapshot &state, const ros::WallTime &now,
     double state_timeout_seconds = kDefaultPx4StateTimeoutSeconds);
 const char *px4RebootReadinessDetail(Px4RebootReadiness readiness);
-
-class Px4OperationExecutor {
-public:
-  struct Config {
-    // Empty keeps the Adapter executable-sibling default. External consumers
-    // provide the installed helper path from their trusted package configuration.
-    std::string helper_executable;
-    std::string state_endpoint;
-    std::string arm_service_endpoint;
-    std::string mode_service_endpoint;
-    std::string reboot_service_endpoint;
-    std::vector<std::string> allowed_modes;
-    bool require_state = false;
-    double state_timeout_seconds = 0.0;
-    double maximum_operation_timeout_seconds = 0.0;
-  };
-
-  static std::unique_ptr<Px4OperationExecutor>
-  Create(ros::NodeHandle node_handle, Config config, std::string *error);
-
-  ~Px4OperationExecutor();
-
-  OperationResult setArmed(bool armed,
-                           const OperationTiming &timing = OperationTiming());
-  OperationResult setMode(const std::string &mode,
-                          const OperationTiming &timing = OperationTiming());
-  OperationResult
-  rebootAutopilot(const OperationTiming &timing = OperationTiming());
-  OperationResult
-  forceDisarm(const OperationTiming &timing = OperationTiming());
-
-  Px4StateSnapshot stateSnapshot() const;
-
-  Px4OperationExecutor(const Px4OperationExecutor &) = delete;
-  Px4OperationExecutor &operator=(const Px4OperationExecutor &) = delete;
-
-private:
-  class NativeServiceHelper;
-
-  struct StateStore {
-    mutable std::mutex mutex;
-    Px4StateSnapshot snapshot;
-  };
-
-  Px4OperationExecutor(ros::NodeHandle node_handle, Config config);
-
-  OperationResult
-  callNativeService(const Px4ServiceRequestFrame &request,
-                    const std::chrono::steady_clock::time_point &deadline,
-                    const std::string &service_description,
-                    Px4ServiceResponseFrame *response);
-
-  ros::NodeHandle node_handle_;
-  const double state_timeout_seconds_;
-  const double maximum_operation_timeout_seconds_;
-  const std::vector<std::string> allowed_modes_;
-
-  const std::shared_ptr<StateStore> state_;
-  std::timed_mutex operation_mutex_;
-  std::uint64_t next_request_id_ = 1u;
-
-  ros::Subscriber state_subscriber_;
-  std::unique_ptr<NativeServiceHelper> native_service_helper_;
-};
 
 } // namespace xgc_px4_multirotor_ros1_adapter

@@ -208,8 +208,7 @@ package_adapter() {
   local profile_file="$6"
   local definition_id="$7"
   local profile_schema_file="$8"
-  local helper_name="${9:-}"
-  local third_party_license_dir="${10:-}"
+  local third_party_license_dir="${9:-}"
   local package_version="${VERSION}"
   local package_source_digest="${XGC2_SOURCE_DIGEST}"
   if [[ "${package}" == "${MOCAP_PACKAGE}" ]]; then
@@ -218,10 +217,6 @@ package_adapter() {
   fi
   local pkg_root="${BUILD_DIR}/${package}"
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
-  local helper_executable=""
-  if [[ -n "${helper_name}" ]]; then
-    helper_executable="${PREFIX}/lib/${ros_package}/${helper_name}"
-  fi
 
   mkdir -p "${pkg_root}"
   copy_path "${PREFIX_ROOT}/share/${ros_package}" "${pkg_root}"
@@ -239,10 +234,6 @@ package_adapter() {
 
   if [[ ! -x "${pkg_root}${executable}" ]]; then
     echo "missing installed ${ros_package}_node executable" >&2
-    exit 1
-  fi
-  if [[ -n "${helper_executable}" && ! -x "${pkg_root}${helper_executable}" ]]; then
-    echo "missing installed ${ros_package} native service helper" >&2
     exit 1
   fi
   if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" ]]; then
@@ -264,11 +255,15 @@ package_adapter() {
   done
 
   local -a runtime_binaries=("${pkg_root}${executable}")
-  if [[ -n "${helper_executable}" ]]; then
-    runtime_binaries+=("${pkg_root}${helper_executable}")
-  fi
   local shlibs_depends
-  shlibs_depends="$(shlibs_dependencies "${runtime_binaries[@]}")"
+  if [[ "${package}" == "${PX4_PACKAGE}" || "${package}" == "${SCOUT_PACKAGE}" || "${package}" == "${MECANUM_PACKAGE}" ]]; then
+    shlibs_depends="$(binary_dependencies "${runtime_binaries[@]}")"
+    if grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" <<<"${shlibs_depends}"; then
+      echo "robot server unexpectedly links the legacy Adapter Runtime client" >&2; exit 1
+    fi
+  else
+    shlibs_depends="$(shlibs_dependencies "${runtime_binaries[@]}")"
+  fi
 
   mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
   cat > "${pkg_root}/DEBIAN/control" <<EOF
@@ -302,9 +297,6 @@ EOF
   find "${pkg_root}" -type f -exec chmod 0644 {} +
   chmod 0755 "${pkg_root}/DEBIAN"
   chmod 0755 "${pkg_root}${executable}"
-  if [[ -n "${helper_executable}" ]]; then
-    chmod 0755 "${pkg_root}${helper_executable}"
-  fi
 
   fakeroot dpkg-deb --build "${pkg_root}" \
     "${OUTPUT_DIR}/${package}_${package_version}_${ARCH}.deb" >/dev/null
@@ -381,10 +373,9 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 PX4 multirotor ROS1 semantic adapter" \
   "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
-  "px4-multirotor-ros1-v9.yaml" \
+  "px4-multirotor-physical-vrpn.yaml" \
   "xgc2-px4-multirotor-ros1-adapter" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc_px4_multirotor_ros1_adapter_service_helper"
+  "robot-adapter-profile-v4.schema.json"
 
 bridge_package="ros-${ROS_DISTRO}-xgc2-ros1-native-bridge"
 bridge_root="${BUILD_DIR}/${bridge_package}"
@@ -415,7 +406,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-scout-msgs, ros-${ROS_DISTRO}-sensor-msgs" \
   "XGC2 Scout Mini ROS1 semantic adapter" \
   "Provides Scout Mini VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "scout-mini-ros1-v10.yaml" \
+  "scout-mini-physical-vrpn.yaml" \
   "xgc2-scout-mini-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 
@@ -425,7 +416,7 @@ package_adapter \
   "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
   "XGC2 Mecanum UGV ROS1 semantic adapter" \
   "Provides Mecanum UGV VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "mecanum-ugv-ros1-v7.yaml" \
+  "mecanum-ugv-physical-vrpn.yaml" \
   "xgc2-mecanum-ugv-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json"
 
@@ -452,7 +443,6 @@ package_adapter \
   "mocap-rotor-ros1-v1.yaml" \
   "xgc2-mocap-rotor-ros1-adapter" \
   "robot-adapter-profile-v4.schema.json" \
-  "" \
   "${ZENOHC_LICENSE_DIR}"
 
 package_forwarder \

@@ -82,7 +82,8 @@ public:
 
 private:
   PositioningHealthConfig config_;
-  std::array<std::deque<double>, 3> registers_;
+  std::vector<std::array<double, 3>> registers_;
+  std::size_t first_ = 0u, retained_ = 0u;
   double last_observed_seconds_ = 0.0;
   double comparison_metric_m_ = 0.0;
   bool has_observation_ = false;

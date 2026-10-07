@@ -67,7 +67,7 @@ bool unpackScoutChassisState(std::uint32_t word, ScoutChassisState *out);
 bool validateNativeProfileContract(std::string *error);
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
-  using EnvelopeEmitter = std::function<void(std::string item)>;
+  using EnvelopeEmitter = std::function<void(xgc::robot::v1::RobotMessage)>;
 
   static std::shared_ptr<RobotRuntime>
   Create(ros::NodeHandle node_handle,
@@ -173,6 +173,7 @@ private:
   const std::uint64_t spec_revision_;
   const std::set<std::string> enabled_channels_;
   const std::set<std::string> required_channels_;
+  std::map<std::string, xgc2_ros1_robot_adapter::MessageSchema> message_schemas_;
   const EnvelopeEmitter emitter_;
 
   const std::string pose_endpoint_;

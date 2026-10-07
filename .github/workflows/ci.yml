@@ -45,6 +45,8 @@ jobs:
           name: xgc2-ros1-adapters-debs-${{ matrix.arch }}
           path: |
             debs/*.deb
+            debs/robot-server-tests/**/*.json
+            debs/robot-server-tests/**/*.log
             .ci/build-manifests/*.json
           retention-days: 14
           include-hidden-files: true

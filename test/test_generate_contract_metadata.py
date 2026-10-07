@@ -20,10 +20,10 @@ SCHEMA_PATH = (
     / "schema"
     / "robot-adapter-profile-v4.schema.json"
 )
-PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-ros1-v9.yaml"
-SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-ros1-v10.yaml"
+PX4_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "px4-multirotor-physical-vrpn.yaml"
+SCOUT_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "scout-mini-physical-vrpn.yaml"
 MECANUM_PROFILE_PATH = (
-    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-ros1-v7.yaml"
+    REPOSITORY_ROOT / "profiles" / "ros1" / "mecanum-ugv-physical-vrpn.yaml"
 )
 B2_PROFILE_PATH = REPOSITORY_ROOT / "profiles" / "ros1" / "unitree-b2-v1.yaml"
 MOCAP_ROTOR_PROFILE_PATH = (
@@ -244,7 +244,7 @@ class ContractGeneratorTest(unittest.TestCase):
             B2_PROFILE_PATH, SCHEMA_PATH, self.messages
         )
 
-        px4 = px4_profiles["px4.multirotor.ros1.v9"]
+        px4 = px4_profiles["px4-multirotor.physical.vrpn"]
         self.assertEqual(px4["parameters"]["publish_vision"]["type"], "boolean")
         self.assertFalse(px4["parameters"]["publish_vision"]["required"])
         self.assertEqual(px4["parameters"]["publish_vision"]["delivery"], "target_binding")
@@ -320,7 +320,7 @@ class ContractGeneratorTest(unittest.TestCase):
             px4_channels["state.mocap.pose"]["processor"], "px4.mocap-pose"
         )
         self.assertEqual(len(px4_channels["state.mocap.pose"]["endpoints"]), 2)
-        self.assertFalse(px4_channels["state.mocap.pose"].get("policy"))
+        self.assertTrue(px4_channels["state.mocap.pose"]["policy"]["apply_world_offset"])
         self.assertEqual(
             px4_channels["state.mocap.velocity"]["endpoints"][0]["name_template"],
             "{mocap_rigid_body}/twist",
@@ -434,7 +434,7 @@ class ContractGeneratorTest(unittest.TestCase):
         )
         px4_digest = GENERATOR.profile_contract_digest(px4_body)
 
-        scout = scout_profiles["scout-mini.ros1.v10"]
+        scout = scout_profiles["scout-mini.physical.vrpn"]
         scout_channels = {channel["id"]: channel for channel in scout["channels"]}
         self.assertNotIn("state.pose", scout_channels)
         self.assertNotIn("state.velocity", scout_channels)
@@ -545,7 +545,7 @@ class ContractGeneratorTest(unittest.TestCase):
             ],
         )
 
-        mecanum = mecanum_profiles["mecanum-ugv.ros1.v7"]
+        mecanum = mecanum_profiles["mecanum-ugv.physical.vrpn"]
         mecanum_channels = {
             channel["id"]: channel for channel in mecanum["channels"]
         }
@@ -677,8 +677,8 @@ class ContractGeneratorTest(unittest.TestCase):
             PX4_DEFINITION_ID,
             "xgc_px4_multirotor_ros1_adapter",
         )
-        self.assertIn('if (profile_id == "px4.multirotor.ros1.v9")', header)
-        self.assertIn('kProfileId = "px4.multirotor.ros1.v9"', header)
+        self.assertIn('if (profile_id == "px4-multirotor.physical.vrpn")', header)
+        self.assertIn('kProfileId = "px4-multirotor.physical.vrpn"', header)
         self.assertIn('"namespace", ParameterType::kString, true', header)
         self.assertNotIn("kNamespaceParameter", header)
         self.assertIn("struct ParameterMetadata", header)
@@ -727,7 +727,7 @@ class ContractGeneratorTest(unittest.TestCase):
             MECANUM_DEFINITION_ID,
             "xgc_mecanum_ugv_ros1_adapter",
         )
-        self.assertIn('kProfileId = "mecanum-ugv.ros1.v7"', mecanum_header)
+        self.assertIn('kProfileId = "mecanum-ugv.physical.vrpn"', mecanum_header)
         self.assertIn('"mecanum-ugv.set-motion-intent"', mecanum_header)
         self.assertIn('EndpointKind::kOutput, "output", "cmd_vel"', mecanum_header)
         self.assertIn(
@@ -1433,7 +1433,7 @@ int main() {
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
         self.assertIn(
-            'if (profile_id == "scout-mini.ros1.v10") {\n'
+            'if (profile_id == "scout-mini.physical.vrpn") {\n'
             "    *count = 0u;\n"
             "    return nullptr;",
             header,
@@ -1485,11 +1485,15 @@ int main() {
         for implementation in implementations:
             source = implementation.read_text(encoding="utf-8")
             with self.subTest(implementation=implementation.name):
-                self.assertIn("contract::kProfileId", source)
+                self.assertTrue("contract::kProfileId" in source or "contract::profileDigest(config.profile_id)" in source)
                 self.assertNotIn("contract::kNamespaceParameter", source)
-                self.assertIn('find("namespace")', source)
-                self.assertNotIn("px4.multirotor.ros1.v9", source)
-                self.assertNotIn("scout-mini.ros1.v10", source)
+                if "RunRobotServer(" in source:
+                    server = (REPOSITORY_ROOT / "common/src/robot_server.cpp").read_text()
+                    self.assertIn('find("namespace")', server)
+                else:
+                    self.assertIn('find("namespace")', source)
+                self.assertNotIn("px4-multirotor.physical.vrpn", source)
+                self.assertNotIn("scout-mini.physical.vrpn", source)
 
         # Adapter Runtime applications consume a supervisor bootstrap. The
         # separately packaged onboard Mocap Rotor Forwarder is intentionally
@@ -1544,7 +1548,7 @@ int main() {
         profiles = GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
         channels = {
             channel["id"]: channel
-            for channel in profiles["px4.multirotor.ros1.v9"]["channels"]
+            for channel in profiles["px4-multirotor.physical.vrpn"]["channels"]
         }
         self.assertEqual(
             channels["state.pose"]["endpoints"][0],

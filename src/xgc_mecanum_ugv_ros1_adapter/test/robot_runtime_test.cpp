@@ -298,7 +298,7 @@ TEST(VrpnAccelerationProjection, MapsCanonicalAccelStampedLinearAndAngular) {
 TEST(InstalledProfile, IsTheMinimalMecanumContractAtTenHertz) {
   std::string error;
   EXPECT_TRUE(validateNativeProfileContract(&error)) << error;
-  EXPECT_EQ("mecanum-ugv.ros1.v7", std::string(contract::kProfileId));
+  EXPECT_EQ("mecanum-ugv.physical.vrpn", std::string(contract::kProfileId));
 
   std::size_t channel_count = 0u;
   const auto *channels =

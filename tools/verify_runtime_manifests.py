@@ -12,7 +12,7 @@ from typing import Any
 
 from generate_contract_metadata import (
     catalog_profile_body,
-    load_profile,
+    load_profiles,
     load_registry,
     profile_contract_digest,
 )
@@ -153,10 +153,9 @@ def verify(args: argparse.Namespace) -> None:
     require(ROS_NAME_PATTERN.fullmatch(args.ros_package) is not None, "invalid ROS package name")
     require(ROS_NAME_PATTERN.fullmatch(args.ros_executable) is not None, "invalid ROS executable name")
     _, messages = load_registry(Path(args.registry))
-    profiles = load_profile(
-        Path(args.profile_file), Path(args.profile_schema), messages
+    profiles = load_profiles(
+        args.profile_file, Path(args.profile_schema), messages
     )
-    require(len(profiles) == 1, "one robot profile is required")
     _, source_profile = next(iter(profiles.items()))
     adapter = json.loads(Path(args.adapter_manifest).read_text(encoding="utf-8"))
     process = json.loads(Path(args.process_manifest).read_text(encoding="utf-8"))
@@ -184,11 +183,14 @@ def verify(args: argparse.Namespace) -> None:
     require(definition["buildDigest"] == file_digest(executable), "Adapter build digest mismatch")
     require(definition["configuration"]["schema"]["messageId"] == 4001, "Adapter configuration schema mismatch")
     require(definition["configuration"]["allowedEncodings"] == ["protobuf"], "Adapter configuration encoding mismatch")
+    type_server = args.definition_id in {
+        "xgc2-px4-multirotor-ros1-adapter", "xgc2-scout-mini-ros1-adapter", "xgc2-mecanum-ugv-ros1-adapter"
+    }
     require(
         definition["scope"]
         == {
-            "kind": "robot-group",
-            "requiredAttributes": ["provider", "run-id", "target-id"],
+            "kind": "robot-server" if type_server else "robot-group",
+            "requiredAttributes": ["provider", "ros-master-uri", "target-id"] if type_server else ["provider", "run-id", "target-id"],
             "allowAdditionalAttributes": False,
             "sharing": "shared",
         },
@@ -239,7 +241,7 @@ def verify(args: argparse.Namespace) -> None:
     process_definition = process["definitions"][0]
     require(process_definition["id"] == definition["processDefinitionId"], "process definition identity mismatch")
     require(process_definition["internal"] is True, "Adapter process must be internal")
-    require(process_definition["restart"]["mode"] == "never", "Adapter process restart policy mismatch")
+    require(process_definition["restart"]["mode"] == ("on-failure" if type_server else "never"), "Adapter process restart policy mismatch")
     require(
         process_definition["command"]
         == {
@@ -256,47 +258,46 @@ def verify(args: argparse.Namespace) -> None:
     )
 
     require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v4", "invalid profile catalog schema")
-    require(len(profile["profiles"]) == 1, "profile catalog must contain exactly one profile")
-    installed_profile = profile["profiles"][0]
-    expected_profile_body = catalog_profile_body(
-        source_profile, messages, definition["id"]
-    )
-    expected_profile = {
-        "profileId": expected_profile_body["profileId"],
-        "profileDigest": profile_contract_digest(expected_profile_body),
-        **{
-            key: value
-            for key, value in expected_profile_body.items()
-            if key != "profileId"
-        },
-    }
-    require(
-        installed_profile == expected_profile,
-        "installed profile catalog entry does not exactly match its canonical public contract",
-    )
-    profile_operations = {
-        operation["id"]: operation
-        for operation in installed_profile["semantics"]["operations"]
-    }
-    command_capability = capabilities_by_id.get("xgc.robot.command")
-    command_endpoints = {
-        endpoint["endpointId"]: endpoint
-        for endpoint in (
-            command_capability["endpoints"] if command_capability else []
+    require(len(profile["profiles"]) == len(profiles), "profile catalog membership differs")
+    for installed_profile, source_profile in zip(profile["profiles"], profiles.values()):
+        expected_profile_body = catalog_profile_body(
+            source_profile, messages, definition["id"]
         )
-    }
-    require(
-        set(profile_operations) == set(command_endpoints),
-        "Profile operations and provider command endpoints disagree",
-    )
-    for operation_id, operation in profile_operations.items():
-        endpoint = command_endpoints[operation_id]
+        expected_profile = {
+            "profileId": expected_profile_body["profileId"],
+            "profileDigest": profile_contract_digest(expected_profile_body),
+            **{
+                key: value
+                for key, value in expected_profile_body.items()
+                if key != "profileId"
+            },
+        }
         require(
-            operation["timeoutMillis"] == endpoint["defaultTimeoutMillis"]
-            and operation["timeoutMillis"] <= endpoint["maximumTimeoutMillis"],
-            "Profile operation timeout disagrees with provider endpoint",
+            installed_profile == expected_profile,
+            "installed profile catalog entry does not exactly match its canonical public contract",
         )
-
+        profile_operations = {
+            operation["id"]: operation
+            for operation in installed_profile["semantics"]["operations"]
+        }
+        command_capability = capabilities_by_id.get("xgc.robot.command")
+        command_endpoints = {
+            endpoint["endpointId"]: endpoint
+            for endpoint in (
+                command_capability["endpoints"] if command_capability else []
+            )
+        }
+        require(
+            set(profile_operations) == set(command_endpoints),
+            "Profile operations and provider command endpoints disagree",
+        )
+        for operation_id, operation in profile_operations.items():
+            endpoint = command_endpoints[operation_id]
+            require(
+                operation["timeoutMillis"] == endpoint["defaultTimeoutMillis"]
+                and operation["timeoutMillis"] <= endpoint["maximumTimeoutMillis"],
+                "Profile operation timeout disagrees with provider endpoint",
+            )
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -305,7 +306,7 @@ def main() -> int:
     parser.add_argument("--ros-executable", required=True)
     parser.add_argument("--definition-id", required=True)
     parser.add_argument("--registry", required=True)
-    parser.add_argument("--profile-file", required=True)
+    parser.add_argument("--profile-file", required=True, action="append")
     parser.add_argument("--profile-schema", required=True)
     parser.add_argument("--adapter-manifest", required=True)
     parser.add_argument("--process-manifest", required=True)

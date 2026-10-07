@@ -10,14 +10,23 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
 )
 find_package(PythonInterp 3 REQUIRED)
-find_package(xgc2_adapter_runtime_client CONFIG REQUIRED)
+find_package(Protobuf REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GRPC REQUIRED grpc++ grpc)
+pkg_check_modules(CARES REQUIRED libcares)
+find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
+if(NOT XGC2_PROTOBUF_PROTO_ROOT)
+  find_package(xgc2_protobuf CONFIG REQUIRED)
+endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../common/cmake/robot_adapter_common.cmake")
-xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support)
+xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support SERVER)
 
 set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
 set(PROFILE_FILE
-  "${PROFILE_ROOT}/ros1/mecanum-ugv-ros1-v7.yaml")
+  "${PROFILE_ROOT}/ros1/mecanum-ugv-physical-vrpn.yaml")
+set(GAZEBO_PROFILE_FILE "${PROFILE_ROOT}/ros1/mecanum-ugv-gazebo-vrpn.yaml")
+set(XSIM_PROFILE_FILE "${PROFILE_ROOT}/ros1/mecanum-ugv-xsim-ros.yaml")
 set(PROFILE_SCHEMA
   "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
 set(ADAPTER_DEFINITION_ID "xgc2-mecanum-ugv-ros1-adapter")
@@ -41,6 +50,8 @@ add_custom_command(
   COMMAND ${PYTHON_EXECUTABLE} "${CONTRACT_GENERATOR}"
     --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
     --profile-file "${PROFILE_FILE}"
+    --profile-file "${XSIM_PROFILE_FILE}"
+    --profile-file "${GAZEBO_PROFILE_FILE}"
     --profile-schema "${PROFILE_SCHEMA}"
     --definition-id "${ADAPTER_DEFINITION_ID}"
     --cpp-namespace "${PROJECT_NAME}"
@@ -49,6 +60,8 @@ add_custom_command(
     "${CONTRACT_GENERATOR}"
     "${XGC2_PROTOBUF_REGISTRY_JSON}"
     "${PROFILE_FILE}"
+    "${XSIM_PROFILE_FILE}"
+    "${GAZEBO_PROFILE_FILE}"
     "${PROFILE_SCHEMA}"
   COMMENT "Validating the repository-owned Mecanum UGV ROS1 profile"
   VERBATIM
@@ -68,7 +81,6 @@ add_executable(${PROJECT_NAME}_node
   src/mecanum_ugv_ros1_adapter_node.cpp
   src/motion_command.cpp
   src/robot_runtime.cpp
-  src/shutdown_signal.cpp
   "${CONTRACT_METADATA_HDR}"
 )
 add_dependencies(${PROJECT_NAME}_node
@@ -114,11 +126,13 @@ xgc2_add_robot_runtime_manifests(
   "Mecanum UGV VRPN acceleration telemetry, discrete motion control, and channel diagnostics."
   "${PROFILE_FILE}"
   "${PROFILE_SCHEMA}"
+  "${XSIM_PROFILE_FILE}"
+  "${GAZEBO_PROFILE_FILE}"
 )
 install(DIRECTORY launch/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
 )
-install(FILES "${PROFILE_FILE}"
+install(FILES "${PROFILE_FILE}" "${XSIM_PROFILE_FILE}" "${GAZEBO_PROFILE_FILE}"
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/ros1
 )
 install(FILES "${PROFILE_SCHEMA}"

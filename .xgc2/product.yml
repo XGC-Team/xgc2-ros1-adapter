@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Robot Adapters
-version: 0.5.0-39
+version: 0.5.0-40
 kind: ros1-apt
 summary: Robot-owned ROS1 semantic adapters plus the separate read-only Mocap Rotor onboard Zenoh forwarder.
 groups:
@@ -42,7 +42,9 @@ apt:
   - libxgc2-hover-thrust-dev
   - ros-noetic-xgc2-estimator-rigid-state
   - ros-noetic-xgc2-multirotor-controller
-  - libxgc2-adapter-runtime-client2 (>= 0.6.0-16~focal)
+  - libxgc2-adapter-runtime-client2 (>= 0.6.0-17~focal)
+  - libgrpc++1
+  - libc-ares2
   - ros-noetic-diagnostic-msgs
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
@@ -71,15 +73,14 @@ usage:
     rospack find xgc_mocap_rotor_ros1_adapter
     rospack find xgc_mocap_rotor_zenoh_forwarder
     test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
-    test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_service_helper
     test -x /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_unitree_b2_ros1_adapter/xgc_unitree_b2_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mocap_rotor_ros1_adapter/xgc_mocap_rotor_ros1_adapter_node
     test -x /opt/ros/noetic/lib/xgc_mocap_rotor_zenoh_forwarder/xgc_mocap_rotor_zenoh_forwarder_node
-    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-ros1-v9.yaml
-    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-ros1-v10.yaml
-    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-ros1-v7.yaml
+    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-physical-vrpn.yaml
+    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-physical-vrpn.yaml
+    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-physical-vrpn.yaml
     test -f /opt/ros/noetic/share/xgc_unitree_b2_ros1_adapter/profiles/ros1/unitree-b2-v1.yaml
     test -f /opt/ros/noetic/share/xgc_mocap_rotor_ros1_adapter/profiles/ros1/mocap-rotor-ros1-v1.yaml
     test -f /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
@@ -96,8 +97,9 @@ usage:
   notes: |
     Install ros-noetic-xgc2-mocap-rotor-forwarder only on the Mocap Rotor
     Orin NX, never on FS150 or the ground Core.
-    Each robot Adapter is a domain-specific Adapter Runtime application. Core
-    resolves its provider definition from the installed robot profile catalog.
+    PX4, Scout Mini and Mecanum are type servers shared by actual ROS master
+    environment. Core resolves their installed profiles and uses private UDS/gRPC
+    member and command operations through the existing Process Supervisor.
     Unitree B2 and Mocap Rotor providers are telemetry-only and directly own
     wire decode, semantic projection, freshness, and ROS1/TF recovery. Mocap
     Rotor uses its own onboard Zenoh/MAVROS computer boundary; its Forwarder is
@@ -116,7 +118,6 @@ ownership:
   - /opt/ros/noetic/lib/pkgconfig/xgc_px4_multirotor_ros1_adapter.pc
   - /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter
   - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
-  - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_service_helper
   - /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter
   - /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
   - /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter
@@ -161,4 +162,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-39
+    focal: 0.5.0-40

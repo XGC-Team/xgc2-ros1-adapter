@@ -21,6 +21,9 @@ function(xgc2_add_ros1_robot_common target_name)
     xgc/semantic/ground/v1/control.proto
     xgc/semantic/ground/v1/locomotion.proto
   )
+  if(ARGV1 STREQUAL "SERVER")
+    list(APPEND protocol_files xgc/v1/message.proto xgc/adapter/v1/adapter.proto xgc/robot/v1/server.proto)
+  endif()
   set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_generated")
   set(protocol_inputs)
   set(protocol_sources)
@@ -61,11 +64,28 @@ function(xgc2_add_ros1_robot_common target_name)
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/include"
       "${generated_dir}"
   )
-  target_link_libraries(${target_name}
-    PUBLIC
-      xgc2::adapter_runtime_client
-      protobuf::libprotobuf
-  )
+  if(ARGV1 STREQUAL "SERVER")
+    set(grpc_source "${generated_dir}/xgc/robot/v1/server.grpc.pb.cc")
+    add_custom_command(OUTPUT "${grpc_source}" "${generated_dir}/xgc/robot/v1/server.grpc.pb.h"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${generated_dir}"
+      COMMAND "${Protobuf_PROTOC_EXECUTABLE}" "--proto_path=${XGC2_PROTOBUF_PROTO_ROOT}"
+        "--grpc_out=${generated_dir}" "--plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}"
+        "${XGC2_PROTOBUF_PROTO_ROOT}/xgc/robot/v1/server.proto"
+      DEPENDS "${XGC2_PROTOBUF_PROTO_ROOT}/xgc/robot/v1/server.proto"
+      VERBATIM)
+    get_target_property(common_sources ${target_name} SOURCES)
+    list(REMOVE_ITEM common_sources "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/runtime_support.cpp")
+    set_property(TARGET ${target_name} PROPERTY SOURCES ${common_sources})
+    target_sources(${target_name} PRIVATE "${grpc_source}"
+      "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_server.cpp"
+      "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/async_ros_services.cpp"
+      "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/bounded_ros_master.cpp")
+    target_link_libraries(${target_name} INTERFACE "-Wl,--export-dynamic")
+    target_include_directories(${target_name} PUBLIC ${catkin_INCLUDE_DIRS} ${GRPC_INCLUDE_DIRS} ${CARES_INCLUDE_DIRS})
+    target_link_libraries(${target_name} PUBLIC protobuf::libprotobuf ${GRPC_LDFLAGS} ${CARES_LDFLAGS} ${catkin_LIBRARIES})
+  else()
+    target_link_libraries(${target_name} PUBLIC xgc2::adapter_runtime_client protobuf::libprotobuf)
+  endif()
 endfunction()
 
 function(xgc2_add_robot_runtime_manifests target_name definition_id version
@@ -75,6 +95,11 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
   set(verifier
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/../tools/verify_runtime_manifests.py")
   set(output_root "${CMAKE_CURRENT_BINARY_DIR}/runtime-manifests")
+  set(profile_files "${profile_file}" ${ARGN})
+  set(profile_args)
+  foreach(file IN LISTS profile_files)
+    list(APPEND profile_args --profile-file "${file}")
+  endforeach()
   set(adapter_manifest
     "${output_root}/adapter-definitions/${definition_id}.json")
   set(process_manifest
@@ -88,7 +113,7 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
             --ros-package "${PROJECT_NAME}"
             --ros-executable "${target_name}"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
-            --profile-file "${profile_file}"
+            ${profile_args}
             --profile-schema "${profile_schema}"
             --definition-id "${definition_id}"
             --version "${version}"
@@ -103,7 +128,7 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
             --ros-executable "${target_name}"
             --definition-id "${definition_id}"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
-            --profile-file "${profile_file}"
+            ${profile_args}
             --profile-schema "${profile_schema}"
             --adapter-manifest "${adapter_manifest}"
             --process-manifest "${process_manifest}"
@@ -114,7 +139,7 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
       "${verifier}"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/../tools/generate_contract_metadata.py"
       "${XGC2_PROTOBUF_REGISTRY_JSON}"
-      "${profile_file}"
+      ${profile_files}
       "${profile_schema}"
     COMMENT "Generating exact ${definition_id} Adapter Runtime manifests"
     VERBATIM
@@ -131,6 +156,7 @@ function(xgc2_add_robot_runtime_manifests target_name definition_id version
   set(XGC2_ADAPTER_LABEL "${label}")
   set(XGC2_ADAPTER_DESCRIPTION "${description}")
   set(XGC2_PROFILE_FILE "${profile_file}")
+  set(XGC2_PROFILE_ARGS "${profile_args}")
   set(XGC2_PROFILE_SCHEMA "${profile_schema}")
   set(XGC2_RUNTIME_MANIFEST_GENERATOR "${generator}")
   set(XGC2_RUNTIME_MANIFEST_VERIFIER "${verifier}")

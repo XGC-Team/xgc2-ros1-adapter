@@ -77,6 +77,14 @@ struct RobotMessageContext {
 // Builds the domain-neutral Message and its robot routing wrapper. ROS callers
 // must use CLOCK_DOMAIN_NATIVE for wall/native ROS time and
 // CLOCK_DOMAIN_SIMULATION for simulated time.
+// Type servers check immutable member identity and generated mappings at
+// registration. Their hot path only encodes current values into the envelope.
+bool ValidRobotIdentity(const std::string &robot_id);
+bool EncodeRobotMessage(const RobotMessageContext &context,
+                        const MessageSchema &schema,
+                        const google::protobuf::Message &semantic_payload,
+                        xgc::robot::v1::RobotMessage *output, std::string *error);
+
 bool BuildRobotMessage(const RobotMessageContext &context,
                        const MessageSchema &schema,
                        const google::protobuf::Message &semantic_payload,
