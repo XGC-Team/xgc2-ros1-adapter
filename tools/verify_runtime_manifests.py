@@ -258,8 +258,13 @@ def verify(args: argparse.Namespace) -> None:
     )
 
     require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v4", "invalid profile catalog schema")
-    require(len(profile["profiles"]) == len(profiles), "profile catalog membership differs")
-    for installed_profile, source_profile in zip(profile["profiles"], profiles.values()):
+    require(
+        len(profile["profiles"]) == len(profiles)
+        and {entry["profileId"] for entry in profile["profiles"]} == set(profiles),
+        "profile catalog membership differs",
+    )
+    for installed_profile in profile["profiles"]:
+        source_profile = profiles[installed_profile["profileId"]]
         expected_profile_body = catalog_profile_body(
             source_profile, messages, definition["id"]
         )

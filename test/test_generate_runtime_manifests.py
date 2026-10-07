@@ -897,6 +897,38 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema validation failed|safety limit"):
             GENERATOR.build_documents(self.arguments(path))
 
+    def test_native_profile_verifier_matches_identity_across_input_orders(self):
+        for kind, definition in (
+            ("px4-multirotor", "xgc2-px4-multirotor-ros1-adapter"),
+            ("scout-mini", "xgc2-scout-mini-ros1-adapter"),
+            ("mecanum-ugv", "xgc2-mecanum-ugv-ros1-adapter"),
+        ):
+            with self.subTest(kind=kind):
+                files = {source: str(REPOSITORY_ROOT / "profiles/ros1" / (kind + "-" + source + ".yaml"))
+                         for source in ("physical-vrpn", "gazebo-vrpn", "xsim-ros")}
+                arguments = self.arguments(files["physical-vrpn"])
+                arguments.definition_id = definition
+                arguments.profile_file = [files[source] for source in ("physical-vrpn", "xsim-ros", "gazebo-vrpn")]
+                adapter, process, catalog = GENERATOR.build_documents(arguments)
+                for name, document in (("adapter", adapter), ("process", process), ("profile", catalog)):
+                    (self.temp / (name + ".json")).write_text(json.dumps(document))
+                arguments.adapter_manifest = str(self.temp / "adapter.json")
+                arguments.process_manifest = str(self.temp / "process.json")
+                arguments.profile_catalog = str(self.temp / "profile.json")
+                # Actual CMake generation and installed-check CLI orders differ.
+                arguments.profile_file = [files[source] for source in ("physical-vrpn", "gazebo-vrpn", "xsim-ros")]
+                VERIFIER.verify(arguments)
+                duplicate = copy.deepcopy(catalog)
+                duplicate["profiles"][1] = copy.deepcopy(duplicate["profiles"][0])
+                (self.temp / "profile.json").write_text(json.dumps(duplicate))
+                with self.assertRaisesRegex(ValueError, "membership differs"):
+                    VERIFIER.verify(arguments)
+                tampered = copy.deepcopy(catalog)
+                tampered["profiles"][1]["robotKind"] = "wrong"
+                (self.temp / "profile.json").write_text(json.dumps(tampered))
+                with self.assertRaises(ValueError):
+                    VERIFIER.verify(arguments)
+
     def test_verifier_rejects_every_profile_identity_and_semantics_mutation(self):
         adapter, process, catalog = GENERATOR.build_documents(
             self.arguments(PX4_PROFILE)
