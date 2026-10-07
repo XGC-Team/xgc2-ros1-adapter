@@ -659,6 +659,26 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         self.assertIn("fs150", product["usage"]["notes"].lower())
         self.assertIn("must carry its Focal-built Zenoh C dependency statically", installed_gate)
 
+    def test_native_dependency_gate_accepts_actual_dpkg_tokens(self):
+        script = (REPOSITORY_ROOT / ".xgc2/scripts/check_installed_packages.sh").read_text()
+        block = script.split('for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do', 1)[1]
+        checks = "\n".join(block.splitlines()[1:3])
+        # The real CI dpkg-shlibdeps output has an unversioned gRPC token.
+        cases = [
+            ("libc-ares2 (>= 1.11.0~rc1), libc6 (>= 2.14), libgrpc++1, libgrpc6, libprotobuf17", True),
+            ("libgrpc++1 (>= 1.16.1), libc-ares2 (>= 1.11.0~rc1)", True),
+            ("libgrpc++1, libc-ares2", True),
+            ("libc-ares2, libgrpc++1", True),
+            ("libgrpc++10, libc-ares2", False),
+            ("libgrpc++1, libc-ares20", False),
+            ("libc-ares2, libprotobuf17", False),
+        ]
+        for depends, accepted in cases:
+            with self.subTest(depends=depends):
+                result = subprocess.run(["bash", "-e", "-c", checks], env={"depends": depends},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
     def test_mocap_rotor_forwarder_is_a_separate_onboard_only_package(self):
         product = yaml.safe_load(
             (REPOSITORY_ROOT / ".xgc2/product.yml").read_text(encoding="utf-8")

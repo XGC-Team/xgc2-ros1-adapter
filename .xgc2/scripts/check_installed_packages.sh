@@ -103,8 +103,8 @@ for depends in "${b2_depends}" "${mocap_depends}"; do
   fi
 done
 for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
-  grep -Eq '(^|, )libgrpc\+\+1( |[(])' <<<"${depends}"
-  grep -Eq '(^|, )libc-ares2( |[(])' <<<"${depends}"
+  grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${depends}"
+  grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${depends}"
   if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev' <<<"${depends}"; then
     echo "Robot type server retains the old Runtime Link dependency" >&2; exit 1
   fi
