@@ -105,8 +105,10 @@ class Client:
             response_deserializer=lambda raw: wire.ExecuteResponse.FromString(raw).event)
         self.status = self.channel.unary_stream('/xgc.robot.v1.RobotAdapterServerService/SubscribeStatus',
             request_serializer=wire.SubscribeStatusRequest.SerializeToString, response_deserializer=wire.SubscribeStatusResponse.FromString)
+        startup_deadline = time.monotonic() + 10
         try:
-            self.health(wire.HealthRequest(), timeout=10, wait_for_ready=True)
+            grpc.channel_ready_future(self.channel).result(timeout=10)
+            self.health(wire.HealthRequest(), timeout=max(0, startup_deadline - time.monotonic()))
         except Exception:
             self.close()
             raise
