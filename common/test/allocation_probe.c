@@ -52,7 +52,9 @@ void xgc2_probe_publish(uint64_t nanos) {
 
 int poll(struct pollfd *fds, nfds_t count, int timeout) {
  struct timespec begin,end;clock_gettime(CLOCK_MONOTONIC,&begin);
- int result=syscall(SYS_poll,fds,count,timeout);
+ struct timespec wait, *limit=NULL;
+ if(timeout>=0){wait.tv_sec=timeout/1000;wait.tv_nsec=(timeout%1000)*1000000L;limit=&wait;}
+ int result=syscall(SYS_ppoll,fds,count,limit,NULL,0);
  clock_gettime(CLOCK_MONOTONIC,&end);struct counters *c=current();
  if(c){c->polls++;c->poll_nanos+=(end.tv_sec-begin.tv_sec)*1000000000ULL+end.tv_nsec-begin.tv_nsec;}
  return result;
