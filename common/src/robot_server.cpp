@@ -118,12 +118,13 @@ public:
     RobotSocketOwner socket_owner(bootstrap_.socket_path());
     grpc::ServerBuilder builder;
     builder.SetMaxReceiveMessageSize(16 * 1024 * 1024);
-    builder.AddListeningPort("unix:" + bootstrap_.socket_path(), grpc::InsecureServerCredentials());
+    builder.AddListeningPort("unix:" + socket_owner.BindingPath(), grpc::InsecureServerCredentials());
     builder.RegisterService(&service_);
     cq_ = builder.AddCompletionQueue();
     server_ = builder.BuildAndStart();
     if (!server_) throw std::runtime_error("robot server could not bind its UDS");
-    socket_owner.RecordBoundSocket();
+    try { socket_owner.RecordBoundSocket(); }
+    catch (...) { server_->Shutdown(std::chrono::system_clock::now()); server_.reset(); cq_->Shutdown(); throw; }
     registration_ = std::thread([this] { registrationLoop(); });
     scheduler_ = std::thread([this] { commandLoop(); });
     listen(); listenStream();
@@ -154,6 +155,9 @@ public:
     while (cq_->Next(&tag, &ok)) static_cast<Tag *>(tag)->proceed(ok);
     streams_.clear();
     { RosMasterDeadline deadline(std::chrono::seconds(3)); ros::shutdown(); }
+    // Keep the private directory fd valid until gRPC has finished its own
+    // unconditional bind-path unlink. The public alias has a separate owner.
+    server_.reset();
     return 0;
   }
 private:

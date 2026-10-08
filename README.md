@@ -260,6 +260,11 @@ the process environment. This mode cannot be combined with
 missing socket parents as mode `0700`, requires its direct parent to be owned
 by the process user with mode `0700`, refuses a preexisting socket path, and
 cleans up only its own socket inode. Existing directories are never chmodded.
+gRPC binds in a unique mode-`0700` child directory; the public path is an
+atomic, non-replacing hardlink to that same socket inode. This contains gRPC's
+automatic bind-path unlink and protects a replaced public endpoint during
+shutdown. It adds no proxy or worker, and removes only its own empty child
+directory after gRPC has stopped.
 
 `--check --socket-path /run/xgc2/robot/server.sock [--timeout-ms 2000]` performs
 only the existing gRPC Health call, without initializing ROS. It returns zero

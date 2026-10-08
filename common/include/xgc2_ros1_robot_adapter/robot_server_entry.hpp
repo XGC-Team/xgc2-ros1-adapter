@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <fcntl.h>
 #include <set>
 #include <stdexcept>
@@ -10,6 +11,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace xgc2_ros1_robot_adapter {
 struct RobotServerArguments {
@@ -84,7 +86,7 @@ inline RobotServerArguments ParseRobotServerArguments(int argc, char **argv,
 
 // Walk existing ancestors without following symbolic links. Only missing
 // directories are created, and the direct socket parent must already be private.
-inline void EnsurePrivateRobotSocketParent(const std::string &path) {
+inline int OpenPrivateRobotSocketParent(const std::string &path) {
   ValidateRobotSocketPath(path);
   int directory = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (directory < 0) throw std::runtime_error("cannot open socket root");
@@ -106,39 +108,80 @@ inline void EnsurePrivateRobotSocketParent(const std::string &path) {
     struct stat parent{};
     if (fstat(directory, &parent) || parent.st_uid != geteuid() || (parent.st_mode & 0777) != 0700)
       throw std::runtime_error("socket parent must be owned by this user with mode 0700");
-    close(directory);
+    return directory;
   } catch (...) { close(directory); throw; }
 }
+inline void EnsurePrivateRobotSocketParent(const std::string &path) {
+  close(OpenPrivateRobotSocketParent(path));
+}
 
-// gRPC may remove an existing Unix socket itself: refuse any preexisting path
-// before handing the private location to it. Normal cleanup owns one inode only.
+// gRPC unlinks its original bind path without checking the inode. Bind only in
+// this invocation's private directory and atomically hardlink that same socket
+// to the public endpoint. No proxy, additional socket or transport thread exists.
 class RobotSocketOwner {
 public:
   explicit RobotSocketOwner(std::string path) : path_(std::move(path)) {
-    EnsurePrivateRobotSocketParent(path_);
-    struct stat current{};
-    if (!lstat(path_.c_str(), &current) || errno != ENOENT)
-      throw std::runtime_error("robot socket path already exists or cannot be inspected");
+    parent_ = OpenPrivateRobotSocketParent(path_);
+    basename_ = path_.substr(path_.find_last_of('/') + 1);
+    try {
+      struct stat current{};
+      if (!fstatat(parent_, basename_.c_str(), &current, AT_SYMLINK_NOFOLLOW) || errno != ENOENT)
+        throw std::runtime_error("robot socket path already exists or cannot be inspected");
+      const auto pattern = "/proc/self/fd/" + std::to_string(parent_) + "/.robot-grpc-XXXXXX";
+      std::vector<char> writable(pattern.begin(), pattern.end()); writable.push_back('\0');
+      if (!mkdtemp(writable.data())) throw std::runtime_error("cannot create private gRPC binding directory");
+      private_name_ = std::string(writable.data()).substr(pattern.find_last_of('/') + 1);
+      if (fstatat(parent_, private_name_.c_str(), &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode))
+        throw std::runtime_error("private gRPC directory is unavailable");
+      private_device_ = current.st_dev; private_inode_ = current.st_ino;
+      private_ = openat(parent_, private_name_.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (private_ < 0) throw std::runtime_error("cannot open private gRPC binding directory");
+      struct stat opened{};
+      if (fstat(private_, &opened) || opened.st_dev != private_device_ || opened.st_ino != private_inode_ ||
+          opened.st_uid != geteuid() || (opened.st_mode & 0777) != 0700)
+        throw std::runtime_error("private gRPC directory identity changed");
+      binding_path_ = "/proc/self/fd/" + std::to_string(private_) + "/socket";
+    } catch (...) { Cleanup(); throw; }
   }
   RobotSocketOwner(const RobotSocketOwner &) = delete;
   RobotSocketOwner &operator=(const RobotSocketOwner &) = delete;
+  const std::string &BindingPath() const { return binding_path_; }
   void RecordBoundSocket() {
     struct stat current{};
-    if (lstat(path_.c_str(), &current) || !S_ISSOCK(current.st_mode) || current.st_uid != geteuid())
+    if (fstatat(private_, "socket", &current, AT_SYMLINK_NOFOLLOW) || !S_ISSOCK(current.st_mode) || current.st_uid != geteuid())
       throw std::runtime_error("robot server did not create its Unix socket");
-    device_ = current.st_dev; inode_ = current.st_ino; owned_ = true;
-    if (chmod(path_.c_str(), 0600)) throw std::runtime_error("cannot protect robot UDS");
+    device_ = current.st_dev; inode_ = current.st_ino; bound_ = true;
+    if (fchmodat(private_, "socket", 0600, 0)) throw std::runtime_error("cannot protect robot UDS");
+    // Both directory fds refer to the same filesystem. linkat never overwrites
+    // a foreign file or socket that appeared after the initial absence check.
+    if (linkat(private_, "socket", parent_, basename_.c_str(), 0))
+      throw std::runtime_error("cannot claim robot socket path without replacing it");
+    owned_ = true;
   }
-  ~RobotSocketOwner() {
-    struct stat current{};
-    if (owned_ && !lstat(path_.c_str(), &current) && S_ISSOCK(current.st_mode) &&
-        current.st_dev == device_ && current.st_ino == inode_)
-      unlink(path_.c_str());
-  }
+  ~RobotSocketOwner() { Cleanup(); }
 private:
-  std::string path_;
+  void Cleanup() noexcept {
+    struct stat current{};
+    if (owned_ && !fstatat(parent_, basename_.c_str(), &current, AT_SYMLINK_NOFOLLOW) && S_ISSOCK(current.st_mode) &&
+        current.st_dev == device_ && current.st_ino == inode_)
+      unlinkat(parent_, basename_.c_str(), 0);
+    if (bound_ && private_ >= 0 && !fstatat(private_, "socket", &current, AT_SYMLINK_NOFOLLOW) &&
+        S_ISSOCK(current.st_mode) && current.st_dev == device_ && current.st_ino == inode_)
+      unlinkat(private_, "socket", 0);
+    if (private_ >= 0) { close(private_); private_ = -1; }
+    if (parent_ >= 0) {
+      if (private_inode_ && !fstatat(parent_, private_name_.c_str(), &current, AT_SYMLINK_NOFOLLOW) &&
+          S_ISDIR(current.st_mode) && current.st_dev == private_device_ && current.st_ino == private_inode_)
+        unlinkat(parent_, private_name_.c_str(), AT_REMOVEDIR);
+      close(parent_); parent_ = -1;
+    }
+  }
+  std::string path_, basename_, private_name_, binding_path_;
+  int parent_ = -1, private_ = -1;
   dev_t device_{};
   ino_t inode_{};
-  bool owned_ = false;
+  dev_t private_device_{};
+  ino_t private_inode_{};
+  bool bound_ = false, owned_ = false;
 };
 } // namespace xgc2_ros1_robot_adapter

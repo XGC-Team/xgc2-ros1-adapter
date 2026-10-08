@@ -91,6 +91,10 @@ class Client:
         binary = (Path(installed) if installed else ROOT / 'devel') / 'lib' / package / (package + '_node')
         self.binary, self.provider = str(binary), provider
         environment = dict(os.environ)
+        if name:
+            # Additional private fixtures may share the same master; do not
+            # replace the main type server's fixed ROS node registration.
+            environment['ROS_NAMESPACE'] = '/private_' + name.replace('-', '_')
         if environment.get('ROBOT_SERVER_ALLOCATION_PRELOAD'):
             environment['LD_PRELOAD'] = environment['ROBOT_SERVER_ALLOCATION_PRELOAD']
         arguments = ['--adapter-bootstrap-file', str(path)] if bootstrap else [
@@ -211,6 +215,8 @@ class Client:
         self.process.send_signal(signal.SIGTERM)
         self.process.wait(timeout=15)
         self.log.close()
+        if Path(self.socket).exists() or list(Path(self.socket).parent.glob('.robot-grpc-*')):
+            raise RuntimeError('robot server leaked its owned socket or private binding directory')
 
 
 class ServerTest(unittest.TestCase):

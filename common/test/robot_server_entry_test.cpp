@@ -1,6 +1,7 @@
 #include "xgc2_ros1_robot_adapter/robot_server_entry.hpp"
 #include <gtest/gtest.h>
 #include <fstream>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <vector>
 
@@ -24,6 +25,15 @@ int bindSocket(const std::string &path) {
   std::strcpy(address.sun_path, path.c_str());
   if (bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address))) { close(fd); return -1; }
   return fd;
+}
+std::vector<std::string> entries(const std::string &path) {
+  std::vector<std::string> result;
+  DIR *directory = opendir(path.c_str());
+  if (!directory) throw std::runtime_error("cannot inspect private test directory");
+  while (auto entry = readdir(directory)) {
+    if (std::string(entry->d_name) != "." && std::string(entry->d_name) != "..") result.emplace_back(entry->d_name);
+  }
+  closedir(directory); return result;
 }
 TEST(RobotServerEntry, NativeAndBootstrapModesPreserveTheirInputs) {
   auto args = parse({"--socket-path", "/run/xgc2/robot/server.sock", "--provider", "native",
@@ -102,17 +112,60 @@ TEST(RobotServerEntry, CleanupRemovesOnlyItsExactSocketInode) {
   PrivateDirectory root; const auto path = root.path + "/server.sock";
   int original = -1, replacement = -1;
   {
-    RobotSocketOwner owner(path); original = bindSocket(path); ASSERT_GE(original, 0); owner.RecordBoundSocket();
+    RobotSocketOwner owner(path); original = bindSocket(owner.BindingPath()); ASSERT_GE(original, 0); owner.RecordBoundSocket();
     struct stat state{}; ASSERT_EQ(lstat(path.c_str(), &state), 0); EXPECT_EQ(state.st_mode & 0777, 0600u);
   }
   EXPECT_EQ(access(path.c_str(), F_OK), -1); close(original);
+  EXPECT_TRUE(entries(root.path).empty());
   {
-    RobotSocketOwner owner(path); original = bindSocket(path); ASSERT_GE(original, 0); owner.RecordBoundSocket();
+    RobotSocketOwner owner(path); original = bindSocket(owner.BindingPath()); ASSERT_GE(original, 0); owner.RecordBoundSocket();
     ASSERT_EQ(rename(path.c_str(), (path + ".owned").c_str()), 0);
     replacement = bindSocket(path); ASSERT_GE(replacement, 0);
   }
   EXPECT_EQ(access(path.c_str(), F_OK), 0);
   close(original); close(replacement); unlink(path.c_str()); unlink((path + ".owned").c_str());
+  EXPECT_TRUE(entries(root.path).empty());
+}
+TEST(RobotServerEntry, AtomicAliasCannotReplaceAPathCreatedDuringStartup) {
+  PrivateDirectory root; const auto path = root.path + "/server.sock"; int socket = -1;
+  {
+    RobotSocketOwner owner(path); socket = bindSocket(owner.BindingPath()); ASSERT_GE(socket, 0);
+    std::ofstream(path) << "foreign bytes";
+    EXPECT_THROW(owner.RecordBoundSocket(), std::runtime_error);
+  }
+  std::ifstream stream(path); std::string contents; std::getline(stream, contents); EXPECT_EQ(contents, "foreign bytes");
+  EXPECT_EQ(entries(root.path), std::vector<std::string>{"server.sock"});
+  close(socket); unlink(path.c_str());
+}
+TEST(RobotServerEntry, StartupWithoutBindingCleansOnlyItsPrivateChild) {
+  PrivateDirectory root;
+  { RobotSocketOwner owner(root.path + "/server.sock"); EXPECT_EQ(entries(root.path).size(), 1u); }
+  EXPECT_TRUE(entries(root.path).empty());
+  EXPECT_EQ(access(root.path.c_str(), F_OK), 0);
+}
+TEST(RobotServerEntry, PrivateDirectoryReplacementIsPreserved) {
+  PrivateDirectory root; const auto path = root.path + "/server.sock"; int socket = -1;
+  std::string private_path;
+  {
+    RobotSocketOwner owner(path); socket = bindSocket(owner.BindingPath()); ASSERT_GE(socket, 0); owner.RecordBoundSocket();
+    struct stat alias{}, binding{}; ASSERT_EQ(stat(path.c_str(), &alias), 0); ASSERT_EQ(stat(owner.BindingPath().c_str(), &binding), 0);
+    EXPECT_EQ(alias.st_dev, binding.st_dev); EXPECT_EQ(alias.st_ino, binding.st_ino);
+    for (const auto &entry : entries(root.path)) if (entry != "server.sock") private_path = root.path + "/" + entry;
+    ASSERT_FALSE(private_path.empty()); ASSERT_EQ(rename(private_path.c_str(), (private_path + ".owned").c_str()), 0);
+    ASSERT_EQ(mkdir(private_path.c_str(), 0700), 0);
+  }
+  EXPECT_EQ(access(private_path.c_str(), F_OK), 0);
+  EXPECT_TRUE(entries(private_path + ".owned").empty());
+  close(socket); rmdir(private_path.c_str()); rmdir((private_path + ".owned").c_str());
+}
+TEST(RobotServerEntry, MaximumPublicAddressUsesAShortPrivateFdAlias) {
+  PrivateDirectory root;
+  const auto parent = root.path + "/" + std::string(104 - root.path.size() - 1, 'x');
+  const auto path = parent + "/s"; ASSERT_LT(path.size(), sizeof(sockaddr_un::sun_path));
+  int socket = -1;
+  { RobotSocketOwner owner(path); EXPECT_LT(owner.BindingPath().size(), sizeof(sockaddr_un::sun_path));
+    socket = bindSocket(owner.BindingPath()); ASSERT_GE(socket, 0); owner.RecordBoundSocket(); EXPECT_EQ(access(path.c_str(), F_OK), 0); }
+  close(socket); EXPECT_TRUE(entries(parent).empty()); rmdir(parent.c_str());
 }
 } // namespace
 int main(int argc, char **argv) { testing::InitGoogleTest(&argc, argv); return RUN_ALL_TESTS(); }
