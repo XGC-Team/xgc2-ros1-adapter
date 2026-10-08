@@ -65,6 +65,9 @@ function(xgc2_add_ros1_robot_common target_name)
       "${generated_dir}"
   )
   if(ARGV1 STREQUAL "SERVER")
+    find_package(XgcXrpc 0.1 REQUIRED CONFIG COMPONENTS grpc)
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_link_libraries(${target_name} PRIVATE XgcXrpc::grpc)
     set(grpc_source "${generated_dir}/xgc/robot/v1/server.grpc.pb.cc")
     add_custom_command(OUTPUT "${grpc_source}" "${generated_dir}/xgc/robot/v1/server.grpc.pb.h"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${generated_dir}"
@@ -78,6 +81,7 @@ function(xgc2_add_ros1_robot_common target_name)
     set_property(TARGET ${target_name} PROPERTY SOURCES ${common_sources})
     target_sources(${target_name} PRIVATE "${grpc_source}"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_server.cpp"
+      "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_server_transport.cpp"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/async_ros_services.cpp"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/bounded_ros_master.cpp")
     target_link_libraries(${target_name} INTERFACE "-Wl,--export-dynamic")

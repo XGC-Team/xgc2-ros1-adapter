@@ -248,6 +248,7 @@ def verify(args: argparse.Namespace) -> None:
             "executable": "rosrun",
             "args": [args.ros_package, args.ros_executable,
                      "--socket-path", "${socketPath}", "--provider", "${provider}",
+                     "--target-id", "${targetId}",
                      "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}"] if type_server else [
                 args.ros_package,
                 args.ros_executable,
@@ -263,10 +264,11 @@ def verify(args: argparse.Namespace) -> None:
             "properties": {
                 "socketPath": {"type": "string", "fixedOnly": True, "ownedEndpoint": "unix-socket"},
                 "provider": {"type": "string", "enum": [args.definition_id]},
+                "targetId": {"type": "string", "fixedOnly": True},
                 "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
                 "rosIp": {"type": "string", "default": ""},
             },
-            "required": ["socketPath", "provider", "rosMasterUri"], "additionalProperties": False,
+            "required": ["socketPath", "provider", "targetId", "rosMasterUri"], "additionalProperties": False,
         }, "native server parameter contract mismatch")
         require(process_definition["resourceClaims"] == [{
             "bindingKey": "control-socket", "kind": "custom", "mode": "exclusive",
@@ -275,7 +277,7 @@ def verify(args: argparse.Namespace) -> None:
         require(process_definition["readiness"] == {
             "kind": "exec", "command": {
                 "executable": "rosrun", "args": [args.ros_package, args.ros_executable,
-                    "--check", "--socket-path", "${socketPath}", "--timeout-ms", "2000"],
+                    "--check", "--socket-path", "${socketPath}", "--target-id", "${targetId}", "--timeout-ms", "2000"],
                 "env": ROS_NOETIC_ENVIRONMENT,
             }, "interval": 500000000, "timeout": 3000000000,
             "successThreshold": 1, "failureThreshold": 20,

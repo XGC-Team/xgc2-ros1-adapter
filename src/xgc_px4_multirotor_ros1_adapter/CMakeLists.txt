@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.16)
 project(xgc_px4_multirotor_ros1_adapter VERSION 0.5.0)
 
-add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
@@ -12,7 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(PythonInterp 3 REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GRPC REQUIRED grpc++ grpc)
+pkg_check_modules(GRPC REQUIRED grpc++>=1.51 grpc)
 pkg_check_modules(CARES REQUIRED libcares)
 find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
 if(NOT XGC2_PROTOBUF_PROTO_ROOT)

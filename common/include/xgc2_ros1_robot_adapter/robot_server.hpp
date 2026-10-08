@@ -37,8 +37,10 @@ public:
 using RobotFactory = std::function<std::shared_ptr<NativeRobot>(
     ros::NodeHandle, const RobotConfig &, TelemetryEmitter, std::string *)>;
 
-// Main thread owns gRPC's one CQ, two fixed ROS callback threads, one command
-// event loop, and one registration/cleanup thread: five application threads.
+// Main owns lifecycle; the SDK owns a bounded native gRPC worker pool and one
+// acceptor. Two fixed ROS callback threads, one command scheduler and one
+// registration owner serve all robots. Status and native waits have separate
+// bounded admission so discovery/health do not inherit per-robot executors.
 int RunRobotServer(int argc, char **argv, const std::string &node_name,
                    const std::string &provider, RobotFactory factory);
 

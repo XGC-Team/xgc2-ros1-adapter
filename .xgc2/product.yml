@@ -42,8 +42,9 @@ apt:
   - libxgc2-hover-thrust-dev
   - ros-noetic-xgc2-estimator-rigid-state
   - ros-noetic-xgc2-multirotor-controller
-  - libxgc2-adapter-runtime-client2 (>= 0.6.0-17~focal)
-  - libgrpc++1
+  - libxgc2-adapter-runtime-client3 (>= 0.7.0-1~focal)
+  - libgrpc++1.51
+  - libxgc2-xrpc-grpc1 (>= 0.1.0-1~focal)
   - libc-ares2
   - ros-noetic-diagnostic-msgs
   - ros-noetic-geometry-msgs
@@ -151,6 +152,7 @@ release:
   - xgc2-multirotor-controller
   - libxgc2-runtime-sdk-dev
   - libxgc2-adapter-runtime-client-dev
+  - xgc2-xrpc
   - xgc2-protobuf
   dependency_policy:
     libxgc2-robotics-interfaces-dev: rebuild
@@ -159,6 +161,7 @@ release:
     xgc2-multirotor-controller: rebuild
     libxgc2-runtime-sdk-dev: rebuild
     libxgc2-adapter-runtime-client-dev: rebuild
+    xgc2-xrpc: rebuild
     xgc2-protobuf: rebuild
     xgc2-scout-msgs: rebuild
   apt_versions:

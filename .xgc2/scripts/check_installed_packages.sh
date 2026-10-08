@@ -15,7 +15,7 @@ MOCAP_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-adapter"
 MOCAP_ROS_PACKAGE="xgc_mocap_rotor_ros1_adapter"
 MOCAP_FORWARDER_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-forwarder"
 MOCAP_FORWARDER_ROS_PACKAGE="xgc_mocap_rotor_zenoh_forwarder"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-17~focal}"
+ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.7.0-1~focal}"
 EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
     "$(dirname "$0")/../product.yml"
@@ -79,8 +79,8 @@ if [[ -n "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" ]]; then
   test "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" = \
     "$(dpkg-query -W -f='${X-XGC2-Source-Digest}' "${MOCAP_PACKAGE}")"
 fi
-dpkg -s libxgc2-adapter-runtime-client2 >/dev/null
-test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client2)" = \
+dpkg -s libxgc2-adapter-runtime-client3 >/dev/null
+test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client3)" = \
   "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
 test -f "${PROTOBUF_REGISTRY}"
 if dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-adapter" >/dev/null 2>&1; then
@@ -95,7 +95,7 @@ b2_depends="$(dpkg-query -W -f='${Depends}' "${B2_PACKAGE}")"
 mocap_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_PACKAGE}")"
 mocap_forwarder_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_FORWARDER_PACKAGE}")"
 for depends in "${b2_depends}" "${mocap_depends}"; do
-  grep -Eq '(^|, )libxgc2-adapter-runtime-client2( |[(])' <<<"${depends}"
+  grep -Eq '(^|, )libxgc2-adapter-runtime-client3( |[(])' <<<"${depends}"
   if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${depends}"; then
     echo "Adapter runtime dependencies leaked SDK/schema packages" >&2

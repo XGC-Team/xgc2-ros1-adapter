@@ -325,16 +325,17 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
         process["parameters"] = {
             "properties": {
                 "socketPath": {"type": "string", "fixedOnly": True, "ownedEndpoint": "unix-socket"},
+                "targetId": {"type": "string", "fixedOnly": True},
                 "provider": {"type": "string", "enum": [args.definition_id]},
                 "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
                 "rosIp": {"type": "string", "default": ""},
             },
-            "required": ["socketPath", "provider", "rosMasterUri"],
+            "required": ["socketPath", "provider", "targetId", "rosMasterUri"],
             "additionalProperties": False,
         }
         process["command"]["args"] = [
             args.ros_package, args.ros_executable,
-            "--socket-path", "${socketPath}", "--provider", "${provider}",
+            "--socket-path", "${socketPath}", "--provider", "${provider}", "--target-id", "${targetId}",
             "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}",
         ]
         process["resourceClaims"] = [{
@@ -345,7 +346,7 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
             "kind": "exec", "command": {
                 "executable": "rosrun",
                 "args": [args.ros_package, args.ros_executable,
-                         "--check", "--socket-path", "${socketPath}", "--timeout-ms", "2000"],
+                         "--check", "--socket-path", "${socketPath}", "--target-id", "${targetId}", "--timeout-ms", "2000"],
                 "env": dict(ROS_NOETIC_ENVIRONMENT),
             },
             "interval": 500000000, "timeout": 3000000000,

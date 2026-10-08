@@ -114,10 +114,8 @@ bool sameSubject(const xgc::adapter::v1::ScopeReference &left,
 class UnitreeB2Ros1AdapterNode {
 public:
   UnitreeB2Ros1AdapterNode(ros::NodeHandle node_handle,
-                           const std::string &bootstrap_file)
+                           xgc2::adapter_runtime::ClientConfig config)
       : node_handle_(std::move(node_handle)) {
-    auto config =
-        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
     definition_id_ = config.registration().definition_id();
 
     xgc2::adapter_runtime::CapabilityCallbacks telemetry;
@@ -226,8 +224,9 @@ private:
         robot.parameters.find("wire_transport") == robot.parameters.end() ||
         robot.parameters.find("wire_host") == robot.parameters.end() ||
         robot.parameters.find("wire_port") == robot.parameters.end()) {
-      *error = "robot " + robot.robot_id +
-               " must contain exactly namespace, robot_id and three wire parameters";
+      *error =
+          "robot " + robot.robot_id +
+          " must contain exactly namespace, robot_id and three wire parameters";
       return false;
     }
     std::string native_error;
@@ -249,9 +248,9 @@ private:
       return false;
     }
     static const std::set<std::string> baseline{
-        "state.pose", "state.velocity", "state.speed", "state.power",
-        "state.health", "state.locomotion", "state.joints",
-        "diagnostic.link", "diagnostic.stream-health"};
+        "state.pose",   "state.velocity",  "state.speed",
+        "state.power",  "state.health",    "state.locomotion",
+        "state.joints", "diagnostic.link", "diagnostic.stream-health"};
     std::set<std::string> enabled;
     for (const auto &channel : robot.channels) {
       contract::ChannelMetadata metadata{};
@@ -266,7 +265,8 @@ private:
         *error = "B2 profile must remain telemetry-only";
         return false;
       }
-      if (channel.enabled) enabled.insert(channel.channel_id);
+      if (channel.enabled)
+        enabled.insert(channel.channel_id);
     }
     for (const auto &channel : baseline)
       if (enabled.count(channel) == 0u) {
@@ -583,9 +583,8 @@ private:
     if (runtime)
       runtime->Stop();
     if (matched) {
-      ROS_WARN_STREAM("B2 telemetry source "
-                      << request.context().work_id()
-                      << " closed: " << error.message());
+      ROS_WARN_STREAM("B2 telemetry source " << request.context().work_id()
+                                             << " closed: " << error.message());
     }
   }
 
@@ -740,14 +739,21 @@ int main(int argc, char **argv) {
     std::cerr << "xgc_unitree_b2_ros1_adapter: " << error << '\n';
     return 2;
   }
-  ros::init(argc, argv, "xgc_unitree_b2_ros1_adapter",
-            ros::init_options::NoSigintHandler |
-                ros::init_options::AnonymousName);
-  ros::master::setRetryTimeout(ros::WallDuration(3.0));
   try {
+    auto config =
+        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
+    config.ApplyXrpcEnvironment(
+        xgc2_ros1_robot_adapter::XrpcEnvironmentAtStartup());
+    for (const auto &item :
+         xgc2_ros1_robot_adapter::RosEnvironmentFromSpec(config.initial_spec()))
+      setenv(item.first.c_str(), item.second.c_str(), 1);
+    ros::init(argc, argv, "xgc_unitree_b2_ros1_adapter",
+              ros::init_options::NoSigintHandler |
+                  ros::init_options::AnonymousName);
+    ros::master::setRetryTimeout(ros::WallDuration(3.0));
     xgc_unitree_b2_ros1_adapter::ShutdownSignalHandler shutdown_signals;
     xgc_unitree_b2_ros1_adapter::UnitreeB2Ros1AdapterNode node(
-        ros::NodeHandle(), bootstrap_file);
+        ros::NodeHandle(), std::move(config));
     ros::AsyncSpinner spinner(4);
     spinner.start();
     while (ros::ok() && !shutdown_signals.requested() &&
@@ -764,8 +770,7 @@ int main(int argc, char **argv) {
     ros::waitForShutdown();
     spinner.stop();
   } catch (const std::exception &exception) {
-    ROS_FATAL_STREAM(
-        "B2 robot Adapter startup failed: " << exception.what());
+    ROS_FATAL_STREAM("B2 robot Adapter startup failed: " << exception.what());
     return 1;
   }
   return 0;

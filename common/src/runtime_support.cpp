@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+extern char **environ;
+
 namespace xgc2_ros1_robot_adapter {
 namespace {
 
@@ -14,6 +16,18 @@ bool fail(std::string *error, const std::string &message) {
 }
 
 } // namespace
+
+std::vector<std::pair<std::string, std::string>> XrpcEnvironmentAtStartup() {
+  std::vector<std::pair<std::string, std::string>> result;
+  for (char **item = environ; item && *item; ++item) {
+    const std::string entry(*item);
+    if (entry.compare(0, 10, "XGC2_XRPC_") != 0)
+      continue;
+    const auto split = entry.find('=');
+    result.emplace_back(entry.substr(0, split), entry.substr(split + 1));
+  }
+  return result;
+}
 
 bool BootstrapFileFromArguments(int argc, char **argv, std::string *path,
                                 std::string *error) {
@@ -49,8 +63,8 @@ bool BootstrapFileFromArguments(int argc, char **argv, std::string *path,
   return true;
 }
 
-std::map<std::string, std::string> RosEnvironmentFromSpec(
-    const xgc::adapter::v1::AdapterInstanceSpec &spec) {
+std::map<std::string, std::string>
+RosEnvironmentFromSpec(const xgc::adapter::v1::AdapterInstanceSpec &spec) {
   xgc::robot::v1::RobotAdapterSpec robots;
   if (!robots.ParseFromString(spec.configuration().value()))
     throw std::runtime_error("invalid RobotAdapterSpec ROS configuration");
@@ -64,7 +78,8 @@ std::map<std::string, std::string> RosEnvironmentFromSpec(
         continue;
       const auto inserted = environment.emplace(name.second, value->second);
       if (!inserted.second && inserted.first->second != value->second)
-        throw std::runtime_error("one ROS Adapter process cannot use different ROS endpoints");
+        throw std::runtime_error(
+            "one ROS Adapter process cannot use different ROS endpoints");
     }
   }
   return environment;
@@ -73,8 +88,7 @@ std::map<std::string, std::string> RosEnvironmentFromSpec(
 bool BindBootstrapCapability(
     xgc2::adapter_runtime::ClientConfig *config,
     const std::string &capability_id,
-    xgc2::adapter_runtime::CapabilityCallbacks callbacks,
-    std::string *error) {
+    xgc2::adapter_runtime::CapabilityCallbacks callbacks, std::string *error) {
   if (config == nullptr)
     return fail(error, "Adapter Runtime client configuration is required");
   const auto &contracts = config->registration().supported_capabilities();
@@ -120,7 +134,8 @@ bool ResolveRobotSubject(const xgc::adapter::v1::WorkContext &context,
   const auto expected_run = configuration.scope_attributes.find("run-id");
   if (expected_target == configuration.scope_attributes.end() ||
       expected_run == configuration.scope_attributes.end() ||
-      target->second != expected_target->second || run->second != expected_run->second) {
+      target->second != expected_target->second ||
+      run->second != expected_run->second) {
     return fail(error, "robot subject crosses the applied target/run scope");
   }
   bool found = false;
@@ -131,7 +146,8 @@ bool ResolveRobotSubject(const xgc::adapter::v1::WorkContext &context,
     }
   }
   if (!found)
-    return fail(error, "robot subject is not present in the applied instance spec");
+    return fail(error,
+                "robot subject is not present in the applied instance spec");
   *robot_id = robot->second;
   if (error != nullptr)
     error->clear();
@@ -150,7 +166,7 @@ EmptyOperationSuccess(std::uint32_t schema_version,
   output.set_encoding(xgc::v1::PAYLOAD_ENCODING_PROTOBUF);
   output.set_value(empty.SerializeAsString());
   return xgc2::adapter_runtime::OperationResult::Success(std::move(output),
-                                                          true);
+                                                         true);
 }
 
 } // namespace xgc2_ros1_robot_adapter

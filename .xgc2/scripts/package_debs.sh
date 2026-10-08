@@ -31,7 +31,7 @@ product_version() {
 
 VERSION="${PACKAGE_VERSION:-$(product_version)}"
 MOCAP_VERSION="${MOCAP_ADAPTER_PACKAGE_VERSION:-${VERSION}}"
-ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client2"
+ADAPTER_RUNTIME_ABI_PACKAGE="libxgc2-adapter-runtime-client3"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

@@ -7,9 +7,8 @@ if [[ $# != 2 ]]; then
   echo "usage: $0 <catkin-build-directory> <empty-private-results-directory>" >&2
   exit 2
 fi
-if [[ "${ROBOT_SERVER_PRIVATE_TEST:-}" != 1 ||
-      "${ROS_MASTER_URI:-}" != http://127.0.0.1:11331 ]]; then
-  echo "requires isolated container with ROBOT_SERVER_PRIVATE_TEST=1 and private ROS master 11331" >&2
+if [[ "${ROBOT_SERVER_PRIVATE_TEST:-}" != 1 ]]; then
+  echo "requires an isolated ROS test environment with ROBOT_SERVER_PRIVATE_TEST=1; the fixture creates and verifies its own random-port master" >&2
   exit 2
 fi
 set +u

@@ -51,9 +51,13 @@ Individual member routes retain target, Run, robot and connection epoch. Native
 ROS resources are shared only with compatible configuration; removing one
 route leaves other uses active.
 
-Each server has five application threads: one gRPC completion queue, two ROS
-callback workers, one command event loop and one registration/cleanup worker.
-ROS and gRPC library threads are counted separately. Members own data and ROS
+Each server owns four application workers: two ROS callback workers, one
+command scheduler and one registration/cleanup worker. The shared XRPC SDK
+owns one Unix acceptor and a bounded native gRPC pool of at most 32 threads
+with a 32 MiB native resource quota. Native library allocations and ROS library
+threads are measured separately; the quota is not a total process RSS bound.
+The server bounds robots at 256, member routes at 1024, member batches at 256,
+per-robot command queues at 32, and held status subscriptions at four. Members own data and ROS
 handles, without their own process, helper, executor or worker thread.
 The callback workers take one callback at a time from the server's two shared
 ROS queues. Subscriptions request TCP_NODELAY and retain their original bounded
@@ -247,12 +251,13 @@ each executable. The Debian packages intentionally export no Catkin header or
 library interface.
 
 The binary bootstrap is owner-only mode `0600`. The three servers receive
-only their provider, UDS and ROS environment; members arrive through gRPC.
+only their provider, fixed target identity, UDS and ROS environment; members arrive through gRPC.
 The two Runtime Link providers retain their initial instance specification
 and granted capability contracts in the bootstrap.
 
 PX4, Scout Mini and Mecanum also accept ordinary native startup arguments:
-`--socket-path /run/xgc2/robot/server.sock --provider <the node's provider ID>`
+`--socket-path /run/xgc2/robot/server.sock --provider <the node's provider ID>
+--target-id <the owner's fixed target ID>`
 with optional `--ros-master-uri URI --ros-ip IP`. Missing ROS options and an
 explicit empty `--ros-ip` inherit
 the process environment. This mode cannot be combined with
@@ -260,16 +265,19 @@ the process environment. This mode cannot be combined with
 missing socket parents as mode `0700`, requires its direct parent to be owned
 by the process user with mode `0700`, refuses a preexisting socket path, and
 cleans up only its own socket inode. Existing directories are never chmodded.
-gRPC binds in a unique mode-`0700` child directory; the public path is an
-atomic, non-replacing hardlink to that same socket inode. This contains gRPC's
-automatic bind-path unlink and protects a replaced public endpoint during
-shutdown. It adds no proxy or worker, and removes only its own empty child
-directory after gRPC has stopped.
+The shared XRPC Unix lease binds the public endpoint directly and passes
+accepted descriptors to native gRPC. It does not let gRPC unlink or bind a
+pathname. Admission and retained native work keep the lease until real work
+quiesces; cleanup preserves foreign or replacement inodes.
 
-`--check --socket-path /run/xgc2/robot/server.sock [--timeout-ms 2000]` performs
-only the existing gRPC Health call, without initializing ROS. It returns zero
-only for `serving=true`. The deadline must be an integer from 1 to 60000 ms;
-check mode accepts no provider, ROS environment or bootstrap arguments.
+`--check --socket-path /run/xgc2/robot/server.sock --target-id <fixed target>
+[--timeout-ms 2000]` uses shared-SDK unary discovery and then instance-bound
+Health without initializing ROS. It checks the exact target, provider, service,
+API, profile, Unix endpoint and response instance before reporting readiness.
+Both calls share the smaller of the explicit timeout and resolved native call
+budget, with the SDK rounding margin; there is no retry or mutation replay.
+The timeout argument must be an integer from 1 to 60000 ms. Check mode accepts
+no provider, ROS environment or bootstrap arguments.
 
 ## Build and test
 
@@ -310,11 +318,11 @@ installed runtime manifest:
 .xgc2/scripts/check_public_apt_install.sh
 ```
 
-Builds require protobuf `0.5.0-20~focal` from source
-`99f301ee8725e91ae8149becce92377ea8fbecb0` and client SDK
-`0.6.0-17~focal` from source `1aa878d182297778271745543e8b8129507327a7`.
+Builds require protobuf `0.6.0-1~focal` from source
+`9ceeb01cc2de0369ed0956a010fad2d85424bc20` and client SDK
+`0.7.0-1~focal` from source `697d99b11ff90948e20872947706546c6205c9a9`.
 The staged SDK must declare the exact same protobuf dependency. The three type
-servers link gRPC and c-ares directly; they do not link the legacy client runtime.
+servers use native XRPC gRPC; the build image supplies its SDK and native libraries.
 B2 and Mocap Rotor retain their ELF-derived client runtime dependency. Installed
 packages omit protobuf and client development dependencies.
 
@@ -358,9 +366,10 @@ tests at an active station's ROS master.
 
 The source-owned installed-package acceptance entry is
 `.xgc2/scripts/test_robot_servers.sh <catkin-build-directory> <empty-results-directory>`.
-Run it inside a disposable, network-isolated ROS container after installing
-the three packages, with `ROBOT_SERVER_PRIVATE_TEST=1` and
-`ROS_MASTER_URI=http://127.0.0.1:11331`. Set
+Run it inside a disposable, network-isolated ROS environment after installing
+the three packages, with `ROBOT_SERVER_PRIVATE_TEST=1`. The fixture creates a
+random-port master, verifies its reported PID against the child it started,
+and uses private ROS home and log directories. Set
 `ROBOT_SERVER_XSIM_BINARY` to the production xsim executable to include its
 three-model custom-topic integration, and `ROBOT_SERVER_CORE_TEST_BINARY` to
 the compiled Core native-client test to include its 1/20/100 measurements.

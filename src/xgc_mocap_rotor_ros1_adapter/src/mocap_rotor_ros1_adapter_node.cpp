@@ -84,14 +84,11 @@ bool sameSubject(const xgc::adapter::v1::ScopeReference &left,
 class MocapRotorRos1AdapterNode {
 public:
   MocapRotorRos1AdapterNode(ros::NodeHandle node_handle,
-                            const std::string &bootstrap_file)
+                            xgc2::adapter_runtime::ClientConfig config)
       : node_handle_(std::move(node_handle)),
-        wire_(new ZenohSubscriber(
-            [this](std::string key, std::string payload) {
-              dispatchWire(std::move(key), std::move(payload));
-            })) {
-    auto config =
-        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
+        wire_(new ZenohSubscriber([this](std::string key, std::string payload) {
+          dispatchWire(std::move(key), std::move(payload));
+        })) {
     definition_id_ = config.registration().definition_id();
 
     xgc2::adapter_runtime::CapabilityCallbacks telemetry;
@@ -139,8 +136,8 @@ public:
       throw std::runtime_error("Adapter Runtime startup failed: " + error);
 
     periodic_timer_ = node_handle_.createWallTimer(
-        ros::WallDuration(0.1),
-        &MocapRotorRos1AdapterNode::periodicTimer, this);
+        ros::WallDuration(0.1), &MocapRotorRos1AdapterNode::periodicTimer,
+        this);
   }
 
   ~MocapRotorRos1AdapterNode() { Shutdown(); }
@@ -187,8 +184,8 @@ private:
     if (!ValidateNativeProfileContract(error))
       return false;
     if (robot.profile_id != contract::kProfileId) {
-      *error =
-          "Mocap Rotor Adapter received unsupported profile " + robot.profile_id;
+      *error = "Mocap Rotor Adapter received unsupported profile " +
+               robot.profile_id;
       return false;
     }
     const char *profile_digest = contract::profileDigest(robot.profile_id);
@@ -202,7 +199,8 @@ private:
         robot.parameters.find("wire_transport") == robot.parameters.end() ||
         robot.parameters.find("zenoh_listen") == robot.parameters.end()) {
       *error = "robot " + robot.robot_id +
-               " must contain exactly namespace, robot_id, wire_transport, zenoh_listen";
+               " must contain exactly namespace, robot_id, wire_transport, "
+               "zenoh_listen";
       return false;
     }
     if (robot.parameters.at("robot_id") != robot.robot_id) {
@@ -223,10 +221,9 @@ private:
       return false;
     }
     static const std::set<std::string> baseline{
-        "state.pose",          "state.velocity", "state.speed",
-        "state.imu",           "state.power",    "state.health",
-        "state.flight",        "diagnostic.link",
-        "diagnostic.stream-health"};
+        "state.pose",   "state.velocity",  "state.speed",
+        "state.imu",    "state.power",     "state.health",
+        "state.flight", "diagnostic.link", "diagnostic.stream-health"};
     std::set<std::string> enabled;
     for (const auto &channel : robot.channels) {
       contract::ChannelMetadata metadata{};
@@ -281,7 +278,8 @@ private:
       if (shared_listen.empty())
         shared_listen = listen;
       else if (listen != shared_listen) {
-        *error = "one Mocap Rotor Adapter instance must use one shared Zenoh listener";
+        *error = "one Mocap Rotor Adapter instance must use one shared Zenoh "
+                 "listener";
         return false;
       }
     }
@@ -421,7 +419,8 @@ private:
       }
     }
     if (cancellation.IsCancellationRequested()) {
-      auto detached = detachSource(robot_id, context.work_id(), source_generation);
+      auto detached =
+          detachSource(robot_id, context.work_id(), source_generation);
       if (detached)
         detached->Stop();
       stopWireIfUnused();
@@ -432,9 +431,9 @@ private:
     return xgc2::adapter_runtime::SourceOpenDecision::Accept();
   }
 
-  std::shared_ptr<RobotRuntime>
-  detachSource(const std::string &robot_id, const std::string &work_id,
-               std::uint64_t source_generation) {
+  std::shared_ptr<RobotRuntime> detachSource(const std::string &robot_id,
+                                             const std::string &work_id,
+                                             std::uint64_t source_generation) {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto found = connected_.find(robot_id);
     if (found == connected_.end() || found->second.work_id != work_id ||
@@ -453,10 +452,10 @@ private:
     bool matched = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      for (auto found = connected_.begin(); found != connected_.end(); ++found) {
+      for (auto found = connected_.begin(); found != connected_.end();
+           ++found) {
         if (found->second.work_id != request.context().work_id() ||
-            found->second.fence.revision !=
-                request.context().spec_revision() ||
+            found->second.fence.revision != request.context().spec_revision() ||
             !sameSubject(found->second.subject, request.context().subject()))
           continue;
         runtime = std::move(found->second.runtime);
@@ -521,7 +520,8 @@ private:
     ParsedWireKey parsed;
     std::string error;
     if (!ParseWireKey(key, &parsed, &error)) {
-      ROS_WARN_STREAM_THROTTLE(2.0, "Mocap Rotor rejected Zenoh key: " << error);
+      ROS_WARN_STREAM_THROTTLE(2.0,
+                               "Mocap Rotor rejected Zenoh key: " << error);
       return;
     }
     std::shared_ptr<RobotRuntime> runtime;
@@ -534,10 +534,10 @@ private:
     if (!runtime)
       return;
     if (!runtime->HandleWireFrame(parsed.channel, payload, &error)) {
-      ROS_WARN_STREAM_THROTTLE(
-          2.0, "Mocap Rotor wire sample rejected robot="
-                   << parsed.robot_id << " channel="
-                   << WireChannelLeaf(parsed.channel) << ": " << error);
+      ROS_WARN_STREAM_THROTTLE(2.0, "Mocap Rotor wire sample rejected robot="
+                                        << parsed.robot_id << " channel="
+                                        << WireChannelLeaf(parsed.channel)
+                                        << ": " << error);
     }
   }
 
@@ -556,8 +556,7 @@ private:
       return;
     }
     while (!source.telemetry.empty() &&
-           (source.telemetry.size() >=
-                kMaximumQueuedTelemetryItemsPerRobot ||
+           (source.telemetry.size() >= kMaximumQueuedTelemetryItemsPerRobot ||
             source.queued_bytes >
                 kMaximumQueuedTelemetryBytesPerRobot - item_bytes)) {
       --queued_telemetry_items_;
@@ -571,8 +570,7 @@ private:
             kMaximumQueuedTelemetryBytesPerRobot - item_bytes ||
         queued_telemetry_items_ >= kMaximumQueuedTelemetryItems ||
         queued_telemetry_bytes_ > kMaximumQueuedTelemetryBytes - item_bytes ||
-        next_telemetry_token_ ==
-            std::numeric_limits<std::uint64_t>::max()) {
+        next_telemetry_token_ == std::numeric_limits<std::uint64_t>::max()) {
       ++source.dropped;
       return;
     }
@@ -616,7 +614,8 @@ private:
                                      snapshot.batch.tokens))
       return false;
     auto &source = found->second;
-    for (std::size_t index = 0u; index < snapshot.batch.tokens.size(); ++index) {
+    for (std::size_t index = 0u; index < snapshot.batch.tokens.size();
+         ++index) {
       --queued_telemetry_items_;
       queued_telemetry_bytes_ -= source.telemetry.front().value.size();
       source.queued_bytes -= source.telemetry.front().value.size();
@@ -653,8 +652,7 @@ private:
         const std::size_t index = (start + offset) % robot_ids.size();
         TelemetrySnapshot snapshot;
         if (!readTelemetryBatch(robot_ids[index],
-                                kMaximumFlushItemsPerTick - handled,
-                                &snapshot))
+                                kMaximumFlushItemsPerTick - handled, &snapshot))
           continue;
         const auto source_key =
             std::make_pair(snapshot.robot_id, snapshot.source_generation);
@@ -733,14 +731,21 @@ int main(int argc, char **argv) {
     std::cerr << "xgc_mocap_rotor_ros1_adapter: " << error << '\n';
     return 2;
   }
-  ros::init(argc, argv, "xgc_mocap_rotor_ros1_adapter",
-            ros::init_options::NoSigintHandler |
-                ros::init_options::AnonymousName);
-  ros::master::setRetryTimeout(ros::WallDuration(3.0));
   try {
+    auto config =
+        xgc2::adapter_runtime::ClientConfig::FromBootstrapFile(bootstrap_file);
+    config.ApplyXrpcEnvironment(
+        xgc2_ros1_robot_adapter::XrpcEnvironmentAtStartup());
+    for (const auto &item :
+         xgc2_ros1_robot_adapter::RosEnvironmentFromSpec(config.initial_spec()))
+      setenv(item.first.c_str(), item.second.c_str(), 1);
+    ros::init(argc, argv, "xgc_mocap_rotor_ros1_adapter",
+              ros::init_options::NoSigintHandler |
+                  ros::init_options::AnonymousName);
+    ros::master::setRetryTimeout(ros::WallDuration(3.0));
     xgc_mocap_rotor_ros1_adapter::ShutdownSignalHandler shutdown_signals;
     xgc_mocap_rotor_ros1_adapter::MocapRotorRos1AdapterNode node(
-        ros::NodeHandle(), bootstrap_file);
+        ros::NodeHandle(), std::move(config));
     ros::AsyncSpinner spinner(4);
     spinner.start();
     while (ros::ok() && !shutdown_signals.requested() &&
@@ -755,8 +760,8 @@ int main(int argc, char **argv) {
     ros::waitForShutdown();
     spinner.stop();
   } catch (const std::exception &exception) {
-    ROS_FATAL_STREAM("Mocap Rotor Adapter startup failed: "
-                     << exception.what());
+    ROS_FATAL_STREAM(
+        "Mocap Rotor Adapter startup failed: " << exception.what());
     return 1;
   }
   return 0;

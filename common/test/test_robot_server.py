@@ -15,6 +15,7 @@ import struct
 import socketserver
 import platform
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
@@ -70,6 +71,7 @@ def cgroup_cpu():
 
 class Client:
     def __init__(self, kind, name=None, master=None, bootstrap=False):
+        self._closed = False
         package, provider = KINDS[kind]
         self.kind = kind
         installed = os.environ.get('ROBOT_SERVER_INSTALL_PREFIX')
@@ -82,7 +84,7 @@ class Client:
         self.socket = str(ROOT / ((name or kind) + '-socket') / 'server.sock')
         self.master_uri = master or os.environ['ROS_MASTER_URI']
         bootstrap_message = wire.RobotServerBootstrap(socket_path=self.socket, provider_definition_id=provider,
-            ros_environment={'ros_master_uri': self.master_uri, 'ros_ip': '127.0.0.1'})
+            target_id='test', ros_environment={'ros_master_uri': self.master_uri, 'ros_ip': '127.0.0.1'})
         path = ROOT / ((name or kind) + '.pb')
         path.write_bytes(bootstrap_message.SerializeToString())
         path.chmod(0o600)
@@ -99,6 +101,7 @@ class Client:
             environment['LD_PRELOAD'] = environment['ROBOT_SERVER_ALLOCATION_PRELOAD']
         arguments = ['--adapter-bootstrap-file', str(path)] if bootstrap else [
             '--socket-path', self.socket, '--provider', provider,
+            '--target-id', 'test',
             '--ros-master-uri', self.master_uri, '--ros-ip', '127.0.0.1']
         self.process = subprocess.Popen([str(binary), *arguments], stdout=self.log, stderr=self.log, env=environment)
         self.channel = grpc.insecure_channel('unix:' + self.socket, options=[
@@ -110,7 +113,7 @@ class Client:
         self.execute = self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/Execute',
             request_serializer=wire.ExecuteRequest.SerializeToString,
             response_deserializer=lambda raw: wire.ExecuteResponse.FromString(raw).event)
-        self.status = self.channel.unary_stream('/xgc.robot.v1.RobotAdapterServerService/SubscribeStatus',
+        self._status = self.channel.unary_stream('/xgc.robot.v1.RobotAdapterServerService/SubscribeStatus',
             request_serializer=wire.SubscribeStatusRequest.SerializeToString, response_deserializer=wire.SubscribeStatusResponse.FromString)
         startup_deadline = time.monotonic() + 10
         try:
@@ -124,6 +127,9 @@ class Client:
     def unary(self, name, request, response):
         return self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/' + name,
             request_serializer=request.SerializeToString, response_deserializer=response.FromString)
+
+    def status(self, request, timeout=30):
+        return self._status(request, timeout=timeout)
 
     def member(self, index, epoch=1, run=None, profile=None):
         profile = profile or self.profile
@@ -167,9 +173,9 @@ class Client:
         status = Path(f'/proc/{pid}/status').read_text()
         rss = int(next(line.split()[1] for line in status.splitlines() if line.startswith('VmRSS:')))
         children = Path(f'/proc/{pid}/task/{pid}/children').read_text().strip().split()
-        app = sum(name in ('robot-grpc', 'robot-commands', 'robot-members', 'robot-callback') for name in threads)
+        app = sum(name in ('robot-commands', 'robot-members', 'robot-callback') for name in threads)
         return {'pid': pid, 'application_threads': app, 'total_threads': len(threads), 'thread_names': threads,
-                'children': children, 'rss_kib': rss}
+                'retired_grpc_threads': threads.count('robot-grpc'), 'children': children, 'rss_kib': rss}
 
     def cpu_ticks(self):
         result = {}
@@ -211,33 +217,45 @@ class Client:
         return {name:dict(allocations=v[0], frees=v[1], requested_bytes=v[2], ros_publish_calls=v[3], ros_publish_total_ns=v[4], ros_publish_histogram_ceil_us=[1,2,4,8,16,32,64,'above64'], ros_publish_histogram=v[6:14], poll_calls=v[14], poll_wait_ns=v[15]) for name,v in groups.items()}
 
     def close(self):
+        if self._closed: return
         self.channel.close()
-        self.process.send_signal(signal.SIGTERM)
+        if self.process.poll() is None: self.process.send_signal(signal.SIGTERM)
         self.process.wait(timeout=15)
         self.log.close()
         if Path(self.socket).exists() or list(Path(self.socket).parent.glob('.robot-grpc-*')):
             raise RuntimeError('robot server leaked its owned socket or private binding directory')
+        self._closed = True
 
 
 class ServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if 'ROBOT_SERVER_PRIVATE_TEST' not in os.environ:
+        if os.environ.get('ROBOT_SERVER_PRIVATE_TEST') != '1':
             raise RuntimeError('requires explicit isolated private ROS test environment')
-        if os.environ.get('ROS_MASTER_URI','').rstrip('/') != 'http://127.0.0.1:11331':
-            raise RuntimeError('private test owns only http://127.0.0.1:11331')
-        os.environ['ROS_HOME'] = str(ROOT / 'ros-home')
-        Path(os.environ['ROS_HOME']).mkdir(exist_ok=True)
+        cls.ros_directory = tempfile.TemporaryDirectory(prefix='robot-server-ros-', dir=ROOT)
+        cls.addClassCleanup(cls.ros_directory.cleanup)
+        os.environ['ROS_HOME'] = str(Path(cls.ros_directory.name) / 'home')
+        os.environ['ROS_LOG_DIR'] = str(Path(cls.ros_directory.name) / 'logs')
+        Path(os.environ['ROS_HOME']).mkdir(mode=0o700)
+        Path(os.environ['ROS_LOG_DIR']).mkdir(mode=0o700)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            master_port = reservation.getsockname()[1]
+        os.environ['ROS_MASTER_URI'] = 'http://127.0.0.1:' + str(master_port)
+        os.environ['ROS_IP'] = '127.0.0.1'
+        os.environ['ROS_HOSTNAME'] = '127.0.0.1'
         with open(ROOT / 'master.log', 'w') as log:
-            cls.master = subprocess.Popen(['/opt/ros/noetic/bin/rosmaster', '--core', '-p', '11331'], stdout=log, stderr=subprocess.STDOUT)
-        cls.addClassCleanup(lambda: cls.master.poll() is None and cls.master.terminate())
+            cls.master = subprocess.Popen(['/opt/ros/noetic/bin/rosmaster', '--core', '-p', str(master_port)], stdout=log, stderr=subprocess.STDOUT)
+        cls.addClassCleanup(close_observer, cls.master)
         proxy = xmlrpc.client.ServerProxy(os.environ['ROS_MASTER_URI'])
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if cls.master.poll() is not None:
                 raise RuntimeError('private ROS master exited before becoming ready')
             try:
-                proxy.getPid('/private_test')
+                result = proxy.getPid('/private_test')
+                if result[0] != 1 or result[2] != cls.master.pid:
+                    raise RuntimeError('private ROS port belongs to another process')
                 break
             except OSError:
                 time.sleep(0.05)
@@ -248,7 +266,7 @@ class ServerTest(unittest.TestCase):
         cls.clients = {}
         for kind in KINDS:
             cls.clients[kind] = Client(kind)
-            cls.addClassCleanup(lambda c=cls.clients[kind]: c.process.poll() is None and c.close())
+            cls.addClassCleanup(cls.clients[kind].close)
         cls.measurements = []
 
     @classmethod
@@ -271,19 +289,31 @@ class ServerTest(unittest.TestCase):
                            ROS_HOME=str(ROOT / 'check-must-not-create-ros-home'))
         for client in self.clients.values():
             before = time.monotonic()
-            response = subprocess.run([client.binary, '--check', '--socket-path', client.socket],
+            response = subprocess.run([client.binary, '--check', '--target-id', 'test', '--socket-path', client.socket],
                                       env=environment, capture_output=True, text=True, timeout=4)
             self.assertEqual(response.returncode, 0, response.stderr)
             self.assertLess(time.monotonic() - before, 3)
         self.assertFalse(Path(environment['ROS_HOME']).exists())
         client = self.clients['scout']
+        with tempfile.TemporaryDirectory(prefix='robot-bootstrap-fifo-', dir=ROOT) as directory:
+            fifo = Path(directory) / 'bootstrap.fifo'
+            os.mkfifo(fifo, 0o600)
+            started = time.monotonic()
+            response = subprocess.run([client.binary, '--adapter-bootstrap-file', str(fifo)],
+                                      env=environment, capture_output=True, text=True, timeout=2)
+            self.assertNotEqual(response.returncode, 0, response.stderr)
+            self.assertIn('regular file', response.stderr)
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertTrue(fifo.is_fifo())
         for arguments in [[], ['--socket-path'], ['--socket-path', '--provider'],
-                          ['--check', '--check', '--socket-path', client.socket],
-                          ['--socket-path', client.socket, '--provider', 'foreign'],
+                          ['--check', '--check', '--target-id', 'test', '--socket-path', client.socket],
+                          ['--socket-path', client.socket, '--provider', client.provider],
+                          ['--socket-path', client.socket, '--provider', client.provider, '--target-id', 'invalid target'],
+                          ['--socket-path', client.socket, '--provider', 'foreign', '--target-id', 'test'],
                           ['--socket-path', client.socket, '--socket-path', client.socket, '--provider', client.provider],
                           ['--adapter-bootstrap-file', str(ROOT / 'scout.pb'), '--socket-path', client.socket],
-                          ['--check', '--socket-path', client.socket, '--ros-ip', ''],
-                          ['--check', '--socket-path', client.socket, '--timeout-ms', '60001']]:
+                          ['--check', '--target-id', 'test', '--socket-path', client.socket, '--ros-ip', ''],
+                          ['--check', '--target-id', 'test', '--socket-path', client.socket, '--timeout-ms', '60001']]:
             response = subprocess.run([client.binary, *arguments], env=environment,
                                       capture_output=True, text=True, timeout=3)
             self.assertNotEqual(response.returncode, 0, arguments)
@@ -293,7 +323,7 @@ class ServerTest(unittest.TestCase):
                 if path.endswith('silent.sock'):
                     listener = socket.socket(socket.AF_UNIX); listener.bind(path); listener.listen(4)
                 before = time.monotonic()
-                response = subprocess.run([client.binary, '--check', '--socket-path', path, '--timeout-ms', '200'],
+                response = subprocess.run([client.binary, '--check', '--target-id', 'test', '--socket-path', path, '--timeout-ms', '200'],
                                           env=environment, capture_output=True, text=True, timeout=3)
                 self.assertNotEqual(response.returncode, 0, response.stderr)
                 self.assertGreaterEqual(time.monotonic() - before, .15)
@@ -309,7 +339,7 @@ class ServerTest(unittest.TestCase):
                 response_serializer=wire.HealthResponse.SerializeToString)})])
         fake.add_insecure_port('unix:' + fake_path); fake.start()
         try:
-            response = subprocess.run([client.binary, '--check', '--socket-path', fake_path],
+            response = subprocess.run([client.binary, '--check', '--target-id', 'test', '--socket-path', fake_path],
                                       env=environment, capture_output=True, text=True, timeout=3)
             self.assertNotEqual(response.returncode, 0)
             self.assertIn('not serving', response.stderr)
@@ -327,6 +357,7 @@ class ServerTest(unittest.TestCase):
         path = directory / 'foreign.sock'
         def launch():
             return subprocess.run([client.binary, '--socket-path', str(path), '--provider', client.provider,
+                                   '--target-id', 'test',
                                    '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', ''],
                                   capture_output=True, text=True, timeout=5)
         foreign = socket.socket(socket.AF_UNIX); foreign.bind(str(path)); foreign.listen(1)
@@ -367,7 +398,8 @@ class ServerTest(unittest.TestCase):
                 members += additions
                 resources = client.resources()
                 self.assertEqual(resources['children'], [])
-                self.assertEqual(resources['application_threads'], 5, resources)
+                self.assertEqual(resources['application_threads'], 4, resources)
+                self.assertEqual(resources['retired_grpc_threads'], 0, resources)
                 self.measurements.append(dict(resources, kind=kind, count=count,
                     startup_ms=client.startup_ms, registration_ms=(time.monotonic()-started)*1000))
             self.assert_members(client.remove(wire.RemoveMembersRequest(members=[member.identity for member in members]), timeout=30), 100)
@@ -521,7 +553,7 @@ class ServerTest(unittest.TestCase):
                 elapsed = time.monotonic() - input_started
 
                 resources = client.resources()
-                self.assertEqual(resources['application_threads'], 5)
+                self.assertEqual(resources['application_threads'], 4)
                 self.measurements.append(dict(resources, kind=kind, count=count, input_hz=30, duration_s=elapsed,
                     canonical_samples=full['all_robot_samples'], canonical_hz=full['all_robot_samples']/count/3,
                     per_robot_samples=full['per_robot_samples'],
@@ -627,7 +659,7 @@ class ServerTest(unittest.TestCase):
             self.assertTrue(response.members[0].HasField('error'))
             self.assertLess(time.monotonic()-before,15)
             client.health(wire.HealthRequest(),timeout=1)
-            self.assertEqual(client.resources()['application_threads'],5)
+            self.assertEqual(client.resources()['application_threads'],4)
             client.close();client=None
         finally:
             try:
@@ -672,7 +704,7 @@ class ServerTest(unittest.TestCase):
             for channel,counts in full['channel_samples'].items():
                 self.assertGreaterEqual(min(counts),60 if channel=='vision' else 70,(kind,channel,min(counts)))
             ticks=int(after[13])+int(after[14])-ticks_before
-            resources=client.resources();self.assertEqual(resources['application_threads'],5)
+            resources=client.resources();self.assertEqual(resources['application_threads'],4)
             self.measurements.append(dict(resources,kind=kind,count=100,input_hz_per_channel=30,input_channels=['pose','twist','accel'],
                 duration_s=elapsed,registration_ms=(registered-started)*1000,output=full,input=json.loads(source_report.read_text()),
                 cpu_percent_one_core=100*ticks/os.sysconf('SC_CLK_TCK')/elapsed,
@@ -783,7 +815,7 @@ class ServerTest(unittest.TestCase):
                     for i,member in enumerate(members[:2]):
                         self.assertGreater(latest[(member.identity.robot_id,pose_channel)].message.sequence,previous[i])
                         self.assertGreater(latest[(member.identity.robot_id,'state.imu')].message.sequence,previous_imu[i])
-                self.assertEqual(client.resources()['application_threads'],5)
+                self.assertEqual(client.resources()['application_threads'],4)
                 master('close')()
             finally:
                 stream.cancel();receiver.join(3)
@@ -960,7 +992,7 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(len(imu_counts),100)
                 self.assertGreaterEqual(min(imu_counts.values()),24)
                 self.assertEqual(json.loads(report.read_text())['imu_samples'],9000)
-                resources=client.resources();self.assertEqual(resources['application_threads'],5)
+                resources=client.resources();self.assertEqual(resources['application_threads'],4)
                 percentile=lambda values,p: sorted(values)[int(p*(len(values)-1))]
                 self.measurements.append(dict(resources,test='xsim-125hz',kind=kind,count=100,input_hz_per_channel=125,
                     input_channels=['pose','twist','imu'],input_hz={'pose':125,'twist':125,'imu':30},
@@ -1103,7 +1135,7 @@ class ServerTest(unittest.TestCase):
                             'not every channel received a post-burst frame: ' + str(sorted(final_latest.items(), key=lambda x: x[1])[:4]))
                         p99 = sorted(delays)[int(.99 * (len(delays) - 1))]
                         resources = client.resources()
-                        self.assertEqual(resources['application_threads'], 5)
+                        self.assertEqual(resources['application_threads'], 4)
                         self.assertEqual(resources['children'], [])
                         forwarding = None
                         if observer is not None:

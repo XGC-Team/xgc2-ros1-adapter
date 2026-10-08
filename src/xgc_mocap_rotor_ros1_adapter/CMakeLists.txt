@@ -1,11 +1,13 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.16)
 project(xgc_mocap_rotor_ros1_adapter VERSION 0.5.0)
 
-add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs nav_msgs roscpp sensor_msgs std_msgs tf2_ros)
 find_package(PythonInterp 3 REQUIRED)
-find_package(xgc2_adapter_runtime_client CONFIG REQUIRED)
+find_package(xgc2_adapter_runtime_client 0.7.0 EXACT CONFIG REQUIRED)
 find_package(zenohc CONFIG REQUIRED)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../common/cmake/robot_adapter_common.cmake")
