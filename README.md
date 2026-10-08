@@ -228,9 +228,12 @@ Each Adapter Debian owns three generated, immutable installation contracts:
 The install step hashes the final ELF, computes canonical capability and public
 Profile contract digests, and validates every message ID/version/fingerprint
 against `xgc2-protobuf`. The process definition
-accepts only the supervisor-owned `adapterBootstrapFile` parameter and invokes
-the executable directly with `--adapter-bootstrap-file` and the complete ROS
-Noetic runtime environment. It never relies on a shell or a sourced setup file.
+uses ordinary startup parameters and the complete ROS Noetic runtime environment
+for the three native type servers. Their public process recipes declare an
+owned Unix socket, one allowed provider ID, an exec Health readiness probe and
+process liveness. Unitree B2 and Mocap Rotor retain the internal process recipe
+with the supervisor-owned `adapterBootstrapFile` parameter. Neither recipe
+relies on a shell or a sourced setup file.
 
 The onboard Forwarder Debian is deliberately different: it owns only
 `/usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json`. That closed
@@ -247,6 +250,21 @@ The binary bootstrap is owner-only mode `0600`. The three servers receive
 only their provider, UDS and ROS environment; members arrive through gRPC.
 The two Runtime Link providers retain their initial instance specification
 and granted capability contracts in the bootstrap.
+
+PX4, Scout Mini and Mecanum also accept ordinary native startup arguments:
+`--socket-path /run/xgc2/robot/server.sock --provider <the node's provider ID>`
+with optional `--ros-master-uri URI --ros-ip IP`. Missing ROS options and an
+explicit empty `--ros-ip` inherit
+the process environment. This mode cannot be combined with
+`--adapter-bootstrap-file`; each option may occur only once. The server creates
+missing socket parents as mode `0700`, requires its direct parent to be owned
+by the process user with mode `0700`, refuses a preexisting socket path, and
+cleans up only its own socket inode. Existing directories are never chmodded.
+
+`--check --socket-path /run/xgc2/robot/server.sock [--timeout-ms 2000]` performs
+only the existing gRPC Health call, without initializing ROS. It returns zero
+only for `serving=true`. The deadline must be an integer from 1 to 60000 ms;
+check mode accepts no provider, ROS environment or bootstrap arguments.
 
 ## Build and test
 

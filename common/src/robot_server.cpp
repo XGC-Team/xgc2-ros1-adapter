@@ -1,4 +1,5 @@
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/robot_server_entry.hpp"
 #include <grpcpp/grpcpp.h>
 #include <google/protobuf/util/message_differencer.h>
 #include <ros/master.h>
@@ -114,6 +115,7 @@ public:
   Server(wire::RobotServerBootstrap bootstrap, RobotFactory factory)
       : bootstrap_(std::move(bootstrap)), factory_(std::move(factory)) {}
   int run() {
+    RobotSocketOwner socket_owner(bootstrap_.socket_path());
     grpc::ServerBuilder builder;
     builder.SetMaxReceiveMessageSize(16 * 1024 * 1024);
     builder.AddListeningPort("unix:" + bootstrap_.socket_path(), grpc::InsecureServerCredentials());
@@ -121,7 +123,7 @@ public:
     cq_ = builder.AddCompletionQueue();
     server_ = builder.BuildAndStart();
     if (!server_) throw std::runtime_error("robot server could not bind its UDS");
-    if (chmod(bootstrap_.socket_path().c_str(), 0600)) throw std::runtime_error("cannot protect robot UDS");
+    socket_owner.RecordBoundSocket();
     registration_ = std::thread([this] { registrationLoop(); });
     scheduler_ = std::thread([this] { commandLoop(); });
     listen(); listenStream();
@@ -152,7 +154,6 @@ public:
     while (cq_->Next(&tag, &ok)) static_cast<Tag *>(tag)->proceed(ok);
     streams_.clear();
     { RosMasterDeadline deadline(std::chrono::seconds(3)); ros::shutdown(); }
-    unlink(bootstrap_.socket_path().c_str());
     return 0;
   }
 private:
@@ -489,17 +490,39 @@ operation::OperationEvent CommandError(const operation::OperationRequest &reques
 int RunRobotServer(int argc, char **argv, const std::string &node_name,
                    const std::string &provider, RobotFactory factory) {
   try {
+    const auto arguments = ParseRobotServerArguments(argc, argv, provider);
+    if (arguments.check) {
+      auto stub = wire::RobotAdapterServerService::NewStub(grpc::CreateChannel(
+          "unix:" + arguments.socket_path, grpc::InsecureChannelCredentials()));
+      grpc::ClientContext context;
+      context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(arguments.timeout_ms));
+      context.set_wait_for_ready(true);
+      wire::HealthRequest request;
+      wire::HealthResponse response;
+      const auto status = stub->Health(&context, request, &response);
+      if (!status.ok() || !response.serving()) {
+        std::cerr << "robot server health: " << (status.ok() ? "not serving" : status.error_message()) << '\n';
+        return 1;
+      }
+      return 0;
+    }
     ConfigureBoundedRosMaster();
-    std::string path;
-    for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--adapter-bootstrap-file" && i + 1 < argc) path = argv[++i];
-    if (path.empty()) throw std::runtime_error("supervisor bootstrap file required");
-    struct stat info{};
-    if (stat(path.c_str(), &info) || !S_ISREG(info.st_mode) || info.st_size > 65536 || (info.st_mode & 077))
-      throw std::runtime_error("bootstrap must be a private bounded regular file");
-    std::ifstream file(path, std::ios::binary);
     wire::RobotServerBootstrap bootstrap;
-    if (!bootstrap.ParseFromIstream(&file) || bootstrap.provider_definition_id() != provider ||
-        bootstrap.socket_path().empty() || bootstrap.socket_path().front() != '/') throw std::runtime_error("invalid robot server bootstrap");
+    if (!arguments.bootstrap_file.empty()) {
+      struct stat info{};
+      if (lstat(arguments.bootstrap_file.c_str(), &info) || !S_ISREG(info.st_mode) ||
+          info.st_size <= 0 || info.st_size > 65536 || (info.st_mode & 077))
+        throw std::runtime_error("bootstrap must be a private bounded regular file");
+      std::ifstream file(arguments.bootstrap_file, std::ios::binary);
+      if (!bootstrap.ParseFromIstream(&file) || bootstrap.provider_definition_id() != provider)
+        throw std::runtime_error("invalid robot server bootstrap");
+      ValidateRobotSocketPath(bootstrap.socket_path());
+    } else {
+      bootstrap.set_socket_path(arguments.socket_path);
+      bootstrap.set_provider_definition_id(arguments.provider);
+      if (!arguments.ros_master_uri.empty()) (*bootstrap.mutable_ros_environment())["ros_master_uri"] = arguments.ros_master_uri;
+      if (!arguments.ros_ip.empty()) (*bootstrap.mutable_ros_environment())["ros_ip"] = arguments.ros_ip;
+    }
     for (const auto &name : {std::make_pair("ros_master_uri", "ROS_MASTER_URI"), std::make_pair("ros_ip", "ROS_IP")}) {
       const auto found = bootstrap.ros_environment().find(name.first);
       if (found != bootstrap.ros_environment().end() && !found->second.empty()) setenv(name.second, found->second.c_str(), 1);

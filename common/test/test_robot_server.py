@@ -69,7 +69,7 @@ def cgroup_cpu():
 
 
 class Client:
-    def __init__(self, kind, name=None, master=None):
+    def __init__(self, kind, name=None, master=None, bootstrap=False):
         package, provider = KINDS[kind]
         self.kind = kind
         installed = os.environ.get('ROBOT_SERVER_INSTALL_PREFIX')
@@ -79,21 +79,24 @@ class Client:
         self.profile = next(p for key,p in self.profiles.items() if key.endswith('.physical.vrpn'))
         self.manifest = json.loads((manifests /
             'adapter-definitions' / (provider + '.json')).read_text())['adapters'][0]
-        self.socket = str(ROOT / ((name or kind) + '.sock'))
+        self.socket = str(ROOT / ((name or kind) + '-socket') / 'server.sock')
         self.master_uri = master or os.environ['ROS_MASTER_URI']
-        bootstrap = wire.RobotServerBootstrap(socket_path=self.socket, provider_definition_id=provider,
+        bootstrap_message = wire.RobotServerBootstrap(socket_path=self.socket, provider_definition_id=provider,
             ros_environment={'ros_master_uri': self.master_uri, 'ros_ip': '127.0.0.1'})
         path = ROOT / ((name or kind) + '.pb')
-        path.write_bytes(bootstrap.SerializeToString())
+        path.write_bytes(bootstrap_message.SerializeToString())
         path.chmod(0o600)
         self.log = open(ROOT / ((name or kind) + '-server.log'), 'w')
         self.started = time.monotonic()
         binary = (Path(installed) if installed else ROOT / 'devel') / 'lib' / package / (package + '_node')
+        self.binary, self.provider = str(binary), provider
         environment = dict(os.environ)
         if environment.get('ROBOT_SERVER_ALLOCATION_PRELOAD'):
             environment['LD_PRELOAD'] = environment['ROBOT_SERVER_ALLOCATION_PRELOAD']
-        self.process = subprocess.Popen([str(binary),
-            '--adapter-bootstrap-file', str(path)], stdout=self.log, stderr=self.log, env=environment)
+        arguments = ['--adapter-bootstrap-file', str(path)] if bootstrap else [
+            '--socket-path', self.socket, '--provider', provider,
+            '--ros-master-uri', self.master_uri, '--ros-ip', '127.0.0.1']
+        self.process = subprocess.Popen([str(binary), *arguments], stdout=self.log, stderr=self.log, env=environment)
         self.channel = grpc.insecure_channel('unix:' + self.socket, options=[
             ('grpc.initial_reconnect_backoff_ms',10), ('grpc.min_reconnect_backoff_ms',100),
             ('grpc.max_reconnect_backoff_ms',100)])
@@ -254,6 +257,99 @@ class ServerTest(unittest.TestCase):
     def assert_members(self, result, count):
         self.assertEqual(len(result.members), count)
         self.assertFalse(any(member.HasField('error') for member in result.members), str(result))
+
+    def test_00_native_entry_health_deadline_and_bootstrap_compatibility(self):
+        # --check cannot initialize ROS: a deliberately unreachable master and
+        # a fresh ROS_HOME must have no bearing on a serving gRPC Health reply.
+        environment = dict(os.environ, ROS_MASTER_URI='http://127.0.0.1:9',
+                           ROS_HOME=str(ROOT / 'check-must-not-create-ros-home'))
+        for client in self.clients.values():
+            before = time.monotonic()
+            response = subprocess.run([client.binary, '--check', '--socket-path', client.socket],
+                                      env=environment, capture_output=True, text=True, timeout=4)
+            self.assertEqual(response.returncode, 0, response.stderr)
+            self.assertLess(time.monotonic() - before, 3)
+        self.assertFalse(Path(environment['ROS_HOME']).exists())
+        client = self.clients['scout']
+        for arguments in [[], ['--socket-path'], ['--socket-path', '--provider'],
+                          ['--check', '--check', '--socket-path', client.socket],
+                          ['--socket-path', client.socket, '--provider', 'foreign'],
+                          ['--socket-path', client.socket, '--socket-path', client.socket, '--provider', client.provider],
+                          ['--adapter-bootstrap-file', str(ROOT / 'scout.pb'), '--socket-path', client.socket],
+                          ['--check', '--socket-path', client.socket, '--ros-ip', ''],
+                          ['--check', '--socket-path', client.socket, '--timeout-ms', '60001']]:
+            response = subprocess.run([client.binary, *arguments], env=environment,
+                                      capture_output=True, text=True, timeout=3)
+            self.assertNotEqual(response.returncode, 0, arguments)
+        for path in [str(ROOT / 'missing.sock'), str(ROOT / 'silent.sock')]:
+            listener = None
+            try:
+                if path.endswith('silent.sock'):
+                    listener = socket.socket(socket.AF_UNIX); listener.bind(path); listener.listen(4)
+                before = time.monotonic()
+                response = subprocess.run([client.binary, '--check', '--socket-path', path, '--timeout-ms', '200'],
+                                          env=environment, capture_output=True, text=True, timeout=3)
+                self.assertNotEqual(response.returncode, 0, response.stderr)
+                self.assertGreaterEqual(time.monotonic() - before, .15)
+                self.assertLess(time.monotonic() - before, 2)
+            finally:
+                if listener is not None: listener.close(); Path(path).unlink()
+        fake_path = str(ROOT / 'false-health.sock')
+        fake = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        fake.add_generic_rpc_handlers([grpc.method_handlers_generic_handler(
+            'xgc.robot.v1.RobotAdapterServerService', {'Health': grpc.unary_unary_rpc_method_handler(
+                lambda request, context: wire.HealthResponse(serving=False),
+                request_deserializer=wire.HealthRequest.FromString,
+                response_serializer=wire.HealthResponse.SerializeToString)})])
+        fake.add_insecure_port('unix:' + fake_path); fake.start()
+        try:
+            response = subprocess.run([client.binary, '--check', '--socket-path', fake_path],
+                                      env=environment, capture_output=True, text=True, timeout=3)
+            self.assertNotEqual(response.returncode, 0)
+            self.assertIn('not serving', response.stderr)
+        finally: fake.stop(0).wait()
+        compatibility = Client('scout', name='bootstrap-compatible', bootstrap=True)
+        try:
+            member = compatibility.member(555)
+            self.assert_members(compatibility.apply(wire.ApplyMembersRequest(members=[member]), timeout=5), 1)
+            self.assert_members(compatibility.remove(wire.RemoveMembersRequest(members=[member.identity]), timeout=5), 1)
+        finally: compatibility.close()
+
+    def test_00_socket_lifecycle_preserves_foreign_paths(self):
+        client = self.clients['scout']
+        directory = ROOT / 'socket-ownership'; directory.mkdir(mode=0o700, exist_ok=True)
+        path = directory / 'foreign.sock'
+        def launch():
+            return subprocess.run([client.binary, '--socket-path', str(path), '--provider', client.provider,
+                                   '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', ''],
+                                  capture_output=True, text=True, timeout=5)
+        foreign = socket.socket(socket.AF_UNIX); foreign.bind(str(path)); foreign.listen(1)
+        before = path.lstat().st_ino
+        try:
+            self.assertNotEqual(launch().returncode, 0)
+            self.assertEqual(path.lstat().st_ino, before)
+        finally: foreign.close(); path.unlink()
+        path.write_text('foreign bytes')
+        try:
+            self.assertNotEqual(launch().returncode, 0)
+            self.assertEqual(path.read_text(), 'foreign bytes')
+        finally: path.unlink()
+        temporary = Client('scout', name='replacement-ownership')
+        original_path = Path(temporary.socket); owned_path = original_path.with_suffix('.owned')
+        self.assertEqual(original_path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(original_path.stat().st_mode & 0o777, 0o600)
+        original_path.rename(owned_path)
+        replacement = socket.socket(socket.AF_UNIX); replacement.bind(str(original_path)); replacement.listen(1)
+        before = original_path.lstat().st_ino
+        try:
+            temporary.process.terminate(); temporary.process.wait(timeout=5)
+            self.assertEqual(temporary.process.returncode, 0)
+            self.assertEqual(original_path.lstat().st_ino, before)
+        finally:
+            replacement.close()
+            if original_path.exists(): original_path.unlink()
+            if owned_path.exists(): owned_path.unlink()
+            temporary.close()
 
     def test_01_fixed_processes_and_threads_at_1_20_100(self):
         for kind, client in self.clients.items():
