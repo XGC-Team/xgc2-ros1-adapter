@@ -240,13 +240,15 @@ def verify(args: argparse.Namespace) -> None:
     require(len(process["definitions"]) == 1, "process manifest must contain exactly one definition")
     process_definition = process["definitions"][0]
     require(process_definition["id"] == definition["processDefinitionId"], "process definition identity mismatch")
-    require(process_definition["internal"] is True, "Adapter process must be internal")
+    require(process_definition["internal"] is (not type_server), "Adapter process visibility mismatch")
     require(process_definition["restart"]["mode"] == ("on-failure" if type_server else "never"), "Adapter process restart policy mismatch")
     require(
         process_definition["command"]
         == {
             "executable": "rosrun",
-            "args": [
+            "args": [args.ros_package, args.ros_executable,
+                     "--socket-path", "${socketPath}", "--provider", "${provider}",
+                     "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}"] if type_server else [
                 args.ros_package,
                 args.ros_executable,
                 "--adapter-bootstrap-file",
@@ -256,6 +258,29 @@ def verify(args: argparse.Namespace) -> None:
         },
         "Adapter process command mismatch",
     )
+    if type_server:
+        require(process_definition["parameters"] == {
+            "properties": {
+                "socketPath": {"type": "string", "fixedOnly": True, "ownedEndpoint": "unix-socket"},
+                "provider": {"type": "string", "enum": [args.definition_id]},
+                "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
+                "rosIp": {"type": "string", "default": ""},
+            },
+            "required": ["socketPath", "provider", "rosMasterUri"], "additionalProperties": False,
+        }, "native server parameter contract mismatch")
+        require(process_definition["resourceClaims"] == [{
+            "bindingKey": "control-socket", "kind": "custom", "mode": "exclusive",
+            "namespace": "unix-socket", "identityParts": [{"parameter": "socketPath"}],
+        }], "native server socket claim mismatch")
+        require(process_definition["readiness"] == {
+            "kind": "exec", "command": {
+                "executable": "rosrun", "args": [args.ros_package, args.ros_executable,
+                    "--check", "--socket-path", "${socketPath}", "--timeout-ms", "2000"],
+                "env": ROS_NOETIC_ENVIRONMENT,
+            }, "interval": 500000000, "timeout": 3000000000,
+            "successThreshold": 1, "failureThreshold": 20,
+        }, "native server readiness mismatch")
+        require(process_definition["liveness"] == {"kind": "process"}, "native server liveness mismatch")
 
     require(profile["schema"] == "xgc.robot.adapter-profile-catalog/v4", "invalid profile catalog schema")
     require(

@@ -18,3 +18,7 @@ set_target_properties(robot_server_allocation_probe PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${CATKIN_DEVEL_PREFIX}/lib/robot_server_tests")
 add_custom_target(robot_server_test_tools DEPENDS async_ros_services_driver
   ros_forwarding_source ros_forwarding_observer robot_server_allocation_probe)
+catkin_add_gtest(robot_server_entry_test robot_server_entry_test.cpp)
+if(TARGET robot_server_entry_test)
+  target_include_directories(robot_server_entry_test PRIVATE "${XGC2_ROS1_ROBOT_COMMON_ROOT}/include")
+endif()

@@ -319,6 +319,38 @@ def build_documents(args: argparse.Namespace) -> tuple[dict[str, Any], ...]:
             }
         ],
     }
+    if type_server:
+        process = process_manifest["definitions"][0]
+        process["internal"] = False
+        process["parameters"] = {
+            "properties": {
+                "socketPath": {"type": "string", "fixedOnly": True, "ownedEndpoint": "unix-socket"},
+                "provider": {"type": "string", "enum": [args.definition_id]},
+                "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
+                "rosIp": {"type": "string", "default": ""},
+            },
+            "required": ["socketPath", "provider", "rosMasterUri"],
+            "additionalProperties": False,
+        }
+        process["command"]["args"] = [
+            args.ros_package, args.ros_executable,
+            "--socket-path", "${socketPath}", "--provider", "${provider}",
+            "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}",
+        ]
+        process["resourceClaims"] = [{
+            "bindingKey": "control-socket", "kind": "custom", "mode": "exclusive",
+            "namespace": "unix-socket", "identityParts": [{"parameter": "socketPath"}],
+        }]
+        process["readiness"] = {
+            "kind": "exec", "command": {
+                "executable": "rosrun",
+                "args": [args.ros_package, args.ros_executable,
+                         "--check", "--socket-path", "${socketPath}", "--timeout-ms", "2000"],
+                "env": dict(ROS_NOETIC_ENVIRONMENT),
+            },
+            "interval": 500000000, "timeout": 3000000000,
+            "successThreshold": 1, "failureThreshold": 20,
+        }
 
     installed_profiles = []
     for source_profile in profiles.values():

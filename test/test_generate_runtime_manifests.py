@@ -857,6 +857,80 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             self.assertEqual(scope["sharing"], "shared")
             self.assertEqual(process["definitions"][0]["restart"]["mode"], "on-failure")
 
+    def test_three_native_recipes_are_public_and_health_checked(self):
+        for profile, provider in (
+            (PX4_PROFILE, "xgc2-px4-multirotor-ros1-adapter"),
+            (SCOUT_PROFILE, "xgc2-scout-mini-ros1-adapter"),
+            (MECANUM_PROFILE, "xgc2-mecanum-ugv-ros1-adapter"),
+        ):
+            args = self.arguments(profile); args.definition_id = provider; args.version = "0.5.0"
+            adapter, process, catalog = GENERATOR.build_documents(args)
+            definition = process["definitions"][0]
+            self.assertEqual(definition["version"], "0.5.0")
+            self.assertFalse(definition["internal"])
+            self.assertEqual(definition["parameters"], {
+                "properties": {
+                    "socketPath": {"type": "string", "fixedOnly": True, "ownedEndpoint": "unix-socket"},
+                    "provider": {"type": "string", "enum": [provider]},
+                    "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
+                    "rosIp": {"type": "string", "default": ""},
+                }, "required": ["socketPath", "provider", "rosMasterUri"], "additionalProperties": False,
+            })
+            self.assertEqual(definition["command"]["args"], [
+                args.ros_package, args.ros_executable,
+                "--socket-path", "${socketPath}", "--provider", "${provider}",
+                "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}",
+            ])
+            self.assertEqual(definition["readiness"], {
+                "kind": "exec", "command": {
+                    "executable": "rosrun", "args": [args.ros_package, args.ros_executable,
+                        "--check", "--socket-path", "${socketPath}", "--timeout-ms", "2000"],
+                    "env": ROS_NOETIC_ENVIRONMENT,
+                }, "interval": 500000000, "timeout": 3000000000,
+                "successThreshold": 1, "failureThreshold": 20,
+            })
+            self.assertEqual(definition["liveness"], {"kind": "process"})
+            self.assertEqual(definition["resourceClaims"], [{
+                "bindingKey": "control-socket", "kind": "custom", "mode": "exclusive",
+                "namespace": "unix-socket", "identityParts": [{"parameter": "socketPath"}],
+            }])
+            for name, document in (("adapter", adapter), ("process", process), ("profile", catalog)):
+                (self.temp / (name + ".json")).write_text(json.dumps(document))
+            args.adapter_manifest = str(self.temp / "adapter.json")
+            args.process_manifest = str(self.temp / "process.json")
+            args.profile_catalog = str(self.temp / "profile.json")
+            VERIFIER.verify(args)
+            mutations = [
+                lambda d: d.update(internal=True),
+                lambda d: d["parameters"]["properties"]["socketPath"].pop("ownedEndpoint"),
+                lambda d: d["parameters"]["properties"]["socketPath"].update(default="/tmp/default.sock"),
+                lambda d: d["parameters"]["properties"]["provider"].update(enum=["foreign"]),
+                lambda d: d["parameters"]["required"].remove("provider"),
+                lambda d: d["command"]["args"].append("--adapter-bootstrap-file"),
+                lambda d: d["readiness"].update(kind="process"),
+                lambda d: d["readiness"].update(timeout=9000000000),
+                lambda d: d["resourceClaims"][0].update(mode="shared"),
+                lambda d: d["liveness"].update(kind="ros1-node"),
+            ]
+            for mutation in mutations:
+                tampered = copy.deepcopy(process); mutation(tampered["definitions"][0])
+                Path(args.process_manifest).write_text(json.dumps(tampered))
+                with self.assertRaises(ValueError): VERIFIER.verify(args)
+
+    def test_b2_and_mocap_keep_internal_bootstrap_recipe(self):
+        for profile, provider in ((B2_PROFILE, "xgc2-unitree-b2-ros1-adapter"),
+                                  (MOCAP_ROTOR_PROFILE, "xgc2-mocap-rotor-ros1-adapter")):
+            args = self.arguments(profile); args.definition_id = provider
+            _, process, _ = GENERATOR.build_documents(args)
+            definition = process["definitions"][0]
+            self.assertTrue(definition["internal"])
+            self.assertEqual(definition["command"]["args"], [args.ros_package, args.ros_executable,
+                             "--adapter-bootstrap-file", "${adapterBootstrapFile}"])
+            self.assertEqual(definition["parameters"]["required"], ["adapterBootstrapFile"])
+            self.assertEqual(definition["readiness"], {"kind": "process"})
+            self.assertEqual(definition["restart"], {"mode": "never"})
+            self.assertNotIn("resourceClaims", definition)
+
     def test_duplicate_operation_identity_is_rejected_without_fallback(self):
         profile = yaml.safe_load(PX4_PROFILE.read_text(encoding="utf-8"))
         duplicate_arm = copy.deepcopy(
