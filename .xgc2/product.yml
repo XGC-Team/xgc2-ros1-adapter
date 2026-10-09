@@ -43,7 +43,7 @@ apt:
   - ros-noetic-xgc2-estimator-rigid-state
   - ros-noetic-xgc2-multirotor-controller
   - libxgc2-adapter-runtime-client3 (>= 0.7.0-1~focal)
-  - libgrpc++1.51
+  - libgrpc++1
   - libxgc2-xrpc-grpc1 (>= 0.1.0-1~focal)
   - libc-ares2
   - ros-noetic-diagnostic-msgs

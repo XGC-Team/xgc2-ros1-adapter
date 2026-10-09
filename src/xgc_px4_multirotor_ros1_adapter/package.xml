@@ -10,7 +10,7 @@
   <buildtool_depend>catkin</buildtool_depend>
 
   <build_depend>geometry_msgs</build_depend>
-  <build_depend version_gte="1.51">libgrpc++-dev</build_depend>
+  <build_depend version_gte="1.16">libgrpc++-dev</build_depend>
   <build_depend>libxgc2-xrpc-grpc-dev</build_depend>
   <build_depend>libc-ares-dev</build_depend>
   <build_depend>protobuf-compiler-grpc</build_depend>
@@ -25,7 +25,7 @@
   <build_export_depend>roscpp</build_export_depend>
 
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>libgrpc++1.51</exec_depend>
+  <exec_depend>libgrpc++1</exec_depend>
   <exec_depend>libxgc2-xrpc-grpc1</exec_depend>
   <exec_depend>libc-ares2</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
