@@ -6,6 +6,7 @@
 #include <geometry_msgs/AccelStamped.h>
 #include <sensor_msgs/Imu.h>
 #include <fstream>
+#include <iostream>
 #include <vector>
 
 int main(int argc, char **argv) {
@@ -32,13 +33,26 @@ int main(int argc, char **argv) {
       direct ? ros::Publisher() : node.advertise<geometry_msgs::AccelStamped>(root + "/accel", queue),
       direct ? node.advertise<sensor_msgs::Imu>(imu_topic, 20) : ros::Publisher()});
   }
+  std::cerr << "Registered native source publishers for " << count
+            << " members" << std::endl;
   const auto until = ros::WallTime::now() + ros::WallDuration(45);
+  auto next_report = ros::WallTime::now() + ros::WallDuration(1);
   for (;;) {
     bool connected = true;
     for (const auto &source : sources) connected = connected && source.pose.getNumSubscribers() && source.twist.getNumSubscribers() &&
       (direct ? source.imu.getNumSubscribers() : source.accel.getNumSubscribers());
     if (connected) { std::ofstream(ready) << "ready\n"; break; }
     if (!ros::ok() || ros::WallTime::now() > until) return 3;
+    if (ros::WallTime::now() >= next_report) {
+      std::cerr << "Waiting for native subscribers:";
+      for (const auto &source : sources)
+        for (const auto *publisher : {&source.pose, &source.twist,
+                                     direct ? &source.imu : &source.accel})
+          if (!publisher->getNumSubscribers())
+            std::cerr << ' ' << publisher->getTopic();
+      std::cerr << std::endl;
+      next_report = ros::WallTime::now() + ros::WallDuration(1);
+    }
     ros::WallDuration(.01).sleep();
   }
   while (!std::ifstream(start).good()) {

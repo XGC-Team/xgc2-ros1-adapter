@@ -1125,9 +1125,11 @@ class ServerTest(unittest.TestCase):
                     observer = subprocess.Popen([str(ROOT / 'ros_forwarding_observer'), kind,
                         '1' if direct else '100', str(observation), str(observation_ready),
                         'direct' if direct else 'all'] + (['1'] if direct else []), stdout=subprocess.DEVNULL)
+                    source_log = open(str(base) + '-source.log', 'w')
+                    self.addCleanup(source_log.close)
                     source = subprocess.Popen([str(ROOT / 'ros_forwarding_source'), kind, '100',
                         str(report), str(ready), str(start), 'direct' if direct else 'raw', str(rate), '500'],
-                        stdout=subprocess.DEVNULL)
+                        stdout=source_log, stderr=subprocess.STDOUT)
                     service = (rospy.Service('/px41/mavros/cmd/arming', CommandBool,
                                lambda request: CommandBoolResponse(success=True, result=0)) if kind == 'px4' else None)
                     try:
@@ -1136,7 +1138,8 @@ class ServerTest(unittest.TestCase):
                               (observer is not None and not observation_ready.exists())):
                             self.assertIsNone(source.poll(), 'burst source exited before connecting')
                             time.sleep(.01)
-                        self.assertTrue(ready.exists(), 'burst source did not connect all members')
+                        self.assertTrue(ready.exists(), 'burst source did not connect all members\n' +
+                                        Path(source_log.name).read_text())
                         if observer is not None: self.assertTrue(observation_ready.exists())
                         baseline_rss = client.resources()['rss_kib']
                         peak_rss = baseline_rss
@@ -1227,6 +1230,7 @@ class ServerTest(unittest.TestCase):
                     finally:
                         stream.cancel(); slow.cancel(); receiver.join(3)
                         if source.poll() is None: source.terminate(); source.wait(timeout=5)
+                        source_log.close()
                         if observer is not None: close_observer(observer)
                         if service is not None: service.shutdown()
                         self.assert_members(client.remove(wire.RemoveMembersRequest(
