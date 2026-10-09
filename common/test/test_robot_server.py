@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 import xmlrpc.client
 
 import grpc
@@ -107,26 +108,58 @@ class Client:
         self.channel = grpc.insecure_channel('unix:' + self.socket, options=[
             ('grpc.initial_reconnect_backoff_ms',10), ('grpc.min_reconnect_backoff_ms',100),
             ('grpc.max_reconnect_backoff_ms',100)])
+        self.instance_id = None
         self.health = self.unary('Health', wire.HealthRequest, wire.HealthResponse)
         self.apply = self.unary('ApplyMembers', wire.ApplyMembersRequest, wire.ApplyMembersResponse)
         self.remove = self.unary('RemoveMembers', wire.RemoveMembersRequest, wire.RemoveMembersResponse)
-        self.execute = self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/Execute',
+        self.execute = self.bound_call(self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/Execute',
             request_serializer=wire.ExecuteRequest.SerializeToString,
-            response_deserializer=lambda raw: wire.ExecuteResponse.FromString(raw).event)
-        self._status = self.channel.unary_stream('/xgc.robot.v1.RobotAdapterServerService/SubscribeStatus',
-            request_serializer=wire.SubscribeStatusRequest.SerializeToString, response_deserializer=wire.SubscribeStatusResponse.FromString)
+            response_deserializer=lambda raw: wire.ExecuteResponse.FromString(raw).event))
+        self._status = self.bound_call(self.channel.unary_stream('/xgc.robot.v1.RobotAdapterServerService/SubscribeStatus',
+            request_serializer=wire.SubscribeStatusRequest.SerializeToString, response_deserializer=wire.SubscribeStatusResponse.FromString))
         startup_deadline = time.monotonic() + 10
         try:
             grpc.channel_ready_future(self.channel).result(timeout=10)
-            self.health(wire.HealthRequest(), timeout=max(0, startup_deadline - time.monotonic()))
+            request_id = uuid.uuid4().hex
+            describe = self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/Describe',
+                request_serializer=wire.DescribeRequest.SerializeToString, response_deserializer=wire.DescribeResponse.FromString)
+            response, call = describe.with_call(wire.DescribeRequest(),
+                metadata=(('x-request-id', request_id),), timeout=max(0, startup_deadline - time.monotonic()))
+            reference = response.service_ref
+            metadata = tuple(call.initial_metadata())
+            if (reference.target_id != 'test' or reference.service != 'xgc2.robot-adapter' or
+                    reference.api_version != 'v1' or reference.profile != 'grpc.v1' or
+                    reference.endpoint.kind != 'unix' or reference.endpoint.address != self.socket or
+                    not reference.instance_id or response.provider_definition_id != provider or
+                    [value for key, value in metadata if key == 'x-xrpc-instance-id'] != [reference.instance_id] or
+                    [value for key, value in metadata if key == 'x-request-id'] != [request_id]):
+                raise RuntimeError('robot server discovery identity mismatch')
+            self.instance_id = reference.instance_id
+            health = self.health(wire.HealthRequest(), timeout=max(0, startup_deadline - time.monotonic()))
+            if not health.serving or health.instance_id != self.instance_id:
+                raise RuntimeError('robot server health identity mismatch or not serving')
         except Exception:
-            self.close()
+            before_stop = self.process.poll()
+            try:
+                self.close()
+            finally:
+                print('robot server startup failed: kind=%s before_stop=%s exit=%s socket=%s\n%s' % (
+                    kind, before_stop, self.process.returncode, self.socket,
+                    Path(self.log.name).read_text()), flush=True)
             raise
         self.startup_ms = (time.monotonic() - self.started) * 1000
 
     def unary(self, name, request, response):
-        return self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/' + name,
-            request_serializer=request.SerializeToString, response_deserializer=response.FromString)
+        return self.bound_call(self.channel.unary_unary('/xgc.robot.v1.RobotAdapterServerService/' + name,
+            request_serializer=request.SerializeToString, response_deserializer=response.FromString))
+
+    def bound_call(self, call):
+        def metadata():
+            return (('x-xrpc-instance-id', self.instance_id), ('x-request-id', uuid.uuid4().hex))
+        def invoke(request, **kwargs):
+            return call(request, metadata=metadata(), **kwargs)
+        invoke.future = lambda request, **kwargs: call.future(request, metadata=metadata(), **kwargs)
+        return invoke
 
     def status(self, request, timeout=30):
         return self._status(request, timeout=timeout)
@@ -332,9 +365,27 @@ class ServerTest(unittest.TestCase):
                 if listener is not None: listener.close(); Path(path).unlink()
         fake_path = str(ROOT / 'false-health.sock')
         fake = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        fake_instance = uuid.uuid4().hex
+        def fake_metadata(context):
+            request_id = next(value for key, value in context.invocation_metadata() if key == 'x-request-id')
+            context.send_initial_metadata((('x-xrpc-instance-id', fake_instance), ('x-request-id', request_id)))
+        def fake_describe(request, context):
+            fake_metadata(context)
+            response = wire.DescribeResponse(provider_definition_id=client.provider)
+            reference = response.service_ref
+            reference.target_id = 'test'; reference.service = 'xgc2.robot-adapter'
+            reference.api_version = 'v1'; reference.profile = 'grpc.v1'; reference.instance_id = fake_instance
+            reference.endpoint.kind = 'unix'; reference.endpoint.address = fake_path
+            return response
+        def fake_health(request, context):
+            fake_metadata(context)
+            return wire.HealthResponse(serving=False, instance_id=fake_instance)
         fake.add_generic_rpc_handlers([grpc.method_handlers_generic_handler(
-            'xgc.robot.v1.RobotAdapterServerService', {'Health': grpc.unary_unary_rpc_method_handler(
-                lambda request, context: wire.HealthResponse(serving=False),
+            'xgc.robot.v1.RobotAdapterServerService', {
+                'Describe': grpc.unary_unary_rpc_method_handler(fake_describe,
+                    request_deserializer=wire.DescribeRequest.FromString,
+                    response_serializer=wire.DescribeResponse.SerializeToString),
+                'Health': grpc.unary_unary_rpc_method_handler(fake_health,
                 request_deserializer=wire.HealthRequest.FromString,
                 response_serializer=wire.HealthResponse.SerializeToString)})])
         fake.add_insecure_port('unix:' + fake_path); fake.start()
