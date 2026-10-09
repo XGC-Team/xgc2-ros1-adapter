@@ -774,19 +774,11 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             docker_build,
         )
         self.assertIn(
-            'EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.6.0-17"',
+            'EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.7.0-1"',
             docker_build,
         )
         self.assertIn(
-            "https://github.com/XGC-Team/xgc2-adapter-runtime-client-cpp.git",
-            docker_build,
-        )
-        self.assertIn(
-            "1aa878d182297778271745543e8b8129507327a7",
-            docker_build,
-        )
-        self.assertIn(
-            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.6.0-17~focal}"',
+            'ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.7.0-1~focal}"',
             installed_gate,
         )
         bootstrap_contract = docker_build + installed_gate
@@ -797,15 +789,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         ):
             self.assertEqual(bootstrap_contract.count(retired_literal), 0)
         self.assertIn(
-            'EXPECTED_PROTOBUF_PRODUCT_VERSION="0.5.0-20"',
-            docker_build,
-        )
-        self.assertIn(
-            "https://github.com/XGC-Team/xgc2-protobuf.git",
-            docker_build,
-        )
-        self.assertIn(
-            "99f301ee8725e91ae8149becce92377ea8fbecb0",
+            'EXPECTED_PROTOBUF_PRODUCT_VERSION="0.6.0-1"',
             docker_build,
         )
         self.assertIn("third-party/zenoh-c/LICENSE", installed_gate)

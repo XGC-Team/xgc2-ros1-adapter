@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.3}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.8@sha256:fce2d76fddf4f6439bf0a188249b731650febdc163befc360bed186b269d252a}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
@@ -13,16 +13,11 @@ COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
 EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.7.0-1"
 EXPECTED_RUNTIME_CLIENT_DEB_VERSION="${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}~focal"
-PINNED_RUNTIME_CLIENT_SHA="697d99b11ff90948e20872947706546c6205c9a9"
 ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}}"
-XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF="${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-${PINNED_RUNTIME_CLIENT_SHA}}"
 EXPECTED_PROTOBUF_PRODUCT_VERSION="0.6.0-1"
 EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
-PINNED_PROTOBUF_SHA="9ceeb01cc2de0369ed0956a010fad2d85424bc20"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
-XGC2_PROTOBUF_GIT_REF="${XGC2_PROTOBUF_GIT_REF:-${PINNED_PROTOBUF_SHA}}"
-XGC2_BOOTSTRAP_COMMON_FROM_GIT="${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-}"
-XGC2_PROTOBUF_SOURCE_ROOT="${XGC2_PROTOBUF_SOURCE_ROOT:-}"
+XGC2_XRPC_DEB_VERSION="0.1.0-1~focal"
 XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
@@ -94,39 +89,15 @@ if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && -z "${XGC2_DEPENDENCY_SET_DIGEST}" ]]; t
   exit 1
 fi
 if [[ "${XGC2_PROTOBUF_DEB_VERSION}" != "${EXPECTED_PROTOBUF_DEB_VERSION}" ||
-      "${XGC2_PROTOBUF_GIT_REF}" != "${PINNED_PROTOBUF_SHA}" ]]; then
-  echo "Adapter requires ${EXPECTED_PROTOBUF_DEB_VERSION} from protobuf ${PINNED_PROTOBUF_SHA}" >&2
+      "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" != "${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
+  echo "Adapter requires the exact published protobuf and ABI3 client versions" >&2
   exit 1
 fi
-if [[ "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" != "${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}" ||
-      "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}" != "${PINNED_RUNTIME_CLIENT_SHA}" ]]; then
-  echo "Adapter requires client ${EXPECTED_RUNTIME_CLIENT_DEB_VERSION} from ${PINNED_RUNTIME_CLIENT_SHA}" >&2
-  exit 1
-fi
-if [[ -n "${XGC2_PROTOBUF_SOURCE_ROOT}" ]]; then
-  [[ "$(git -C "${XGC2_PROTOBUF_SOURCE_ROOT}" rev-parse HEAD)" == "${PINNED_PROTOBUF_SHA}" &&
-     -z "$(git -C "${XGC2_PROTOBUF_SOURCE_ROOT}" status --porcelain)" ]] || {
-    echo "XGC2_PROTOBUF_SOURCE_ROOT must be the clean pinned protobuf source" >&2
-    exit 1
-  }
-fi
-
-if [[ -z "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" ]]; then
-  if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
-    XGC2_BOOTSTRAP_COMMON_FROM_GIT=false
-  else
-    XGC2_BOOTSTRAP_COMMON_FROM_GIT=true
-  fi
-fi
-case "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" in
-  true|false) ;;
-  *)
-    echo "XGC2_BOOTSTRAP_COMMON_FROM_GIT must be true or false" >&2
-    exit 1
-    ;;
-esac
-if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
-  echo "Release-train overlay must use the staged protobuf and client packages" >&2
+if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-false}" != "false" ||
+      -n "${XGC2_PROTOBUF_SOURCE_ROOT:-}" ||
+      -n "${XGC2_PROTOBUF_GIT_REF:-}" ||
+      -n "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-}" ]]; then
+  echo "SDK source bootstrap is unsupported; use the exact signed APT packages" >&2
   exit 1
 fi
 expected_deb_arch=""
@@ -181,12 +152,8 @@ docker_env_args=(
   -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
   -e "EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION=${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}"
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
+  -e "XGC2_XRPC_DEB_VERSION=${XGC2_XRPC_DEB_VERSION}"
   -e "EXPECTED_PROTOBUF_PRODUCT_VERSION=${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
-  -e "XGC2_BOOTSTRAP_COMMON_FROM_GIT=${XGC2_BOOTSTRAP_COMMON_FROM_GIT}"
-  -e "XGC2_PROTOBUF_GIT_URL=${XGC2_PROTOBUF_GIT_URL:-https://github.com/XGC-Team/xgc2-protobuf.git}"
-  -e "XGC2_PROTOBUF_GIT_REF=${XGC2_PROTOBUF_GIT_REF}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL:-https://github.com/XGC-Team/xgc2-adapter-runtime-client-cpp.git}"
-  -e "XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF=${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
 )
 
 for proxy_var in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -220,14 +187,6 @@ flock -u "${docker_pull_lock_fd}"
 docker start "${container_name}" >/dev/null
 docker exec "${container_name}" mkdir -p /tmp/ros1-adapter /tmp/work /tmp/out
 docker cp "${REPO_ROOT}/." "${container_name}:/tmp/ros1-adapter/"
-if [[ -n "${XGC2_PROTOBUF_SOURCE_ROOT}" ]]; then
-  [[ -f "${XGC2_PROTOBUF_SOURCE_ROOT}/.xgc2/scripts/build_deb.sh" ]] || {
-    echo "XGC2_PROTOBUF_SOURCE_ROOT is not an xgc2-protobuf source tree" >&2
-    exit 1
-  }
-  docker exec "${container_name}" mkdir -p /tmp/xgc2-protobuf-source
-  docker cp "${XGC2_PROTOBUF_SOURCE_ROOT}/." "${container_name}:/tmp/xgc2-protobuf-source/"
-fi
 # The quoted payload is parsed by the inner Bash process; its continuations are
 # intentionally literal to this outer shell.
 # shellcheck disable=SC1004
@@ -235,22 +194,26 @@ docker exec "${container_name}" bash -lc '
     set -euo pipefail
 
     export DEBIAN_FRONTEND=noninteractive
-    sed -i \
-      -e "s#http://archive.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g" \
-      -e "s#http://security.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g" \
-      -e "s#http://ports.ubuntu.com/ubuntu-ports#https://ports.ubuntu.com/ubuntu-ports#g" \
-      /etc/apt/sources.list
     printf "%s\n" "Acquire::Retries \"5\";" \
       >/etc/apt/apt.conf.d/99-xgc2-retries
     apt_update() {
-      local attempt
-      for attempt in 1 2 3; do
-        if apt-get update; then
-          return 0
-        fi
-        [[ "${attempt}" -lt 3 ]] || return 1
-        sleep "$((attempt * 5))"
-      done
+      apt-get update \
+        -o Dir::Etc::sourcelist=sources.list.d/xgc2.list \
+        -o Dir::Etc::sourceparts="-"
+    }
+    apt_install_firstparty() {
+      local planned package
+      planned="$(apt-get --simulate install -y --no-install-recommends "$@")"
+      while read -r package; do
+        case "${package%%:*}" in
+          libxgc2-*|xgc2-*|ros-noetic-xgc2-*|ros-noetic-scout-msgs) ;;
+          *)
+            echo "Managed build image lacks dependency ${package}; refusing third-party install" >&2
+            exit 1
+            ;;
+        esac
+      done < <(awk "/^Inst / {print \$2}" <<<"${planned}")
+      apt-get install -y --no-install-recommends "$@"
     }
     actual_deb_arch="$(dpkg --print-architecture)"
     if [[ -n "${EXPECTED_DEB_ARCH}" && "${actual_deb_arch}" != "${EXPECTED_DEB_ARCH}" ]]; then
@@ -260,7 +223,7 @@ docker exec "${container_name}" bash -lc '
     echo "Building Debian package for ${actual_deb_arch}"
 
     missing_image_packages=()
-    for package in nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
+    for package in clang-10 nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
         protobuf-compiler-grpc python3-grpcio python3-protobuf; do
       dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
         | grep -Fxq "install ok installed" \
@@ -272,6 +235,8 @@ docker exec "${container_name}" bash -lc '
       exit 1
     fi
 
+    export CC=clang-10 CXX=clang++-10
+
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
       -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
@@ -279,11 +244,11 @@ docker exec "${container_name}" bash -lc '
       > /etc/apt/sources.list.d/xgc2.list
     if [[ -n "${XGC2_APT_OVERLAY_URL:-}" &&
           "${XGC2_DEPENDENCY_SET_DIGEST}" != "${EMPTY_DEPENDENCY_SET_DIGEST}" ]]; then
-      echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] ${XGC2_APT_OVERLAY_URL%/} focal main" \
-        > /etc/apt/sources.list.d/00-xgc2-release-train.list
+      sed -i "s#https://xgc2.apt.xiaokang.ink#${XGC2_APT_OVERLAY_URL%/}#" \
+        /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
-    apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
+    apt_install_firstparty ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
       ros-noetic-xgc2-multirotor-controller
@@ -309,69 +274,30 @@ docker exec "${container_name}" bash -lc '
     test -f /usr/include/xgc-runtime/xgc_rt.h
     test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
     dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h
-    if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "false" ]]; then
-      client_protobuf_version="$(
-        apt-cache show \
-          "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" |
-          sed -nE \
-            "s/^Depends:.*xgc2-protobuf-dev \\(= ([^)]+)\\).*/\\1/p" |
-          head -n 1
-      )"
-      if [[ -z "${client_protobuf_version}" ]]; then
-        echo "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency" >&2
-        exit 1
-      fi
-      if [[ "${client_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
-        echo "Adapter Runtime client ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION} requires protobuf ${client_protobuf_version}; Adapter requires ${XGC2_PROTOBUF_DEB_VERSION}" >&2
-        exit 1
-      fi
+    client_protobuf_version="$(
+      apt-cache show \
+        "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" |
+        sed -nE \
+          "s/^Depends:.*xgc2-protobuf-dev \\(= ([^)]+)\\).*/\\1/p" |
+        head -n 1
+    )"
+    if [[ -z "${client_protobuf_version}" ]]; then
+      echo "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency" >&2
+      exit 1
     fi
-
-    if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT}" == "true" ]]; then
-      rm -rf /tmp/xgc2-common-bootstrap
-      mkdir -p /tmp/xgc2-common-bootstrap/debs
-
-      if [[ -d /tmp/xgc2-protobuf-source ]]; then
-        cp -a /tmp/xgc2-protobuf-source /tmp/xgc2-common-bootstrap/protobuf
-      else
-        git init -q /tmp/xgc2-common-bootstrap/protobuf
-        git -C /tmp/xgc2-common-bootstrap/protobuf remote add origin "${XGC2_PROTOBUF_GIT_URL}"
-        git -C /tmp/xgc2-common-bootstrap/protobuf fetch --depth 1 origin "${XGC2_PROTOBUF_GIT_REF}"
-        git -C /tmp/xgc2-common-bootstrap/protobuf checkout -q --detach FETCH_HEAD
-        test "$(git -C /tmp/xgc2-common-bootstrap/protobuf rev-parse HEAD)" = \
-          "${XGC2_PROTOBUF_GIT_REF}"
-      fi
-      test "$(awk -F": *" "/^version:/ {print \$2; exit}" /tmp/xgc2-common-bootstrap/protobuf/.xgc2/product.yml)" = \
-        "${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
-      PACKAGE_DISTRIBUTION=focal \
-      PACKAGE_VERSION="${XGC2_PROTOBUF_DEB_VERSION}" \
-      XGC2_PROTOBUF_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/protobuf \
-        /tmp/xgc2-common-bootstrap/protobuf/.xgc2/scripts/build_deb.sh
-      apt-get install -y \
-        /tmp/xgc2-common-bootstrap/debs/protobuf/xgc2-protobuf-dev_*.deb
-
-      git init -q /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp
-      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp remote add origin \
-        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_URL}"
-      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp fetch --depth 1 origin \
-        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
-      git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp checkout -q --detach FETCH_HEAD
-      test "$(git -C /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp rev-parse HEAD)" = \
-        "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF}"
-      test "$(awk -F": *" "/^version:/ {print \$2; exit}" /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/product.yml)" = \
-        "${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}"
-      PACKAGE_DISTRIBUTION=focal \
-      PACKAGE_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
-      XGC2_ADAPTER_RUNTIME_DEB_OUTPUT_DIR=/tmp/xgc2-common-bootstrap/debs/client \
-        /tmp/xgc2-common-bootstrap/adapter-runtime-client-cpp/.xgc2/scripts/build_deb.sh
-      apt-get install -y \
-        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client3_*.deb \
-        /tmp/xgc2-common-bootstrap/debs/client/libxgc2-adapter-runtime-client-dev_*.deb
-    else
-      apt-get install -y \
-        "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
-        "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
+    if [[ "${client_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
+      echo "Published client protobuf dependency does not match the frozen version" >&2
+      exit 1
     fi
+    apt_install_firstparty \
+      "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
+      "libxgc2-adapter-runtime-client3=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
+      "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
+      "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
+      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}"
+    for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
+      test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"
+    done
 
     installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client-dev)"
     if [[ "${installed_client_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
@@ -456,7 +382,7 @@ docker exec "${container_name}" bash -lc '
       if [[ -f /etc/dpkg/dpkg.cfg.d/excludes ]]; then
         mv /etc/dpkg/dpkg.cfg.d/excludes /tmp/xgc2-docker-dpkg-excludes
       fi
-      apt-get install -y \
+      apt_install_firstparty \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
