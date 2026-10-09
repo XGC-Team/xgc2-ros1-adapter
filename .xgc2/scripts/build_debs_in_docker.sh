@@ -309,6 +309,8 @@ docker exec "${container_name}" bash -lc '
     for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
       test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"
     done
+    # Package selection is build metadata, not an SDK runtime setting.
+    unset XGC2_XRPC_DEB_VERSION
 
     installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client-dev)"
     if [[ "${installed_client_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
