@@ -410,6 +410,7 @@ class ServerTest(unittest.TestCase):
             return subprocess.run([client.binary, '--socket-path', str(path), '--provider', client.provider,
                                    '--target-id', 'test',
                                    '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', ''],
+                                  env=dict(os.environ, ROS_NAMESPACE='/private_socket_ownership'),
                                   capture_output=True, text=True, timeout=5)
         foreign = socket.socket(socket.AF_UNIX); foreign.bind(str(path)); foreign.listen(1)
         before = path.lstat().st_ino
