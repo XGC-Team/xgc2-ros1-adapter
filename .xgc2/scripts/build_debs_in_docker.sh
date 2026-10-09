@@ -247,10 +247,11 @@ docker exec "${container_name}" bash -lc '
         /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
-    apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs \
+    planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller | verify_firstparty_transaction
+      ros-noetic-xgc2-multirotor-controller)"
+    verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
@@ -292,12 +293,13 @@ docker exec "${container_name}" bash -lc '
       echo "Published client protobuf dependency does not match the frozen version" >&2
       exit 1
     fi
-    apt-get --simulate install -y --no-install-recommends \
+    planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-adapter-runtime-client3=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
-      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" | verify_firstparty_transaction
+      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}")"
+    verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-adapter-runtime-client3=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
@@ -391,14 +393,15 @@ docker exec "${container_name}" bash -lc '
       if [[ -f /etc/dpkg/dpkg.cfg.d/excludes ]]; then
         mv /etc/dpkg/dpkg.cfg.d/excludes /tmp/xgc2-docker-dpkg-excludes
       fi
-      apt-get --simulate install -y --no-install-recommends \
+      planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mocap-rotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mocap-rotor-forwarder_*.deb | verify_firstparty_transaction
+        /tmp/out/ros-noetic-xgc2-mocap-rotor-forwarder_*.deb)"
+      verify_firstparty_transaction <<<"${planned_transaction}"
       apt-get install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
