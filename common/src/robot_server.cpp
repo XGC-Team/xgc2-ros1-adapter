@@ -773,8 +773,7 @@ private:
             const xgc2::xrpc::GrpcCallScope &scope) {
     const auto deadline = scope.deadline();
     Stream stream;
-    const auto frame_limit =
-        std::min<std::size_t>(131072, admission_.limits().response_bytes);
+    const auto frame_limit = admission_.limits().response_bytes;
     std::uint64_t observed = UINT64_MAX;
     while (!shutdown_ && !scope.cancelled()) {
       const auto version = status_version_.load(std::memory_order_acquire);
@@ -838,21 +837,36 @@ private:
             if (stream.seen[entry.first][channel.first] != channel.second.first)
               updates.push_back(channel);
         }
+        // Keep each member's channels together within the response policy.
         // No native state mutex is held across a slow peer's blocking Write.
-        for (const auto &channel : updates) {
-          wire::MemberStatus update;
-          *update.mutable_identity() = use->identity;
-          *update.add_messages() = channel.second.second;
-          if (update.ByteSizeLong() + 16 > frame_limit)
-            return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
-                                "native state exceeds response policy");
+        wire::MemberStatus update;
+        *update.mutable_identity() = use->identity;
+        auto append_update = [&] {
+          if (!update.messages_size())
+            return true;
           if (stream.sending.ByteSizeLong() + update.ByteSizeLong() + 16 >
                   frame_limit &&
               !flush())
-            return grpc::Status::CANCELLED;
+            return false;
           *stream.sending.add_members() = std::move(update);
+          return true;
+        };
+        for (const auto &channel : updates) {
+          const auto channel_bytes = channel.second.second.ByteSizeLong() + 16;
+          if (use->identity.ByteSizeLong() + channel_bytes + 16 > frame_limit)
+            return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                                "native state exceeds response policy");
+          if (update.ByteSizeLong() + channel_bytes + 16 > frame_limit) {
+            if (!append_update() || !flush())
+              return grpc::Status::CANCELLED;
+            update.Clear();
+            *update.mutable_identity() = use->identity;
+          }
+          *update.add_messages() = channel.second.second;
           stream.seen[entry.first][channel.first] = channel.second.first;
         }
+        if (!append_update())
+          return grpc::Status::CANCELLED;
       }
       if (!flush())
         return grpc::Status::CANCELLED;
