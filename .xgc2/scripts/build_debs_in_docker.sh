@@ -222,8 +222,8 @@ docker exec "${container_name}" bash -lc '
       > /etc/apt/sources.list.d/xgc2.list
     if [[ -n "${XGC2_APT_OVERLAY_URL:-}" &&
           "${XGC2_DEPENDENCY_SET_DIGEST}" != "${EMPTY_DEPENDENCY_SET_DIGEST}" ]]; then
-      sed -i "s#https://xgc2.apt.xiaokang.ink#${XGC2_APT_OVERLAY_URL%/}#" \
-        /etc/apt/sources.list.d/xgc2.list
+      echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg] ${XGC2_APT_OVERLAY_URL%/} focal main" \
+        >> /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs)"
