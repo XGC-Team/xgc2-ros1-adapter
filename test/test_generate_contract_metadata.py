@@ -168,16 +168,18 @@ class ContractGeneratorTest(unittest.TestCase):
             "copyVector(message.accel.linear, payload.mutable_linear());\n"
             "  copyVector(message.accel.angular, payload.mutable_angular());"
         )
-        for profile_path, definition_id, package in (
+        for profile_path, definition_id, package, source_directory in (
             (
                 SCOUT_PROFILE_PATH,
                 "xgc2-scout-mini-ros1-adapter",
                 "xgc_scout_mini_ros1_adapter",
+                "scout_mini_ros1_adapter",
             ),
             (
                 MECANUM_PROFILE_PATH,
                 MECANUM_DEFINITION_ID,
                 "xgc_mecanum_ugv_ros1_adapter",
+                "mecanum_ugv_ros1_adapter",
             ),
         ):
             with self.subTest(package=package):
@@ -223,7 +225,7 @@ class ContractGeneratorTest(unittest.TestCase):
                     header,
                 )
                 runtime = (
-                    REPOSITORY_ROOT / "src" / package / "src" / "robot_runtime.cpp"
+                    REPOSITORY_ROOT / "src" / source_directory / "src" / "robot_runtime.cpp"
                 ).read_text(encoding="utf-8")
                 self.assertIn(converter_signature, runtime)
                 self.assertIn(converter_fields, runtime)
@@ -241,7 +243,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 test_source = (
                     REPOSITORY_ROOT
                     / "src"
-                    / package
+                    / source_directory
                     / "test"
                     / "robot_runtime_test.cpp"
                 ).read_text(encoding="utf-8")
@@ -372,20 +374,23 @@ class ContractGeneratorTest(unittest.TestCase):
         packages = (
             (
                 "xgc_px4_multirotor_ros1_adapter",
+                "px4_multirotor_ros1_adapter",
                 "xgc2-px4-multirotor-ros1-adapter",
             ),
             (
                 "xgc_scout_mini_ros1_adapter",
+                "scout_mini_ros1_adapter",
                 "xgc2-scout-mini-ros1-adapter",
             ),
             (
                 "xgc_mecanum_ugv_ros1_adapter",
+                "mecanum_ugv_ros1_adapter",
                 "xgc2-mecanum-ugv-ros1-adapter",
             ),
         )
-        for package, definition_id in packages:
+        for package, source_directory, definition_id in packages:
             cmake = (
-                REPOSITORY_ROOT / "src" / package / "CMakeLists.txt"
+                REPOSITORY_ROOT / "src" / source_directory / "CMakeLists.txt"
             ).read_text(encoding="utf-8")
             with self.subTest(package=package):
                 self.assertIn(
