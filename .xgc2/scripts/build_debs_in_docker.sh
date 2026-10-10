@@ -319,7 +319,7 @@ docker exec "${container_name}" bash -lc '
     ROS_IO_LIB=/tmp/work/install-root/opt/ros/noetic/lib/libros_io.so \
       /tmp/work/native/ros_io/run-clock-test.sh
 
-    python3 -m unittest discover -s /tmp/ros1-adapter/src/xgc_ros1_tools_adapter/test -p "test_*.py"
+    python3 -m unittest discover -s /tmp/ros1-adapter/src/ros1_tools_adapter/test -p "test_*.py"
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 
