@@ -215,7 +215,7 @@ package_adapter() {
   local shlibs_depends
   if [[ "${package}" == "${PX4_PACKAGE}" || "${package}" == "${SCOUT_PACKAGE}" || "${package}" == "${MECANUM_PACKAGE}" ]]; then
     shlibs_depends="$(binary_dependencies "${runtime_binaries[@]}")"
-    if grep -Eq "(^|, )${ADAPTER_RUNTIME_ABI_PACKAGE}( |[(])" <<<"${shlibs_depends}"; then
+    if grep -Eq '(^|, )libxgc2-adapter-runtime-client[0-9]+( |[(])' <<<"${shlibs_depends}"; then
       echo "robot server unexpectedly links the legacy Adapter Runtime client" >&2; exit 1
     fi
   fi

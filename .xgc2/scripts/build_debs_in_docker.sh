@@ -201,7 +201,8 @@ docker exec "${container_name}" bash -lc '
 
     missing_image_packages=()
     for package in clang-10 nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
-        protobuf-compiler-grpc python3-grpcio python3-protobuf; do
+        protobuf-compiler-grpc python3-grpcio python3-protobuf \
+        ros-noetic-ros-babel-fish libjsoncpp-dev; do
       dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
         | grep -Fxq "install ok installed" \
         || missing_image_packages+=("${package}")
@@ -228,12 +229,12 @@ docker exec "${container_name}" bash -lc '
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller ros-noetic-ros-babel-fish libjsoncpp-dev)"
+      ros-noetic-xgc2-multirotor-controller)"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller ros-noetic-ros-babel-fish libjsoncpp-dev
+      ros-noetic-xgc2-multirotor-controller
     dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
     dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
     # Existing owning packages only; absent DTO payloads remain a hard failure.
