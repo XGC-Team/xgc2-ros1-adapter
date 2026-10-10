@@ -1,6 +1,5 @@
 #include <ros/ros.h>
 #include <xgc2/xrpc/http.hpp>
-#include <xgc2/xrpc/runtime_policy.hpp>
 #include <xgc2/xrpc/unix.hpp>
 #include "xgc_ros1_tools_adapter/tools.hpp"
 #include "xgc_ros1_tools_adapter/error.hpp"
@@ -101,16 +100,9 @@ int main(int argc,char** argv) {
     auto context=NativeContext::FromJson(json(config));context.ApplyEnvironment();
     const auto target=args.at("--target-id");
     if(target.size()>128 || target.find_first_of("\r\n\t ")==0 || target.find_first_of("\r\n\t ")!=std::string::npos) throw std::invalid_argument("invalid target identity");
-    RuntimePolicyOptions options;
-    options.capabilities={"host","http","rpc","transport"};
-    options.defaults={{"CALL_TIMEOUT_MS","300000"},{"HOST_MAX_IN_FLIGHT","16"}};
-    options.default_source="ros1.tools";
-    options.ceilings={{"HOST_MAX_IN_FLIGHT",16},{"HOST_MAX_CONNECTIONS",32},{"MAX_REQUEST_BYTES",1<<20},{"MAX_RESPONSE_BYTES",1<<20},{"CALL_TIMEOUT_MS",300000}};
-    for(char** p=environ;*p;++p) {
-      const std::string entry(*p);const auto split=entry.find('=');
-      if(entry.rfind("XGC2_XRPC_",0)==0) options.environment.emplace_back(entry.substr(0,split),entry.substr(split+1));
-    }
-    const auto policy=resolve_runtime_policy(options);auto limits=http_limits(policy);
+    HttpLimits limits;
+    limits.connections=32;limits.inflight=16;limits.request_bytes=1<<20;limits.response_bytes=1<<20;
+    limits.request_timeout=std::chrono::milliseconds(300000);
     ros::init(argc,argv,"xgc_ros1_tools",ros::init_options::AnonymousName|ros::init_options::NoSigintHandler|ros::init_options::NoRosout);
     ros::NodeHandle node;ros::AsyncSpinner spinner(4);spinner.start();Tools tools(node,context);
     const auto instance=new_instance_id();
@@ -130,9 +122,9 @@ int main(int argc,char** argv) {
       workers.push(std::move(request),std::move(reply));
     },limits,HttpIdentity{instance,{"/api/v1/describe"}});
     std::signal(SIGINT,signalStop);std::signal(SIGTERM,signalStop);
-    std::jthread master([&](std::stop_token token){
+    std::thread master([&]{
       int unavailable=0;
-      while(!token.stop_requested() && !stopping.load() && ros::ok()) {
+      while(!stopping.load() && ros::ok()) {
         const auto state=tools.ProbeMasterBinding();
         if(state==MasterBindingState::Changed || (state==MasterBindingState::Unavailable && ++unavailable>=10)) {stopping.store(true);break;}
         if(state!=MasterBindingState::Unavailable) unavailable=0;

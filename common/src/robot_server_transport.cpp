@@ -6,66 +6,16 @@
 #include <iostream>
 #include <sys/stat.h>
 #include <unistd.h>
-extern char **environ;
-
 namespace xgc2_ros1_robot_adapter {
 namespace operation = xgc::adapter::v1;
-xgc2::xrpc::RuntimePolicy StartupPolicy() {
-  xgc2::xrpc::RuntimePolicyOptions options;
-  for (char **item = environ; item && *item; ++item) {
-    const std::string entry(*item);
-    if (entry.compare(0, 10, "XGC2_XRPC_") != 0)
-      continue;
-    const auto split = entry.find('=');
-    options.environment.emplace_back(entry.substr(0, split),
-                                     entry.substr(split + 1));
-  }
-  options.capabilities = {"host", "http", "rpc", "transport", "grpc"};
-  options.ceilings = {
-      {"HOST_MAX_CONNECTIONS", 32},   {"HOST_MAX_IN_FLIGHT", 32},
-      {"MAX_REQUEST_BYTES", 1048576}, {"MAX_RESPONSE_BYTES", 1048576},
-      {"CALL_TIMEOUT_MS", 30000},     {"GRPC_MAX_STREAMS_PER_CONNECTION", 32}};
-  auto policy = xgc2::xrpc::resolve_runtime_policy(options);
-  policy.check_applied({"HOST_MAX_CONNECTIONS", "HOST_MAX_IN_FLIGHT",
-                        "MAX_HEADER_BYTES", "MAX_REQUEST_BYTES",
-                        "MAX_RESPONSE_BYTES", "CALL_TIMEOUT_MS",
-                        "IDLE_TIMEOUT_MS", "SHUTDOWN_TIMEOUT_MS",
-                        "GRPC_MAX_STREAMS_PER_CONNECTION"});
-  return policy;
-}
-operation::RuntimePolicySnapshot
-PolicyObservation(const xgc2::xrpc::RuntimePolicy &policy) {
-  operation::RuntimePolicySnapshot result;
-  result.set_revision(policy.revision());
-  for (const auto &field : policy.fields()) {
-    // HTTP header parsing is not an owner in this native gRPC composition.
-    if (field.name == "HEADER_TIMEOUT_MS")
-      continue;
-    auto *wire = result.add_fields();
-    wire->set_name(std::string(field.name));
-    if (const auto *value = std::get_if<std::int64_t>(&field.value))
-      wire->set_integer_value(*value);
-    else
-      wire->set_text_value(std::get<std::string>(field.value));
-    wire->set_source(std::string(field.source));
-    wire->set_source_detail(field.source_detail);
-    wire->set_dynamic(field.dynamic);
-    wire->set_unit(std::string(field.unit));
-    wire->set_capability(std::string(field.capability));
-    if (field.ceiling) {
-      wire->set_has_ceiling(true);
-      wire->set_ceiling(*field.ceiling);
-    }
-    if (field.maximum) {
-      wire->set_has_maximum(true);
-      wire->set_maximum(*field.maximum);
-    }
-  }
-  return result;
-}
-xgc2::xrpc::GrpcLimits
-ProductGrpcLimits(const xgc2::xrpc::RuntimePolicy &policy) {
-  auto limits = xgc2::xrpc::grpc_limits(policy);
+xgc2::xrpc::GrpcLimits ProductGrpcLimits() {
+  xgc2::xrpc::GrpcLimits limits;
+  limits.connections = 32;
+  limits.inflight = 32;
+  limits.streams_per_connection = 32;
+  limits.request_bytes = 1048576;
+  limits.response_bytes = 1048576;
+  limits.call_timeout = std::chrono::milliseconds(30000);
   // A fixed native pool serves the whole type host. The bounded domain waits
   // support a complete sixteen-robot fleet while leaving native control room.
   limits.native_threads = 32;
@@ -132,10 +82,9 @@ ReadRobotServerBootstrap(const RobotServerArguments &arguments,
   return bootstrap;
 }
 int CheckRobotServer(const RobotServerArguments &arguments,
-                     const std::string &provider,
-                     const xgc2::xrpc::RuntimePolicy &policy) {
+                     const std::string &provider) {
   namespace wire = xgc::robot::v1;
-  const auto limits = ProductGrpcLimits(policy);
+  const auto limits = ProductGrpcLimits();
   const auto budget = std::min(std::chrono::milliseconds(arguments.timeout_ms),
                                limits.call_timeout);
   const auto deadline = xgc2::xrpc::grpc_stream_deadline(

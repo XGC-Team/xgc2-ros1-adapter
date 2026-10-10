@@ -1,7 +1,6 @@
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
 #include "robot_server_transport.hpp"
 #include "xgc2/xrpc/grpc.hpp"
-#include "xgc2/xrpc/runtime_policy.hpp"
 #include "xgc2_ros1_robot_adapter/robot_server_entry.hpp"
 #include <algorithm>
 #include <array>
@@ -156,7 +155,6 @@ class Server {
       response->set_maximum_members(kMaximumMembers);
       response->set_maximum_batch_members(kMaximumBatchMembers);
       response->set_maximum_commands_per_robot(kMaximumCommandsPerRobot);
-      *response->mutable_runtime_policy() = PolicyObservation(owner_.policy_);
       return grpc::Status::OK;
     }
     grpc::Status ApplyMembers(grpc::ServerContext *context,
@@ -314,11 +312,9 @@ class Server {
   };
 
 public:
-  Server(wire::RobotServerBootstrap bootstrap, RobotFactory factory,
-         xgc2::xrpc::RuntimePolicy policy)
+  Server(wire::RobotServerBootstrap bootstrap, RobotFactory factory)
       : bootstrap_(std::move(bootstrap)), factory_(std::move(factory)),
-        policy_(std::move(policy)),
-        admission_(xgc2::xrpc::new_instance_id(), ProductGrpcLimits(policy_)),
+        admission_(xgc2::xrpc::new_instance_id(), ProductGrpcLimits()),
         service_(*this) {
     reference_.set_target_id(bootstrap_.target_id());
     reference_.set_service("xgc2.robot-adapter");
@@ -1181,7 +1177,6 @@ private:
   std::unique_ptr<ros::NodeHandle> node_;
   wire::RobotServerBootstrap bootstrap_;
   RobotFactory factory_;
-  xgc2::xrpc::RuntimePolicy policy_;
   xgc2::xrpc::GrpcAdmission admission_;
   Service service_;
   operation::RuntimeServiceReference reference_;
@@ -1240,9 +1235,8 @@ int RunRobotServer(int argc, char **argv, const std::string &node_name,
                    const std::string &provider, RobotFactory factory) {
   try {
     const auto arguments = ParseRobotServerArguments(argc, argv, provider);
-    auto policy = StartupPolicy();
     if (arguments.check)
-      return CheckRobotServer(arguments, provider, policy);
+      return CheckRobotServer(arguments, provider);
     ConfigureBoundedRosMaster();
     auto bootstrap = ReadRobotServerBootstrap(arguments, provider);
     for (const auto &name : {std::make_pair("ros_master_uri", "ROS_MASTER_URI"),
@@ -1257,7 +1251,7 @@ int RunRobotServer(int argc, char **argv, const std::string &node_name,
     std::signal(SIGINT, stopSignal);
     std::signal(SIGTERM, stopSignal);
     ros::master::setRetryTimeout(ros::WallDuration(3));
-    Server server(std::move(bootstrap), std::move(factory), std::move(policy));
+    Server server(std::move(bootstrap), std::move(factory));
     return server.run();
   } catch (const std::exception &exception) {
     std::cerr << "robot server: " << exception.what() << '\n';

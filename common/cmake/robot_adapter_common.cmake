@@ -1,6 +1,14 @@
 get_filename_component(XGC2_ROS1_ROBOT_COMMON_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
+# c-ares comes from the distribution package or from any prefix on
+# CMAKE_PREFIX_PATH; pkg-config cannot express a relocated development root.
+find_path(CARES_INCLUDE_DIRS ares.h)
+find_library(CARES_LDFLAGS cares)
+if(NOT CARES_INCLUDE_DIRS OR NOT CARES_LDFLAGS)
+  message(FATAL_ERROR "c-ares development files (ares.h, libcares) are required")
+endif()
+
 function(xgc2_add_ros1_robot_common target_name)
   if(NOT XGC2_PROTOBUF_PROTO_ROOT OR
      NOT EXISTS "${XGC2_PROTOBUF_PROTO_ROOT}/xgc/robot/v1/message.proto")
@@ -65,7 +73,7 @@ function(xgc2_add_ros1_robot_common target_name)
   )
   if(ARGV1 STREQUAL "SERVER")
     find_package(XgcXrpc 0.1 REQUIRED CONFIG COMPONENTS grpc)
-    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_compile_features(${target_name} PUBLIC cxx_std_17)
     target_link_libraries(${target_name} PRIVATE XgcXrpc::grpc)
     set(grpc_source "${generated_dir}/xgc/robot/v1/server.grpc.pb.cc")
     add_custom_command(OUTPUT "${grpc_source}" "${generated_dir}/xgc/robot/v1/server.grpc.pb.h"

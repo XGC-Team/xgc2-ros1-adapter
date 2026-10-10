@@ -42,7 +42,7 @@ target_link_libraries(${PROJECT_NAME}_core
 )
 
 add_executable(${PROJECT_NAME}_node src/main.cpp)
-target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_20)
+target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
 target_compile_options(${PROJECT_NAME}_node PRIVATE
   -Wall -Wextra -Wpedantic -Werror
 )
