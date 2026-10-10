@@ -226,37 +226,9 @@ docker exec "${container_name}" bash -lc '
         /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
-    planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs \
-      libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
-      libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller)"
+    planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs)"
     verify_firstparty_transaction <<<"${planned_transaction}"
-    apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
-      libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
-      libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller
-    dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
-    dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
-    # Existing owning packages only; absent DTO payloads remain a hard failure.
-    require_owned_header() {
-      local package="$1" path="$2"
-      test -f "${path}"
-      dpkg-query -S "${path}" | grep -Fxq "${package}: ${path}"
-    }
-    for header in xgc_rt.h xgc_clock_source.h flat_config.hpp; do
-      require_owned_header libxgc2-runtime-sdk-dev "/usr/include/xgc-runtime/${header}"
-    done
-    for header in robotics_interfaces_v1.h control_records_v1.h paired_state_v1.h; do
-      require_owned_header libxgc2-robotics-interfaces-dev "/usr/include/xgc-robotics-interfaces/${header}"
-    done
-    require_owned_header libxgc2-hover-thrust-dev /opt/ros/noetic/include/hover_thrust_estimator/native/hover_thrust_wire.h
-    require_owned_header ros-noetic-xgc2-estimator-rigid-state /opt/ros/noetic/include/estimator_vrpn_px4_rotor_state/native/rigid_state_wire_v1.h
-    for header in reference_wire_v1.h reference_wire.hpp; do
-      require_owned_header ros-noetic-xgc2-multirotor-controller "/opt/ros/noetic/include/multirotor_reference_trajectory/${header}"
-    done
-    test -f /usr/include/xgc-runtime/xgc_rt.h
-    test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
-    dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h
+    apt-get install -y --no-install-recommends ros-noetic-scout-msgs
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
@@ -296,39 +268,13 @@ docker exec "${container_name}" bash -lc '
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
-    # Build the single owning Edge implementation and install its Helpers export.
-    cmake -S /tmp/work/native/ros_io/helpers -B /tmp/work/build-ros-io-helpers \
-      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-      -DCMAKE_INSTALL_DATADIR=share -DCMAKE_PREFIX_PATH="/usr;/opt/ros/noetic"
-    cmake --build /tmp/work/build-ros-io-helpers --parallel "${parallel_jobs}"
-    cmake --install /tmp/work/build-ros-io-helpers
-    DESTDIR=/tmp/work/install-root cmake --install /tmp/work/build-ros-io-helpers
-    ldconfig
-    mkdir -p /tmp/work/install-root/opt/ros/noetic/lib
-    XGC_RUNTIME_SDK_INCLUDE=/usr/include/xgc-runtime \
-    XGC_ROBOTICS_INTERFACES_PREFIX=/usr \
-    XGC_HOVER_THRUST_WIRE_PREFIX=/opt/ros/noetic \
-    XGC_RIGID_STATE_WIRE_PREFIX=/opt/ros/noetic \
-    XGC_REFERENCE_WIRE_PREFIX=/opt/ros/noetic \
-    XGC_ROS_IO_HELPERS_PREFIX=/usr \
-      /tmp/work/native/ros_io/build.sh /tmp/work/install-root/opt/ros/noetic/lib/libros_io.so
-
-    # Original generic/physical transport regressions use this exact built DSO.
-    /tmp/work/native/ros_io/run-slice-test.sh
-    /tmp/work/native/ros_io/run-attitude-target-test.sh
-    ROS_IO_LIB=/tmp/work/install-root/opt/ros/noetic/lib/libros_io.so \
-      /tmp/work/native/ros_io/run-clock-test.sh
-
     python3 -m unittest discover -s /tmp/ros1-adapter/src/ros1_tools_adapter/test -p "test_*.py"
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 
-      /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
+    /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
       --output-dir /tmp/out
-
-    /tmp/ros1-adapter/.xgc2/scripts/check_native_package_payload.sh \
-      /tmp/work/install-root /tmp/out
 
     if [[ "${INSTALL_CHECK}" == "true" ]]; then
       # The official ROS Docker image excludes /usr/share/doc to reduce image
@@ -339,14 +285,12 @@ docker exec "${container_name}" bash -lc '
       fi
       planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb)"
       verify_firstparty_transaction <<<"${planned_transaction}"
       apt-get install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb

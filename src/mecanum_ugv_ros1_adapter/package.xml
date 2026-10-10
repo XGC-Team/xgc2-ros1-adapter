@@ -2,10 +2,10 @@
 <package format="2">
   <name>xgc_mecanum_ugv_ros1_adapter</name>
   <version>0.5.0</version>
-  <description>Mecanum UGV ROS1 robot Adapter application for XGC2 Adapter Runtime.</description>
+  <description>Mecanum UGV ROS1 service for XGC2.</description>
 
   <maintainer email="lxk@example.com">XGC</maintainer>
-  <license>BSD-3-Clause</license>
+  <license>Unspecified</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 

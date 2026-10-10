@@ -16,38 +16,6 @@ EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
-dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge" >/dev/null
-test "$(dpkg-query -W -f='${Version}' "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge")" = "${EXPECTED_PRODUCT_VERSION}"
-test -f "${PREFIX}/lib/libros_io.so"
-dpkg-query -S "${PREFIX}/lib/libros_io.so" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
-nm -D --defined-only "${PREFIX}/lib/libros_io.so" | awk '$3 == "xgc_rt_plugin_v1" {found=1} END {exit !found}'
-NATIVE_UTILITY_PATHS=(
-  "/usr/lib/libxgc_ros_edge.so"
-  "/usr/include/xgc-ros-io/ros_edge.hpp"
-  "/usr/include/xgc-ros-io/ros_slice.hpp"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfig.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersConfigVersion.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoHelpersTargets.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets.cmake"
-  "/usr/share/cmake/XgcRosIoHelpers/XgcRosIoEdgeTargets-release.cmake"
-)
-for path in "${NATIVE_UTILITY_PATHS[@]}"; do
-  test -f "${path}"
-  dpkg-query -S "${path}" | grep -Fq "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge:"
-done
-file -b /usr/lib/libxgc_ros_edge.so | grep -q '^ELF'
-test ! -e /usr/include/xgc-ros-io/sim_odometry.hpp
-bridge_depends="$(dpkg-query -W -f='${Depends}' "ros-${ROS_DISTRO}-xgc2-ros1-native-bridge")"
-if grep -Eq "(^|, )(xgc2-lightweight-sim|ros-${ROS_DISTRO}-xgc2-lightweight-sim-msgs)( |[(,]|$)" <<<"$bridge_depends"; then
-  echo "installed native bridge retains retired simulator dependency" >&2; exit 1
-fi
-dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
-dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
-for package in libxgc2-hover-thrust-dev \
-  "ros-${ROS_DISTRO}-xgc2-estimator-rigid-state" \
-  "ros-${ROS_DISTRO}-xgc2-multirotor-controller"; do
-  dpkg -s "${package}" >/dev/null
-done
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
 dpkg -s "${MECANUM_PACKAGE}" >/dev/null
 for base_version_package in \
@@ -91,10 +59,6 @@ source "${PREFIX}/setup.bash"
 set -u
 
 dpkg -s "ros-${ROS_DISTRO}-roscpp" >/dev/null
-ldd "${PREFIX}/lib/libros_io.so" | awk '/not found/ {missing=1} END {exit missing ? 1 : 0}'
-ldd "${PREFIX}/lib/libros_io.so" | grep -Eq 'libxgc_ros_edge\.so => /usr/lib/libxgc_ros_edge\.so '
-ldd /usr/lib/libxgc_ros_edge.so | awk '/not found/ {missing=1} END {exit missing ? 1 : 0}'
-
 check_ros_package() {
   if [[ "$#" -ne 5 ]]; then
     echo "check_ros_package requires package, launch, profile, schema, and definition" >&2

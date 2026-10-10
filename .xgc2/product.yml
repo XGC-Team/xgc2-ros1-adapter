@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.5.0-44
+version: 0.5.0-45
 kind: ros1-apt
 summary: ROS1 services for PX4, Scout Mini, Mecanum and typed ROS1 Tools.
 groups:
@@ -19,23 +19,16 @@ ros:
 apt:
   distribution: focal
   install:
-  - ros-noetic-xgc2-ros1-native-bridge
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-scout-mini-adapter
   - ros-noetic-xgc2-mecanum-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
   packages:
   - ros-noetic-xgc2-px4-multirotor-adapter
-  - ros-noetic-xgc2-ros1-native-bridge
   - ros-noetic-xgc2-scout-mini-adapter
   - ros-noetic-xgc2-mecanum-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
   depends:
-  - libxgc2-runtime-sdk-dev (>= 0.1.0-2~focal)
-  - libxgc2-robotics-interfaces-dev (>= 0.1.0-1~focal)
-  - libxgc2-hover-thrust-dev
-  - ros-noetic-xgc2-estimator-rigid-state
-  - ros-noetic-xgc2-multirotor-controller
   - libgrpc++1
   - libxgc2-xrpc-grpc1 (>= 0.1.0-1~focal)
   - libc-ares2
@@ -103,10 +96,6 @@ usage:
     '
 ownership:
   paths:
-  - /opt/ros/noetic/lib/libros_io.so
-  - /usr/lib/libxgc_ros_edge.so
-  - /usr/include/xgc-ros-io
-  - /usr/share/cmake/XgcRosIoHelpers
   - /opt/ros/noetic/include/xgc_px4_multirotor_ros1_adapter
   - /opt/ros/noetic/lib/libxgc_px4_multirotor_ros1_adapter_operations.a
   - /opt/ros/noetic/lib/pkgconfig/xgc_px4_multirotor_ros1_adapter.pc
@@ -131,21 +120,11 @@ release:
   workflow: release.yml
   ci_workflow: ci.yml
   requires:
-  - libxgc2-robotics-interfaces-dev
-  - xgc2-estimator-hover-thrust
-  - xgc2-estimator-rigid-state
-  - xgc2-multirotor-controller
-  - libxgc2-runtime-sdk-dev
   - xgc2-xrpc
   - xgc2-protobuf
   dependency_policy:
-    libxgc2-robotics-interfaces-dev: rebuild
-    xgc2-estimator-hover-thrust: rebuild
-    xgc2-estimator-rigid-state: rebuild
-    xgc2-multirotor-controller: rebuild
-    libxgc2-runtime-sdk-dev: rebuild
     xgc2-xrpc: rebuild
     xgc2-protobuf: rebuild
     xgc2-ros-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-44
+    focal: 0.5.0-45
