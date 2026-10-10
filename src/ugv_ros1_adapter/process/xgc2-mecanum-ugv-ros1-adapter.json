@@ -1,0 +1,83 @@
+{
+  "apiVersion": "xgc.execution.process/v1",
+  "definitions": [
+    {
+      "id": "xgc2-mecanum-ugv-ros1-adapter",
+      "version": "0.6.0",
+      "label": "Mecanum UGV ROS1 type server",
+      "description": "Serves every Mecanum UGV of one Run on one ROS master: VRPN, IMU and power telemetry and discrete motion control with lateral velocity. Started by the Run, ended with it.",
+      "parameters": {
+        "properties": {
+          "socketPath": {
+            "type": "string",
+            "fixedOnly": true,
+            "ownedEndpoint": "unix-socket"
+          },
+          "runId": {
+            "type": "string",
+            "fixedOnly": true
+          },
+          "targetId": {
+            "type": "string",
+            "default": "local",
+            "fixedOnly": true
+          },
+          "rosMasterUri": {
+            "type": "string",
+            "default": "http://127.0.0.1:11311"
+          },
+          "rosIp": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "socketPath",
+          "runId",
+          "targetId",
+          "rosMasterUri"
+        ],
+        "additionalProperties": false
+      },
+      "command": {
+        "executable": "/opt/ros/noetic/lib/xgc_ugv_ros1_adapter/xgc_ugv_ros1_adapter_node",
+        "args": [
+          "--socket-path",
+          "${socketPath}",
+          "--run-id",
+          "${runId}",
+          "--node-name",
+          "xgc_mecanum_ugv_${runId}",
+          "--provider",
+          "xgc2-mecanum-ugv-ros1-adapter",
+          "--target-id",
+          "${targetId}",
+          "--ros-master-uri",
+          "${rosMasterUri}",
+          "--ros-ip",
+          "${rosIp}"
+        ]
+      },
+      "services": [
+        {
+          "service": "xgc2.robot-adapter",
+          "profile": "grpc.v1",
+          "endpointParameter": "socketPath",
+          "api_version": "v1"
+        }
+      ],
+      "readiness": {
+        "kind": "describe",
+        "startGraceMs": 15000,
+        "timeoutMs": 30000
+      },
+      "stop": {
+        "graceMs": 25000,
+        "rpc": "Shutdown"
+      },
+      "restart": {
+        "mode": "never"
+      }
+    }
+  ]
+}

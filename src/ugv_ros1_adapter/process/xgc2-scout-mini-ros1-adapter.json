@@ -1,0 +1,83 @@
+{
+  "apiVersion": "xgc.execution.process/v1",
+  "definitions": [
+    {
+      "id": "xgc2-scout-mini-ros1-adapter",
+      "version": "0.6.0",
+      "label": "Scout Mini ROS1 type server",
+      "description": "Serves every Scout Mini of one Run on one ROS master: VRPN, IMU, power and chassis telemetry and discrete motion control. Started by the Run, ended with it.",
+      "parameters": {
+        "properties": {
+          "socketPath": {
+            "type": "string",
+            "fixedOnly": true,
+            "ownedEndpoint": "unix-socket"
+          },
+          "runId": {
+            "type": "string",
+            "fixedOnly": true
+          },
+          "targetId": {
+            "type": "string",
+            "default": "local",
+            "fixedOnly": true
+          },
+          "rosMasterUri": {
+            "type": "string",
+            "default": "http://127.0.0.1:11311"
+          },
+          "rosIp": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "socketPath",
+          "runId",
+          "targetId",
+          "rosMasterUri"
+        ],
+        "additionalProperties": false
+      },
+      "command": {
+        "executable": "/opt/ros/noetic/lib/xgc_ugv_ros1_adapter/xgc_ugv_ros1_adapter_node",
+        "args": [
+          "--socket-path",
+          "${socketPath}",
+          "--run-id",
+          "${runId}",
+          "--node-name",
+          "xgc_scout_mini_${runId}",
+          "--provider",
+          "xgc2-scout-mini-ros1-adapter",
+          "--target-id",
+          "${targetId}",
+          "--ros-master-uri",
+          "${rosMasterUri}",
+          "--ros-ip",
+          "${rosIp}"
+        ]
+      },
+      "services": [
+        {
+          "service": "xgc2.robot-adapter",
+          "profile": "grpc.v1",
+          "endpointParameter": "socketPath",
+          "api_version": "v1"
+        }
+      ],
+      "readiness": {
+        "kind": "describe",
+        "startGraceMs": 15000,
+        "timeoutMs": 30000
+      },
+      "stop": {
+        "graceMs": 25000,
+        "rpc": "Shutdown"
+      },
+      "restart": {
+        "mode": "never"
+      }
+    }
+  ]
+}

@@ -73,6 +73,10 @@ target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_runtime)
 install(TARGETS ${PROJECT_NAME}_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+install(DIRECTORY process/
+  DESTINATION /usr/share/xgc2/process-definitions
+  FILES_MATCHING PATTERN "*.json"
+)
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(${PROJECT_NAME}_test test/robot_runtime_test.cpp)

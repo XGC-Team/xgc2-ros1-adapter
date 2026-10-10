@@ -67,6 +67,9 @@ target_link_libraries(${PROJECT_NAME}_node
 install(TARGETS ${PROJECT_NAME}_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+install(FILES process/xgc2-px4-multirotor-ros1-adapter.json
+  DESTINATION /usr/share/xgc2/process-definitions
+)
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(${PROJECT_NAME}_test
