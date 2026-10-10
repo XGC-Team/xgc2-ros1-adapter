@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>xgc_ros1_tools_adapter</name>
+  <version>0.5.0</version>
+  <description>Typed ROS1 topic and service operations exposed over XRPC.</description>
+
+  <maintainer email="lxk36@users.noreply.github.com">XGC2</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>ros_babel_fish</depend>
+  <depend>roscpp</depend>
+  <depend>roslib</depend>
+  <depend>rosgraph_msgs</depend>
+  <build_depend>libjsoncpp-dev</build_depend>
+  <build_depend>libxgc2-xrpc-dev</build_depend>
+  <exec_depend>python3</exec_depend>
+  <exec_depend>rosbag</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>libjsoncpp1</exec_depend>
+  <exec_depend>libxgc2-xrpc1</exec_depend>
+
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>rostest</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>std_srvs</test_depend>
+</package>

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xgc.ros1.tools.v1.ServiceCallResult",
+  "type": "object",
+  "properties": {
+    "event": {"const": "response"},
+    "service": {"type": "string"},
+    "serviceType": {"type": "string"},
+    "response": {"type": "object"},
+    "durationMs": {"type": "integer", "minimum": 0}
+  },
+  "required": ["event", "service", "serviceType", "response", "durationMs"],
+  "additionalProperties": false
+}

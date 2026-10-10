@@ -55,7 +55,6 @@ function(xgc2_add_ros1_robot_common target_name)
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/ground_health.cpp"
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/localization_projection.cpp"
     "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_domain.cpp"
-    "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/runtime_support.cpp"
   )
   target_compile_features(${target_name} PUBLIC cxx_std_14)
   target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
@@ -76,9 +75,6 @@ function(xgc2_add_ros1_robot_common target_name)
         "${XGC2_PROTOBUF_PROTO_ROOT}/xgc/robot/v1/server.proto"
       DEPENDS "${XGC2_PROTOBUF_PROTO_ROOT}/xgc/robot/v1/server.proto"
       VERBATIM)
-    get_target_property(common_sources ${target_name} SOURCES)
-    list(REMOVE_ITEM common_sources "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/runtime_support.cpp")
-    set_property(TARGET ${target_name} PROPERTY SOURCES ${common_sources})
     target_sources(${target_name} PRIVATE "${grpc_source}"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_server.cpp"
       "${XGC2_ROS1_ROBOT_COMMON_ROOT}/src/robot_server_transport.cpp"
@@ -87,8 +83,6 @@ function(xgc2_add_ros1_robot_common target_name)
     target_link_libraries(${target_name} INTERFACE "-Wl,--export-dynamic")
     target_include_directories(${target_name} PUBLIC ${catkin_INCLUDE_DIRS} ${GRPC_INCLUDE_DIRS} ${CARES_INCLUDE_DIRS})
     target_link_libraries(${target_name} PUBLIC protobuf::libprotobuf ${GRPC_LDFLAGS} ${CARES_LDFLAGS} ${catkin_LIBRARIES})
-  else()
-    target_link_libraries(${target_name} PUBLIC xgc2::adapter_runtime_client protobuf::libprotobuf)
   endif()
 endfunction()
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xgc.ros1.tools.v1.ServiceCallRequest",
+  "type": "object",
+  "properties": {
+    "service": {"type": "string", "pattern": "^/[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z][A-Za-z0-9_]*)*$", "maxLength": 4096},
+    "serviceType": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*/[A-Za-z][A-Za-z0-9_]*$", "maxLength": 512},
+    "request": {"type": "object"},
+    "waitForServiceMs": {"type": "integer", "minimum": 0, "maximum": 300000},
+    "callTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 300000}
+  },
+  "required": ["service", "serviceType", "request", "waitForServiceMs", "callTimeoutMs"],
+  "additionalProperties": false
+}

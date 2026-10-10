@@ -1,0 +1,84 @@
+{
+  "apiVersion": "xgc.execution.process/v1",
+  "definitions": [
+    {
+      "id": "xgc2-ros1-tools-adapter",
+      "version": "0.5.0",
+      "label": "ROS1 Tools",
+      "description": "Typed ROS1 topic publishing and service calls over XRPC.",
+      "drivers": [
+        "host"
+      ],
+      "parameters": {
+        "properties": {
+          "socketPath": {
+            "type": "string",
+            "fixedOnly": true,
+            "ownedEndpoint": "unix-socket"
+          },
+          "targetId": {
+            "type": "string",
+            "default": "local",
+            "fixedOnly": true
+          },
+          "rosMasterUri": {
+            "type": "string",
+            "default": "http://127.0.0.1:11311"
+          },
+          "rosIp": {
+            "type": "string",
+            "default": "127.0.0.1"
+          },
+          "rosHostname": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "socketPath",
+          "targetId",
+          "rosMasterUri"
+        ]
+      },
+      "command": {
+        "executable": "/opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node",
+        "args": [
+          "--socket-path",
+          "${socketPath}",
+          "--target-id",
+          "${targetId}",
+          "--ros-master-uri",
+          "${rosMasterUri}",
+          "--ros-ip",
+          "${rosIp}",
+          "--ros-hostname",
+          "${rosHostname}"
+        ]
+      },
+      "readiness": {
+        "kind": "unix",
+        "address": "${socketPath}",
+        "timeout": 5000000000
+      },
+      "liveness": {
+        "kind": "process"
+      },
+      "services": [
+        {
+          "service": "ros1.tools",
+          "profile": "http.v1",
+          "endpointParameter": "socketPath",
+          "describePath": "/api/v1/describe",
+          "api_version": "1"
+        }
+      ],
+      "stop": {
+        "gracePeriod": 5000000000
+      },
+      "restart": {
+        "mode": "never"
+      }
+    }
+  ]
+}

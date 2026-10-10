@@ -9,24 +9,10 @@ SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
 SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
 MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
 MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
-B2_PACKAGE="ros-${ROS_DISTRO}-xgc2-unitree-b2-adapter"
-B2_ROS_PACKAGE="xgc_unitree_b2_ros1_adapter"
-MOCAP_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-adapter"
-MOCAP_ROS_PACKAGE="xgc_mocap_rotor_ros1_adapter"
-MOCAP_FORWARDER_PACKAGE="ros-${ROS_DISTRO}-xgc2-mocap-rotor-forwarder"
-MOCAP_FORWARDER_ROS_PACKAGE="xgc_mocap_rotor_zenoh_forwarder"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-0.7.0-1~focal}"
 EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
     "$(dirname "$0")/../product.yml"
 )}"
-EXPECTED_MOCAP_ADAPTER_VERSION="${EXPECTED_MOCAP_ADAPTER_VERSION:-${MOCAP_ADAPTER_PACKAGE_VERSION:-${EXPECTED_PRODUCT_VERSION}}}"
-EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST="${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST:-${MOCAP_ADAPTER_SOURCE_DIGEST:-}}"
-if [[ -n "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" &&
-      ! "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "expected Mocap Adapter source digest must be 64 lowercase hex characters" >&2
-  exit 1
-fi
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
 dpkg -s "${PX4_PACKAGE}" >/dev/null
@@ -64,24 +50,11 @@ for package in libxgc2-hover-thrust-dev \
 done
 dpkg -s "${SCOUT_PACKAGE}" >/dev/null
 dpkg -s "${MECANUM_PACKAGE}" >/dev/null
-dpkg -s "${B2_PACKAGE}" >/dev/null
-dpkg -s "${MOCAP_PACKAGE}" >/dev/null
-dpkg -s "${MOCAP_FORWARDER_PACKAGE}" >/dev/null
 for base_version_package in \
-  "${PX4_PACKAGE}" "${SCOUT_PACKAGE}" "${MECANUM_PACKAGE}" \
-  "${B2_PACKAGE}" "${MOCAP_FORWARDER_PACKAGE}"; do
+  "${PX4_PACKAGE}" "${SCOUT_PACKAGE}" "${MECANUM_PACKAGE}"; do
   test "$(dpkg-query -W -f='${Version}' "${base_version_package}")" = \
     "${EXPECTED_PRODUCT_VERSION}"
 done
-test "$(dpkg-query -W -f='${Version}' "${MOCAP_PACKAGE}")" = \
-  "${EXPECTED_MOCAP_ADAPTER_VERSION}"
-if [[ -n "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" ]]; then
-  test "${EXPECTED_MOCAP_ADAPTER_SOURCE_DIGEST}" = \
-    "$(dpkg-query -W -f='${X-XGC2-Source-Digest}' "${MOCAP_PACKAGE}")"
-fi
-dpkg -s libxgc2-adapter-runtime-client3 >/dev/null
-test "$(dpkg-query -W -f='${Version}' libxgc2-adapter-runtime-client3)" = \
-  "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
 test -f "${PROTOBUF_REGISTRY}"
 if dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-adapter" >/dev/null 2>&1; then
   echo "removed generic ROS1 adapter package is still installed" >&2
@@ -91,31 +64,12 @@ fi
 px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 scout_depends="$(dpkg-query -W -f='${Depends}' "${SCOUT_PACKAGE}")"
 mecanum_depends="$(dpkg-query -W -f='${Depends}' "${MECANUM_PACKAGE}")"
-b2_depends="$(dpkg-query -W -f='${Depends}' "${B2_PACKAGE}")"
-mocap_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_PACKAGE}")"
-mocap_forwarder_depends="$(dpkg-query -W -f='${Depends}' "${MOCAP_FORWARDER_PACKAGE}")"
-for depends in "${b2_depends}" "${mocap_depends}"; do
-  grep -Eq '(^|, )libxgc2-adapter-runtime-client3( |[(])' <<<"${depends}"
-  if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
-      <<<"${depends}"; then
-    echo "Adapter runtime dependencies leaked SDK/schema packages" >&2
-    exit 1
-  fi
-done
 for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
   grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${depends}"
   grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${depends}"
   if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev' <<<"${depends}"; then
     echo "Robot type server retains the old Runtime Link dependency" >&2; exit 1
   fi
-done
-if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf|scout-msgs|libzenohc' \
-    <<<"${mocap_forwarder_depends}"; then
-  echo "Mocap Rotor onboard Forwarder leaked ground, Scout, schema, or dynamic Zenoh dependencies" >&2
-  exit 1
-fi
-for dependency in geometry-msgs mavros-msgs roscpp sensor-msgs; do
-  grep -q "ros-${ROS_DISTRO}-${dependency}" <<<"${mocap_forwarder_depends}"
 done
 grep -q "ros-${ROS_DISTRO}-mavros-msgs" <<<"${px4_depends}"
 if grep -q 'scout-msgs' <<<"${px4_depends}"; then
@@ -131,25 +85,6 @@ if grep -Eq 'mavros-msgs|scout-msgs|sensor-msgs' <<<"${mecanum_depends}"; then
   echo "Mecanum adapter package leaked unrelated robot message dependencies" >&2
   exit 1
 fi
-if grep -Eq 'mavros-msgs|scout-msgs' <<<"${b2_depends}"; then
-  echo "Unitree B2 adapter leaked unrelated robot message dependencies" >&2
-  exit 1
-fi
-if grep -Eq 'mavros-msgs|scout-msgs|libzenohc' <<<"${mocap_depends}"; then
-  echo "Mocap Rotor Adapter leaked MAVROS, Scout, or dynamic Zenoh runtime dependencies" >&2
-  exit 1
-fi
-for dependency in geometry-msgs nav-msgs sensor-msgs std-msgs tf2-ros; do
-  grep -q "ros-${ROS_DISTRO}-${dependency}" <<<"${mocap_depends}"
-done
-for dependency in diagnostic-msgs nav-msgs sensor-msgs std-msgs tf2-ros; do
-  grep -q "ros-${ROS_DISTRO}-${dependency}" <<<"${b2_depends}"
-done
-if grep -Eq 'robot-state-publisher|xgc2-b2arx-description' <<<"${b2_depends}"; then
-  echo "Unitree B2 Adapter must not own the generic description/RSP runtime" >&2
-  exit 1
-fi
-
 set +u
 # shellcheck disable=SC1090
 source "${PREFIX}/setup.bash"
@@ -190,8 +125,6 @@ check_ros_package() {
     grep -q 'libgrpc++' <<<"${libraries}"
     grep -q 'libcares' <<<"${libraries}"
     ! grep -q 'libxgc2_adapter_runtime_client' <<<"${libraries}"
-  else
-    grep -q 'libxgc2_adapter_runtime_client' <<<"${libraries}"
   fi
   test -f "/usr/share/xgc2/adapter-definitions/${definition_id}.json"
   test -f "/usr/share/xgc2/process-definitions/${definition_id}.json"
@@ -236,71 +169,31 @@ check_ros_package \
   "mecanum-ugv-physical-vrpn.yaml" \
   "robot-adapter-profile-v4.schema.json" \
   "xgc2-mecanum-ugv-ros1-adapter"
-check_ros_package \
-  "${B2_ROS_PACKAGE}" \
-  "unitree_b2_ros1_adapter.launch" \
-  "unitree-b2-v1.yaml" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc2-unitree-b2-ros1-adapter"
-check_ros_package \
-  "${MOCAP_ROS_PACKAGE}" \
-  "mocap_rotor_ros1_adapter.launch" \
-  "mocap-rotor-ros1-v1.yaml" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc2-mocap-rotor-ros1-adapter"
-MOCAP_EXECUTABLE="${PREFIX}/lib/${MOCAP_ROS_PACKAGE}/${MOCAP_ROS_PACKAGE}_node"
-if ldd "${MOCAP_EXECUTABLE}" | grep -q 'libzenohc'; then
-  echo "Mocap Rotor Adapter must carry its Focal-built Zenoh C dependency statically" >&2
-  exit 1
-fi
-test -f "/usr/share/doc/${MOCAP_PACKAGE}/third-party/zenoh-c/LICENSE"
-test -f "/usr/share/doc/${MOCAP_PACKAGE}/third-party/zenoh-c/NOTICE.md"
-MOCAP_FORWARDER_EXECUTABLE="${PREFIX}/lib/${MOCAP_FORWARDER_ROS_PACKAGE}/${MOCAP_FORWARDER_ROS_PACKAGE}_node"
-rospack find "${MOCAP_FORWARDER_ROS_PACKAGE}" >/dev/null
-test -f "${PREFIX}/share/${MOCAP_FORWARDER_ROS_PACKAGE}/package.xml"
-test -f "${PREFIX}/share/${MOCAP_FORWARDER_ROS_PACKAGE}/launch/mocap_rotor_zenoh_forwarder.launch"
-test -x "${MOCAP_FORWARDER_EXECUTABLE}"
-ldd "${MOCAP_FORWARDER_EXECUTABLE}" | grep -q 'libroscpp'
-if ldd "${MOCAP_FORWARDER_EXECUTABLE}" | grep -q 'libzenohc'; then
-  echo "Mocap Rotor Forwarder must carry its Focal-built Zenoh C dependency statically" >&2
-  exit 1
-fi
-test -f "/usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json"
-test -f "/usr/share/doc/${MOCAP_FORWARDER_PACKAGE}/third-party/zenoh-c/LICENSE"
-test -f "/usr/share/doc/${MOCAP_FORWARDER_PACKAGE}/third-party/zenoh-c/NOTICE.md"
-python3 - <<'PY'
-import json
-from pathlib import Path
 
-path = Path("/usr/share/xgc2/process-definitions/xgc2-mocap-rotor-link.json")
-document = json.loads(path.read_text(encoding="utf-8"))
-assert document["apiVersion"] == "xgc.execution.process/v1"
-assert len(document["definitions"]) == 1
-definition = document["definitions"][0]
-assert definition["id"] == "xgc2-mocap-rotor-link"
-assert definition["internal"] is True
-assert definition["command"]["executable"] == (
-    "/opt/ros/noetic/lib/xgc_mocap_rotor_zenoh_forwarder/"
-    "xgc_mocap_rotor_zenoh_forwarder_node"
-)
-required = set(definition["parameters"]["required"])
-assert {"rosMasterUri", "rosIp", "flightStateTopic", "extendedStateTopic"} <= required
-command = json.dumps(definition["command"]).lower()
-assert "mavros_node" not in command
-assert "fs150" not in command
-assert "gps" not in command
-assert "down/" not in command
-PY
-test ! -e "${PREFIX}/share/${B2_ROS_PACKAGE}/launch/unitree_b2_visualization_runtime.launch"
-if grep -n -E '/tmp/|/home/|\.worktrees/' \
-  /usr/share/xgc2/adapter-definitions/xgc2-unitree-b2-ros1-adapter.json \
-  /usr/share/xgc2/process-definitions/xgc2-unitree-b2-ros1-adapter.json \
-  /usr/share/xgc2/robot-adapter-profiles/xgc2-unitree-b2-ros1-adapter.json; then
-  echo "installed Unitree B2 manifests contain a source-development path" >&2
-  exit 1
-fi
 
 test ! -e "${PREFIX}/share/xgc_ros1_adapter"
 test ! -e "${PREFIX}/lib/xgc_ros1_adapter/xgc_ros1_adapter_node"
 
-echo "Installed robot Adapter package checks passed"
+echo "Installed robot package checks passed"
+
+TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
+test "$(dpkg-query -W -f='${Version}' "$TOOLS_PACKAGE")" = "$EXPECTED_PRODUCT_VERSION"
+for name in node service_helper probe clock_wait rosbag_recorder; do
+  path="${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_${name}"
+  test -x "$path"
+  dpkg-query -S "$path" | grep -Fq "${TOOLS_PACKAGE}:"
+done
+tools_libraries="$(ldd "${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node")"
+! grep -q 'not found' <<<"$tools_libraries"
+grep -q 'libxgc2_xrpc' <<<"$tools_libraries"
+! grep -q 'libxgc2_adapter_runtime_client' <<<"$tools_libraries"
+test ! -e /usr/share/xgc2/adapter-definitions/xgc2-ros1-tools-adapter.json
+python3 - <<'PYTOOLS'
+import json
+with open('/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json') as source:
+    definition=json.load(source)['definitions'][0]
+assert definition['id']=='xgc2-ros1-tools-adapter' and not definition.get('internal',False)
+assert definition['services'][0]['service']=='ros1.tools'
+assert definition['services'][0]['profile']=='http.v1'
+assert definition['parameters']['properties']['socketPath']['ownedEndpoint']=='unix-socket'
+PYTOOLS

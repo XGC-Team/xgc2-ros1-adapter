@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "xgc.ros1.tools.v2.PublishRequest",
+  "type": "object",
+  "properties": {
+    "topic": {"type": "string", "pattern": "^/[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z][A-Za-z0-9_]*)*$", "maxLength": 4096},
+    "messageType": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*/[A-Za-z][A-Za-z0-9_]*$", "maxLength": 512},
+    "message": {"type": "object"},
+    "publishCount": {"type": "integer", "minimum": 1, "maximum": 10000},
+    "publishRateHz": {"type": "number", "minimum": 0.1, "maximum": 1000},
+    "latch": {"type": "boolean"},
+    "queueSize": {"type": "integer", "minimum": 1, "maximum": 10000},
+    "waitForSubscribersMs": {"type": "integer", "minimum": 0, "maximum": 300000}
+  },
+  "required": ["topic", "messageType", "message", "publishCount", "publishRateHz", "latch", "queueSize", "waitForSubscribersMs"],
+  "additionalProperties": false
+}

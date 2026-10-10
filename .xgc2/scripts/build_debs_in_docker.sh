@@ -11,9 +11,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
-EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION="0.7.0-1"
-EXPECTED_RUNTIME_CLIENT_DEB_VERSION="${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}~focal"
-ADAPTER_RUNTIME_CLIENT_DEB_VERSION="${ADAPTER_RUNTIME_CLIENT_DEB_VERSION:-${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}}"
 EXPECTED_PROTOBUF_PRODUCT_VERSION="0.6.0-1"
 EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
@@ -21,8 +18,6 @@ XGC2_XRPC_DEB_VERSION="0.1.0-1~focal"
 XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
-MOCAP_ADAPTER_PACKAGE_VERSION="${MOCAP_ADAPTER_PACKAGE_VERSION:-}"
-MOCAP_ADAPTER_SOURCE_DIGEST="${MOCAP_ADAPTER_SOURCE_DIGEST:-}"
 EMPTY_DEPENDENCY_SET_DIGEST="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 
 while [[ $# -gt 0 ]]; do
@@ -75,28 +70,17 @@ if [[ -n "${XGC2_SOURCE_DIGEST}" && ! "${XGC2_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ 
   echo "XGC2_SOURCE_DIGEST must be empty or 64 lowercase hex characters" >&2
   exit 1
 fi
-if [[ -n "${MOCAP_ADAPTER_SOURCE_DIGEST}" && ! "${MOCAP_ADAPTER_SOURCE_DIGEST}" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "MOCAP_ADAPTER_SOURCE_DIGEST must be empty or 64 lowercase hex characters" >&2
-  exit 1
-fi
-if [[ -n "${MOCAP_ADAPTER_PACKAGE_VERSION}" && -z "${MOCAP_ADAPTER_SOURCE_DIGEST}" ]] ||
-   [[ -z "${MOCAP_ADAPTER_PACKAGE_VERSION}" && -n "${MOCAP_ADAPTER_SOURCE_DIGEST}" ]]; then
-  echo "MOCAP_ADAPTER_PACKAGE_VERSION and MOCAP_ADAPTER_SOURCE_DIGEST must be set together" >&2
-  exit 1
-fi
 if [[ -n "${XGC2_APT_OVERLAY_URL:-}" && -z "${XGC2_DEPENDENCY_SET_DIGEST}" ]]; then
   echo "XGC2_APT_OVERLAY_URL requires XGC2_DEPENDENCY_SET_DIGEST" >&2
   exit 1
 fi
-if [[ "${XGC2_PROTOBUF_DEB_VERSION}" != "${EXPECTED_PROTOBUF_DEB_VERSION}" ||
-      "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" != "${EXPECTED_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
-  echo "Adapter requires the exact published protobuf and ABI3 client versions" >&2
+if [[ "${XGC2_PROTOBUF_DEB_VERSION}" != "${EXPECTED_PROTOBUF_DEB_VERSION}" ]]; then
+  echo "ROS1 services require the exact published protobuf version" >&2
   exit 1
 fi
 if [[ "${XGC2_BOOTSTRAP_COMMON_FROM_GIT:-false}" != "false" ||
       -n "${XGC2_PROTOBUF_SOURCE_ROOT:-}" ||
-      -n "${XGC2_PROTOBUF_GIT_REF:-}" ||
-      -n "${XGC2_ADAPTER_RUNTIME_CLIENT_GIT_REF:-}" ]]; then
+      -n "${XGC2_PROTOBUF_GIT_REF:-}" ]]; then
   echo "SDK source bootstrap is unsupported; use the exact signed APT packages" >&2
   exit 1
 fi
@@ -122,9 +106,7 @@ if [[ "${COPY_OUTPUT}" == "true" ]]; then
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-unitree-b2-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-mocap-rotor-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-mocap-rotor-forwarder_"*.deb
+    "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-tools-adapter_"*.deb
 fi
 
 docker_network_args=()
@@ -140,8 +122,6 @@ fi
 docker_env_args=(
   -e "PACKAGE_VERSION=${PACKAGE_VERSION}"
   -e "XGC2_SOURCE_DIGEST=${XGC2_SOURCE_DIGEST}"
-  -e "MOCAP_ADAPTER_PACKAGE_VERSION=${MOCAP_ADAPTER_PACKAGE_VERSION}"
-  -e "MOCAP_ADAPTER_SOURCE_DIGEST=${MOCAP_ADAPTER_SOURCE_DIGEST}"
   -e "XGC2_APT_OVERLAY_URL=${XGC2_APT_OVERLAY_URL:-}"
   -e "XGC2_DEPENDENCY_SET_DIGEST=${XGC2_DEPENDENCY_SET_DIGEST}"
   -e "EMPTY_DEPENDENCY_SET_DIGEST=${EMPTY_DEPENDENCY_SET_DIGEST}"
@@ -149,8 +129,6 @@ docker_env_args=(
   -e "DEBIAN_FRONTEND=noninteractive"
   -e "EXPECTED_DEB_ARCH=${expected_deb_arch}"
   -e "INSTALL_CHECK=${INSTALL_CHECK}"
-  -e "ADAPTER_RUNTIME_CLIENT_DEB_VERSION=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}"
-  -e "EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION=${EXPECTED_RUNTIME_CLIENT_PRODUCT_VERSION}"
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_XRPC_DEB_VERSION=${XGC2_XRPC_DEB_VERSION}"
   -e "EXPECTED_PROTOBUF_PRODUCT_VERSION=${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
@@ -250,12 +228,12 @@ docker exec "${container_name}" bash -lc '
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller)"
+      ros-noetic-xgc2-multirotor-controller ros-noetic-ros-babel-fish libjsoncpp-dev)"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends ros-noetic-scout-msgs \
       libxgc2-runtime-sdk-dev libxgc2-robotics-interfaces-dev \
       libxgc2-hover-thrust-dev ros-noetic-xgc2-estimator-rigid-state \
-      ros-noetic-xgc2-multirotor-controller
+      ros-noetic-xgc2-multirotor-controller ros-noetic-ros-babel-fish libjsoncpp-dev
     dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-runtime-sdk-dev)" ge 0.1.0-2~focal
     dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" libxgc2-robotics-interfaces-dev)" ge 0.1.0-1~focal
     # Existing owning packages only; absent DTO payloads remain a hard failure.
@@ -278,32 +256,13 @@ docker exec "${container_name}" bash -lc '
     test -f /usr/include/xgc-runtime/xgc_rt.h
     test -f /usr/share/cmake/XgcRuntimeSDK/XgcRuntimeSDKConfig.cmake
     dpkg-query -S /usr/include/xgc-runtime/xgc_rt.h
-    client_protobuf_version="$(
-      apt-cache show \
-        "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" |
-        sed -nE \
-          "s/^Depends:.*xgc2-protobuf-dev \\(= ([^)]+)\\).*/\\1/p" |
-        head -n 1
-    )"
-    if [[ -z "${client_protobuf_version}" ]]; then
-      echo "Adapter Runtime client does not declare an exact xgc2-protobuf-dev dependency" >&2
-      exit 1
-    fi
-    if [[ "${client_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
-      echo "Published client protobuf dependency does not match the frozen version" >&2
-      exit 1
-    fi
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
-      "libxgc2-adapter-runtime-client3=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
-      "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}")"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
-      "libxgc2-adapter-runtime-client3=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
-      "libxgc2-adapter-runtime-client-dev=${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}"
     for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
@@ -312,16 +271,6 @@ docker exec "${container_name}" bash -lc '
     # Package selection is build metadata, not an SDK runtime setting.
     unset XGC2_XRPC_DEB_VERSION
 
-    installed_client_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client-dev)"
-    if [[ "${installed_client_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
-      echo "Adapter Runtime client version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_client_version}" >&2
-      exit 1
-    fi
-    installed_runtime_version="$(dpkg-query -W -f="\${Version}" libxgc2-adapter-runtime-client3)"
-    if [[ "${installed_runtime_version}" != "${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}" ]]; then
-      echo "Adapter Runtime ABI version mismatch: expected ${ADAPTER_RUNTIME_CLIENT_DEB_VERSION}, got ${installed_runtime_version}" >&2
-      exit 1
-    fi
     installed_protobuf_version="$(dpkg-query -W -f="\${Version}" xgc2-protobuf-dev)"
     if [[ "${installed_protobuf_version}" != "${XGC2_PROTOBUF_DEB_VERSION}" ]]; then
       echo "XGC2 protobuf version mismatch: expected ${XGC2_PROTOBUF_DEB_VERSION}, got ${installed_protobuf_version}" >&2
@@ -335,21 +284,13 @@ docker exec "${container_name}" bash -lc '
 
     cd /tmp/work
     python3 -m unittest discover -v -s test -p "test_*.py"
-    zenoh_build_args=(
-      --prefix /tmp/xgc2-zenohc-prefix
-      --work-root /tmp/xgc2-zenohc-build
-    )
-    if [[ -n "${BUILD_JOBS:-}" ]]; then
-      zenoh_build_args+=(--jobs "${BUILD_JOBS}")
-    fi
-    /tmp/work/.xgc2/scripts/prepare_zenohc_focal.sh "${zenoh_build_args[@]}"
     set +u
     source /opt/ros/noetic/setup.bash
     set -u
     parallel_jobs="${BUILD_JOBS:-$(nproc)}"
     DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
-      -DCMAKE_PREFIX_PATH="/tmp/xgc2-zenohc-prefix;/opt/ros/noetic" \
+      -DCMAKE_PREFIX_PATH="/opt/ros/noetic" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
@@ -377,10 +318,10 @@ docker exec "${container_name}" bash -lc '
     ROS_IO_LIB=/tmp/work/install-root/opt/ros/noetic/lib/libros_io.so \
       /tmp/work/native/ros_io/run-clock-test.sh
 
+    python3 -m unittest discover -s /tmp/ros1-adapter/src/xgc_ros1_tools_adapter/test -p "test_*.py"
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
 
-    ZENOHC_LICENSE_DIR=/tmp/xgc2-zenohc-prefix/share/licenses/zenoh-c \
       /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
       --output-dir /tmp/out
@@ -400,18 +341,14 @@ docker exec "${container_name}" bash -lc '
         /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mocap-rotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mocap-rotor-forwarder_*.deb)"
+        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb)"
       verify_firstparty_transaction <<<"${planned_transaction}"
       apt-get install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-native-bridge_*.deb \
         /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-unitree-b2-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mocap-rotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mocap-rotor-forwarder_*.deb
+        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb
       if ! /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh; then
         echo "Installed-package gate failed; replaying it with command tracing" >&2
         bash -x /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
