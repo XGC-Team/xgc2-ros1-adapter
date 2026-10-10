@@ -26,11 +26,13 @@
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/common/v1/acceleration.pb.h"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
+#include "xgc2_ros1_robot_adapter/contract.hpp"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
+namespace contract = xgc2_ros1_robot_adapter::contract;
 
 struct NativeProfileConfig {
   std::string pose_endpoint;
@@ -98,8 +100,7 @@ public:
   static std::shared_ptr<RobotRuntime>
   Create(ros::NodeHandle node_handle,
          const xgc2_ros1_robot_adapter::RobotConfig &config,
-         std::uint64_t spec_revision, EnvelopeEmitter emitter,
-         std::string *error);
+         EnvelopeEmitter emitter, std::string *error);
 
   ~RobotRuntime();
 
@@ -114,7 +115,6 @@ public:
 
   const std::string &robotId() const { return robot_id_; }
   const std::string &profileId() const { return profile_id_; }
-  std::uint64_t specRevision() const { return spec_revision_; }
   bool channelEnabled(const std::string &channel_id) const;
 
   void emitPeriodic(const ros::WallTime &now);
@@ -144,7 +144,6 @@ private:
 
   RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                std::string profile_id, std::string robot_namespace,
-               std::uint64_t spec_revision,
                std::set<std::string> enabled_channels,
                std::set<std::string> required_channels,
                NativeProfileConfig native_profile,
@@ -213,7 +212,6 @@ private:
   const std::string robot_id_;
   const std::string profile_id_;
   const std::string robot_namespace_;
-  const std::uint64_t spec_revision_;
   const std::set<std::string> enabled_channels_;
   const std::set<std::string> required_channels_;
   std::map<std::string, xgc2_ros1_robot_adapter::MessageSchema> message_schemas_;

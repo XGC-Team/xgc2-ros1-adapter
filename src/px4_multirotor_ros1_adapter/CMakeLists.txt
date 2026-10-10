@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(xgc_px4_multirotor_ros1_adapter VERSION 0.5.0)
+project(xgc_px4_multirotor_ros1_adapter VERSION 0.6.0)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
@@ -10,68 +10,29 @@ find_package(catkin REQUIRED COMPONENTS
   mavros_msgs
   roscpp
   sensor_msgs
+  xgc_ros1_adapter_common
 )
-find_package(PythonInterp 3 REQUIRED)
 find_package(Protobuf REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GRPC REQUIRED grpc++>=1.16 grpc)
-find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
-if(NOT XGC2_PROTOBUF_PROTO_ROOT)
+if(NOT XGC2_PROTOBUF_REGISTRY_JSON)
   find_package(xgc2_protobuf CONFIG REQUIRED)
 endif()
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/../../common/cmake/robot_adapter_common.cmake")
-xgc2_add_ros1_robot_common(${PROJECT_NAME}_runtime_support SERVER)
-
-set(PROFILE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../profiles")
-set(PROFILE_FILE
-  "${PROFILE_ROOT}/ros1/px4-multirotor-physical-vrpn.yaml")
-set(GAZEBO_PROFILE_FILE "${PROFILE_ROOT}/ros1/px4-multirotor-gazebo-vrpn.yaml")
-set(XSIM_PROFILE_FILE "${PROFILE_ROOT}/ros1/px4-multirotor-xsim-ros.yaml")
-set(PROFILE_SCHEMA
-  "${PROFILE_ROOT}/schema/robot-adapter-profile-v4.schema.json")
-set(ADAPTER_DEFINITION_ID "xgc2-px4-multirotor-ros1-adapter")
-
-if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
-  message(FATAL_ERROR "Adapter Runtime dependencies did not expose the XGC2 registry")
-endif()
-if(NOT EXISTS "${PROFILE_FILE}" OR NOT EXISTS "${PROFILE_SCHEMA}")
-  message(FATAL_ERROR "repository-owned PX4 ROS1 profile contract is incomplete")
-endif()
-
-set(CONTRACT_METADATA_HDR
+include("${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/robot_profiles.cmake")
+set(CONTRACT_HEADER
   "${CMAKE_CURRENT_BINARY_DIR}/generated/${PROJECT_NAME}/generated_contract.hpp")
-set(CONTRACT_GENERATOR
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_contract_metadata.py")
-
-add_custom_command(
-  OUTPUT "${CONTRACT_METADATA_HDR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/${PROJECT_NAME}"
-  COMMAND ${PYTHON_EXECUTABLE} "${CONTRACT_GENERATOR}"
-    --registry "${XGC2_PROTOBUF_REGISTRY_JSON}"
-    --profile-file "${PROFILE_FILE}"
-    --profile-file "${XSIM_PROFILE_FILE}"
-    --profile-file "${GAZEBO_PROFILE_FILE}"
-    --profile-schema "${PROFILE_SCHEMA}"
-    --definition-id "${ADAPTER_DEFINITION_ID}"
-    --cpp-namespace "${PROJECT_NAME}"
-    --output "${CONTRACT_METADATA_HDR}"
-  DEPENDS
-    "${CONTRACT_GENERATOR}"
-    "${XGC2_PROTOBUF_REGISTRY_JSON}"
-    "${PROFILE_FILE}"
-    "${XSIM_PROFILE_FILE}"
-    "${GAZEBO_PROFILE_FILE}"
-    "${PROFILE_SCHEMA}"
-  COMMENT "Validating the repository-owned PX4 multirotor ROS1 profile"
-  VERBATIM
+xgc2_add_robot_profiles(
+  TARGET ${PROJECT_NAME}_profiles
+  DEFINITION_ID xgc2-px4-multirotor-ros1-adapter
+  NAMESPACE ${PROJECT_NAME}
+  HEADER "${CONTRACT_HEADER}"
+  PROFILES
+    "${XGC2_ROBOT_PROFILE_ROOT}/ros1/px4-multirotor-physical-vrpn.yaml"
+    "${XGC2_ROBOT_PROFILE_ROOT}/ros1/px4-multirotor-xsim-ros.yaml"
+    "${XGC2_ROBOT_PROFILE_ROOT}/ros1/px4-multirotor-gazebo-vrpn.yaml"
 )
-add_custom_target(${PROJECT_NAME}_contract_metadata
-  DEPENDS "${CONTRACT_METADATA_HDR}")
 
 catkin_package(
-  CATKIN_DEPENDS roscpp mavros_msgs
+  CATKIN_DEPENDS mavros_msgs roscpp xgc_ros1_adapter_common
 )
 
 include_directories(
@@ -80,52 +41,46 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
+# PX4 service requests, MAVROS interpretation and the remote-control stream.
 add_library(${PROJECT_NAME}_operations STATIC
   src/px4_operations.cpp
   src/remote_control.cpp
 )
-add_dependencies(${PROJECT_NAME}_operations
-  ${catkin_EXPORTED_TARGETS}
-)
-target_link_libraries(${PROJECT_NAME}_operations
-  ${catkin_LIBRARIES}
-)
+add_dependencies(${PROJECT_NAME}_operations ${catkin_EXPORTED_TARGETS})
+target_link_libraries(${PROJECT_NAME}_operations ${catkin_LIBRARIES})
 
 add_executable(${PROJECT_NAME}_node
   src/px4_multirotor_ros1_adapter_node.cpp
   src/robot_runtime.cpp
-  "${CONTRACT_METADATA_HDR}"
+  "${CONTRACT_HEADER}"
 )
 add_dependencies(${PROJECT_NAME}_node
-  ${PROJECT_NAME}_contract_metadata
+  ${PROJECT_NAME}_profiles
   ${catkin_EXPORTED_TARGETS}
 )
 target_link_libraries(${PROJECT_NAME}_node
-  ${PROJECT_NAME}_runtime_support
   ${PROJECT_NAME}_operations
   ${catkin_LIBRARIES}
+  protobuf::libprotobuf
+)
+
+install(TARGETS ${PROJECT_NAME}_node
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 if(CATKIN_ENABLE_TESTING)
-  # One set of shared, validation-only tools for all three installed servers.
-  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../common/test"
-    "robot-server-test-tools")
-  add_test(NAME ${PROJECT_NAME}_profile_metadata_test
-    COMMAND ${PYTHON_EXECUTABLE}
-      "${CMAKE_CURRENT_SOURCE_DIR}/../../test/test_generate_contract_metadata.py"
-  )
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp
     src/robot_runtime.cpp
   )
   if(TARGET ${PROJECT_NAME}_test)
     add_dependencies(${PROJECT_NAME}_test
-      ${PROJECT_NAME}_contract_metadata
+      ${PROJECT_NAME}_profiles
       ${catkin_EXPORTED_TARGETS}
     )
     target_link_libraries(${PROJECT_NAME}_test
-      ${PROJECT_NAME}_runtime_support
       ${catkin_LIBRARIES}
+      protobuf::libprotobuf
     )
   endif()
   catkin_add_gtest(${PROJECT_NAME}_operations_test
@@ -133,43 +88,10 @@ if(CATKIN_ENABLE_TESTING)
     test/remote_control_test.cpp
   )
   if(TARGET ${PROJECT_NAME}_operations_test)
-    add_dependencies(${PROJECT_NAME}_operations_test
-      ${catkin_EXPORTED_TARGETS}
-    )
+    add_dependencies(${PROJECT_NAME}_operations_test ${catkin_EXPORTED_TARGETS})
     target_link_libraries(${PROJECT_NAME}_operations_test
       ${PROJECT_NAME}_operations
       ${catkin_LIBRARIES}
     )
   endif()
-  catkin_add_gtest(${PROJECT_NAME}_robot_domain_test
-    ../../common/test/robot_domain_test.cpp
-  )
-  if(TARGET ${PROJECT_NAME}_robot_domain_test)
-    target_link_libraries(${PROJECT_NAME}_robot_domain_test
-      ${PROJECT_NAME}_runtime_support
-      ${catkin_LIBRARIES}
-    )
-  endif()
 endif()
-
-install(TARGETS
-  ${PROJECT_NAME}_node
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-xgc2_add_robot_runtime_manifests(
-  ${PROJECT_NAME}_node
-  ${ADAPTER_DEFINITION_ID}
-  ${PROJECT_VERSION}
-  "XGC2 PX4 Multirotor ROS1 Adapter"
-  "PX4 multirotor telemetry, diagnostics, and native command capabilities."
-  "${PROFILE_FILE}"
-  "${PROFILE_SCHEMA}"
-  "${XSIM_PROFILE_FILE}"
-  "${GAZEBO_PROFILE_FILE}"
-)
-install(FILES "${PROFILE_FILE}" "${XSIM_PROFILE_FILE}" "${GAZEBO_PROFILE_FILE}"
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/ros1
-)
-install(FILES "${PROFILE_SCHEMA}"
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/schema
-)

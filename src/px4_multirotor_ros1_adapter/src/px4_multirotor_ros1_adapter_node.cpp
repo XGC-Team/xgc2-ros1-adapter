@@ -3,6 +3,7 @@
 #include "xgc_px4_multirotor_ros1_adapter/remote_control.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
 #include "xgc2_ros1_robot_adapter/native_command.hpp"
+#include "xgc2_ros1_robot_adapter/ros1_binding.hpp"
 #include "xgc/semantic/aerial/v1/control.pb.h"
 #include "xgc/semantic/common/v1/control.pb.h"
 #include <ros/serialization.h>
@@ -23,7 +24,7 @@ public:
   ros::Subscriber state_subscriber;
   ~Native() override { Stop(); }
   void Stop() override { if (runtime) runtime->Stop(); if (remote) remote->Stop(); state_subscriber.shutdown(); }
-  void Periodic(const ros::WallTime &now) override { runtime->emitPeriodic(now); if (remote) remote->PublishPeriodic(); }
+  void Periodic() override { runtime->emitPeriodic(ros::WallTime::now()); if (remote) remote->PublishPeriodic(); }
   template<class Service, class Interpret> std::uint64_t call(Service command, const std::string &endpoint,
       const wire::OperationRequest &request, const contract::ChannelMetadata &channel, const contract::MessageMetadata &output,
       shared::AsyncRosServices &services, shared::CommandCompletion complete, Interpret interpret) {
@@ -62,14 +63,15 @@ public:
       } catch (const std::exception &error) { complete(shared::CommandError(request, wire::ERROR_CLASS_UNCERTAIN, "px4-result-uncertain", error.what())); }
     });
   }
-  std::uint64_t Execute(const wire::OperationRequest &request, shared::AsyncRosServices &services, shared::CommandCompletion complete) override {
+  std::uint64_t Execute(const wire::OperationRequest &request, shared::CommandIo &io, shared::CommandCompletion complete) override {
+    auto &services = dynamic_cast<shared::AsyncRosServices &>(io);
     std::size_t count = 0;
-    const auto *channels = contract::profileChannels(config.profile_id, &count);
+    const auto *channels = InstalledContract().profileChannels(config.profile_id, &count);
     const contract::ChannelMetadata *channel = nullptr;
     for (std::size_t i = 0; i < count; ++i)
       if (channels[i].kind == contract::ChannelKind::kOperation && request.context().endpoint_id() == channels[i].operation_id) channel = &channels[i];
     contract::MessageMetadata input{}, output{}; std::string error;
-    if (!channel || !contract::messageMetadata(channel->input_message_id, &input) || !contract::messageMetadata(channel->output_message_id, &output) ||
+    if (!channel || !InstalledContract().messageMetadata(channel->input_message_id, &input) || !InstalledContract().messageMetadata(channel->output_message_id, &output) ||
         !shared::ValidateCommand(request, config, *channel, input, &error)) {
       complete(shared::CommandError(request, wire::ERROR_CLASS_REJECTED, "invalid-command", error.empty() ? "unknown command" : error)); return 0;
     }
@@ -113,13 +115,14 @@ public:
     complete(shared::CommandError(request, wire::ERROR_CLASS_REJECTED, "invalid-command-input", error)); return 0;
   }
 };
-std::shared_ptr<shared::NativeRobot> create(ros::NodeHandle node, const shared::RobotConfig &config, shared::TelemetryEmitter emit, std::string *error) {
+std::shared_ptr<shared::NativeRobot> create(shared::RosNode &ros_node, const shared::RobotConfig &config, shared::TelemetryEmitter emit, std::string *error) {
+  ros::NodeHandle node = shared::Ros1Handle(ros_node);
   auto native = std::make_shared<Native>(); native->config = config;
-  if (!contract::profileDigest(config.profile_id) || config.profile_digest != contract::profileDigest(config.profile_id)) {
+  if (!InstalledContract().profileDigest(config.profile_id) || config.profile_digest != InstalledContract().profileDigest(config.profile_id)) {
     *error = "profile does not match installed native mapping"; return nullptr;
   }
   if (!BuildNativeProfileConfig(config, &native->profile, error)) return nullptr;
-  native->runtime = RobotRuntime::Create(node, config, 1, std::move(emit), error);
+  native->runtime = RobotRuntime::Create(node, config, std::move(emit), error);
   if (!native->runtime) return nullptr;
   if (shared::Enabled(config, "operation.motion-intent") || shared::Enabled(config, "operation.motion-intent-release")) {
     native->remote = RemoteControlPublisher::Create(node, native->profile.remote_control_endpoint,
@@ -141,5 +144,6 @@ std::shared_ptr<shared::NativeRobot> create(ros::NodeHandle node, const shared::
 }
 } // namespace xgc_px4_multirotor_ros1_adapter
 int main(int argc, char **argv) {
-  return xgc2_ros1_robot_adapter::RunRobotServer(argc, argv, "xgc_px4_multirotor_ros1_adapter", "xgc2-px4-multirotor-ros1-adapter", xgc_px4_multirotor_ros1_adapter::create);
+  return xgc2_ros1_robot_adapter::RunRos1TypeServer(
+      argc, argv, {{"xgc2-px4-multirotor-ros1-adapter", xgc_px4_multirotor_ros1_adapter::create}});
 }

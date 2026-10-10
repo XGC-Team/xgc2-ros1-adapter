@@ -316,7 +316,7 @@ bool resolveEndpoint(const xgc2_ros1_robot_adapter::RobotConfig &config,
                      const std::string &role, const std::string &ros_type,
                      std::string *resolved, std::string *error) {
   contract::ChannelMetadata channel{};
-  if (!contract::channelMetadata(config.profile_id, channel_id, &channel))
+  if (!InstalledContract().channelMetadata(config.profile_id, channel_id, &channel))
     return fail(error, "generated channel is missing: " + channel_id);
   const auto *endpoint = contract::channelEndpoint(channel, kind, role);
   if (endpoint == nullptr || endpoint->ros_type != ros_type)
@@ -327,7 +327,7 @@ bool resolveEndpoint(const xgc2_ros1_robot_adapter::RobotConfig &config,
 double channelStaleAfterSeconds(const std::string &profile_id,
                                 const std::string &channel_id) {
   contract::ChannelMetadata channel{};
-  if (!contract::channelMetadata(profile_id, channel_id, &channel) ||
+  if (!InstalledContract().channelMetadata(profile_id, channel_id, &channel) ||
       channel.stale_after_millis == 0u)
     throw std::logic_error("generated channel stale policy is invalid");
   return static_cast<double>(channel.stale_after_millis) / 1000.0;
@@ -459,11 +459,11 @@ bool BuildNativeProfileConfig(
     NativeProfileConfig *output, std::string *error) {
   if (output == nullptr)
     return fail(error, "PX4 native profile output is required");
-  if (!contract::profileDigest(config.profile_id))
+  if (!InstalledContract().profileDigest(config.profile_id))
     return fail(error, "PX4 native profile identity is unsupported");
 
   contract::ParameterMetadata mocap_descriptor{};
-  const bool canonical_input = !contract::parameterMetadata(config.profile_id, "mocap_rigid_body", &mocap_descriptor);
+  const bool canonical_input = !InstalledContract().parameterMetadata(config.profile_id, "mocap_rigid_body", &mocap_descriptor);
   if (!canonical_input) {
     if (config.parameters.size() - config.parameters.count("ros_master_uri") -
             config.parameters.count("ros_ip") -
@@ -480,31 +480,31 @@ bool BuildNativeProfileConfig(
     contract::ParameterMetadata offset_x{};
     contract::ParameterMetadata offset_y{};
     contract::ParameterMetadata offset_z{};
-    if (!contract::parameterMetadata(config.profile_id, "publish_vision",
+    if (!InstalledContract().parameterMetadata(config.profile_id, "publish_vision",
                                      &publish_vision_parameter) ||
         publish_vision_parameter.type != contract::ParameterType::kBoolean ||
         publish_vision_parameter.required ||
-        !contract::parameterMetadata(config.profile_id, "namespace",
+        !InstalledContract().parameterMetadata(config.profile_id, "namespace",
                                      &namespace_descriptor) ||
         namespace_descriptor.type != contract::ParameterType::kString ||
         !namespace_descriptor.required ||
-        !contract::parameterMetadata(config.profile_id, "mocap_rigid_body",
+        !InstalledContract().parameterMetadata(config.profile_id, "mocap_rigid_body",
                                      &mocap_parameter) ||
         mocap_parameter.type != contract::ParameterType::kString ||
         !mocap_parameter.required ||
         std::string(mocap_parameter.pattern) != "^[A-Za-z][A-Za-z0-9_]*$" ||
-        !contract::parameterMetadata(config.profile_id, "mocap_source_root", &source_root) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "mocap_source_root", &source_root) ||
         source_root.type != contract::ParameterType::kString || source_root.required ||
         !std::string(source_root.pattern).empty() ||
-        !contract::parameterMetadata(config.profile_id, "localization_offset_x", &offset_x) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "localization_offset_x", &offset_x) ||
         offset_x.type != contract::ParameterType::kNumber || offset_x.required ||
-        !contract::parameterMetadata(config.profile_id, "localization_offset_y", &offset_y) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "localization_offset_y", &offset_y) ||
         offset_y.type != contract::ParameterType::kNumber || offset_y.required ||
-        !contract::parameterMetadata(config.profile_id, "localization_offset_z", &offset_z) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "localization_offset_z", &offset_z) ||
         offset_z.type != contract::ParameterType::kNumber || offset_z.required ||
-        !contract::parameterMetadata(config.profile_id, "positioning_frame_number", &positioning_frames) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "positioning_frame_number", &positioning_frames) ||
         positioning_frames.type != contract::ParameterType::kInteger || !positioning_frames.required ||
-        !contract::parameterMetadata(config.profile_id, "positioning_comparison_threshold_m", &positioning_threshold) ||
+        !InstalledContract().parameterMetadata(config.profile_id, "positioning_comparison_threshold_m", &positioning_threshold) ||
         positioning_threshold.type != contract::ParameterType::kNumber || !positioning_threshold.required) {
       return fail(error, "PX4 native parameter descriptors drifted");
     }
@@ -533,7 +533,7 @@ bool BuildNativeProfileConfig(
 
   contract::ChannelMetadata pose_channel{};
   bool apply_world_offset = false;
-  if (!contract::channelMetadata(config.profile_id, "state.mocap.pose", &pose_channel) ||
+  if (!InstalledContract().channelMetadata(config.profile_id, "state.mocap.pose", &pose_channel) ||
       !contract::channelPolicyBoolean(pose_channel, "apply_world_offset", &apply_world_offset))
     return fail(error, "PX4 localization offset policy is missing");
   if (!apply_world_offset)
@@ -541,7 +541,7 @@ bool BuildNativeProfileConfig(
 
   std::size_t channel_count = 0u;
   const auto *channels =
-      contract::profileChannels(config.profile_id, &channel_count);
+      InstalledContract().profileChannels(config.profile_id, &channel_count);
   if (channels == nullptr || channel_count != kNativeBindings.size() - (canonical_input ? 2u : 0u))
     return fail(error, "PX4 native channel binding is not exhaustive");
   for (const auto &binding : kNativeBindings) {
@@ -549,7 +549,7 @@ bool BuildNativeProfileConfig(
     if (canonical_input && (id == "state.vision.pose" || id == "state.mocap.acceleration")) continue;
     const auto endpoint_count = binding.endpoint_count - (canonical_input && (id == "state.mocap.pose" || id == "state.mocap.velocity") ? 1u : 0u);
     contract::ChannelMetadata channel{};
-    if (!contract::channelMetadata(config.profile_id, binding.id, &channel) ||
+    if (!InstalledContract().channelMetadata(config.profile_id, binding.id, &channel) ||
         channel.kind != binding.kind ||
         std::string(channel.processor) != binding.processor ||
         channel.output_message_id == 0u ||
@@ -560,7 +560,7 @@ bool BuildNativeProfileConfig(
                              binding.id);
     }
     contract::MessageMetadata message{};
-    if (!contract::messageMetadata(channel.output_message_id, &message) ||
+    if (!InstalledContract().messageMetadata(channel.output_message_id, &message) ||
         std::string(message.type_name) != binding.output_type) {
       return fail(error, std::string("PX4 output schema binding drifted: ") +
                              binding.id);
@@ -595,7 +595,7 @@ bool BuildNativeProfileConfig(
     }
     for (std::size_t index = 0u; index < channel.observes_count; ++index) {
       contract::ChannelMetadata observed{};
-      if (!contract::channelMetadata(config.profile_id, channel.observes[index],
+      if (!InstalledContract().channelMetadata(config.profile_id, channel.observes[index],
                                      &observed) ||
           observed.kind != contract::ChannelKind::kStreamOut)
         return fail(error, "PX4 observes binding references an invalid stream");
@@ -719,15 +719,15 @@ bool BuildNativeProfileConfig(
   contract::ChannelMetadata reboot{};
   contract::ChannelMetadata remote{};
   contract::ChannelMetadata vision{};
-  contract::channelMetadata(config.profile_id, "diagnostic.offboard-input",
+  InstalledContract().channelMetadata(config.profile_id, "diagnostic.offboard-input",
                             &offboard);
-  contract::channelMetadata(config.profile_id, "operation.arm", &arm);
-  contract::channelMetadata(config.profile_id, "operation.mode", &mode);
-  contract::channelMetadata(config.profile_id, "operation.autopilot-reboot",
+  InstalledContract().channelMetadata(config.profile_id, "operation.arm", &arm);
+  InstalledContract().channelMetadata(config.profile_id, "operation.mode", &mode);
+  InstalledContract().channelMetadata(config.profile_id, "operation.autopilot-reboot",
                             &reboot);
-  contract::channelMetadata(config.profile_id, "operation.motion-intent",
+  InstalledContract().channelMetadata(config.profile_id, "operation.motion-intent",
                             &remote);
-  contract::channelMetadata(config.profile_id, "state.vision.pose", &vision);
+  InstalledContract().channelMetadata(config.profile_id, "state.vision.pose", &vision);
   double offboard_rate = 0.0;
   std::int64_t offboard_timeout = 0;
   const char *const *allowed_modes = nullptr;
@@ -832,8 +832,7 @@ double positionDistanceMeters(const geometry_msgs::Point &left,
 std::shared_ptr<RobotRuntime>
 RobotRuntime::Create(ros::NodeHandle node_handle,
                      const xgc2_ros1_robot_adapter::RobotConfig &config,
-                     std::uint64_t spec_revision, EnvelopeEmitter emitter,
-                     std::string *error) {
+                     EnvelopeEmitter emitter, std::string *error) {
   const auto namespace_it =
       config.parameters.find("namespace");
   if (namespace_it == config.parameters.end()) {
@@ -864,7 +863,7 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
                                             required_channels.end());
     for (const auto &channel_id : snapshot) {
       contract::ChannelMetadata channel{};
-      if (!contract::channelMetadata(config.profile_id, channel_id, &channel))
+      if (!InstalledContract().channelMetadata(config.profile_id, channel_id, &channel))
         continue;
       for (std::size_t index = 0u; index < channel.observes_count; ++index) {
         if (required_channels.insert(channel.observes[index]).second)
@@ -883,7 +882,7 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
 
   auto runtime = std::shared_ptr<RobotRuntime>(new RobotRuntime(
       std::move(node_handle), config.robot_id, config.profile_id,
-      namespace_it->second, spec_revision, std::move(enabled_channels),
+      namespace_it->second, std::move(enabled_channels),
       std::move(required_channels), std::move(native_profile),
       positioning_health_config, std::move(emitter)));
   try {
@@ -900,7 +899,6 @@ RobotRuntime::Create(ros::NodeHandle node_handle,
 
 RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
                            std::string profile_id, std::string robot_namespace,
-                           std::uint64_t spec_revision,
                            std::set<std::string> enabled_channels,
                            std::set<std::string> required_channels,
                            NativeProfileConfig native_profile,
@@ -910,7 +908,6 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
     : node_handle_(std::move(node_handle)), robot_id_(std::move(robot_id)),
       profile_id_(std::move(profile_id)),
       robot_namespace_(cleanTopicPart(robot_namespace)),
-      spec_revision_(spec_revision),
       enabled_channels_(std::move(enabled_channels)),
       required_channels_(std::move(required_channels)),
       emitter_(std::move(emitter)),
@@ -1028,7 +1025,7 @@ bool RobotRuntime::channelRequired(const std::string &channel_id) const {
 }
 
 bool RobotRuntime::install(std::string *error) {
-  if (!contract::profileDigest(profile_id_)) {
+  if (!InstalledContract().profileDigest(profile_id_)) {
     if (error != nullptr) {
       *error = "unsupported profile: " + profile_id_;
     }
@@ -1045,7 +1042,7 @@ bool RobotRuntime::install(std::string *error) {
 
   ROS_INFO_STREAM("XGC Robot Adapter robot="
                   << robot_id_ << " profile=" << profile_id_ << " namespace=/"
-                  << robot_namespace_ << " revision=" << spec_revision_);
+                  << robot_namespace_);
   return true;
 }
 
@@ -1275,7 +1272,7 @@ bool RobotRuntime::installPx4(std::string *error) {
 bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
                                     const ros::WallTime &now) {
   contract::ChannelMetadata metadata;
-  if (!contract::channelMetadata(profile_id_, channel_id, &metadata) ||
+  if (!InstalledContract().channelMetadata(profile_id_, channel_id, &metadata) ||
       metadata.output_rate_hz <= 0.0) {
     return false;
   }
@@ -1295,13 +1292,13 @@ RobotRuntime::makeEnvelopeLocked(const std::string &channel_id,
   auto cached = message_schemas_.find(channel_id);
   if (cached == message_schemas_.end()) {
     contract::ChannelMetadata channel;
-    if (!contract::channelMetadata(profile_id_, channel_id, &channel) ||
+    if (!InstalledContract().channelMetadata(profile_id_, channel_id, &channel) ||
         channel.output_message_id == 0u) {
       throw std::logic_error(
           "channel output is absent from generated XGC2 contract metadata");
     }
     contract::MessageMetadata metadata;
-    if (!contract::messageMetadata(channel.output_message_id, &metadata)) {
+    if (!InstalledContract().messageMetadata(channel.output_message_id, &metadata)) {
       throw std::logic_error(
           "message ID is absent from generated XGC2 contract metadata");
     }
@@ -2098,7 +2095,7 @@ void RobotRuntime::emitStreamHealthLocked(
     return;
   }
   contract::ChannelMetadata health_channel{};
-  if (!contract::channelMetadata(profile_id_, "diagnostic.stream-health",
+  if (!InstalledContract().channelMetadata(profile_id_, "diagnostic.stream-health",
                                  &health_channel)) {
     throw std::logic_error("stream-health descriptor is missing");
   }

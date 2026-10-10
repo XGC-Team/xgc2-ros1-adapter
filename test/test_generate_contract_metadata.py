@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -89,6 +90,7 @@ MESSAGE_ROLES = {
 }
 
 TYPE_NAMES = {
+    1: "xgc.v1.Empty",
     2005: "xgc.semantic.common.v1.VehicleHealth",
     2006: "xgc.semantic.common.v1.SpeedEstimate",
     2007: "xgc.semantic.common.v1.DistanceEstimate",
@@ -168,21 +170,29 @@ class ContractGeneratorTest(unittest.TestCase):
             "copyVector(message.accel.linear, payload.mutable_linear());\n"
             "  copyVector(message.accel.angular, payload.mutable_angular());"
         )
-        for profile_path, definition_id, package, source_directory in (
-            (
-                SCOUT_PROFILE_PATH,
-                "xgc2-scout-mini-ros1-adapter",
-                "xgc_scout_mini_ros1_adapter",
-                "scout_mini_ros1_adapter",
-            ),
-            (
-                MECANUM_PROFILE_PATH,
-                MECANUM_DEFINITION_ID,
-                "xgc_mecanum_ugv_ros1_adapter",
-                "mecanum_ugv_ros1_adapter",
-            ),
+        runtime = (
+            REPOSITORY_ROOT / "src" / "ugv_ros1_adapter" / "src" / "robot_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn(converter_signature, runtime)
+        self.assertIn(converter_fields, runtime)
+        self.assertIn("subscribe<geometry_msgs::AccelStamped>", runtime)
+        accel_binding = re.search(
+            r'\{"vrpn\.acceleration".*?false\},', runtime, re.DOTALL
+        )
+        self.assertIsNotNone(accel_binding)
+        self.assertIn("geometry_msgs/AccelStamped", accel_binding.group(0))
+        self.assertNotIn("TwistStamped", accel_binding.group(0))
+        test_source = (
+            REPOSITORY_ROOT / "src" / "ugv_ros1_adapter" / "test" / "robot_runtime_test.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("MapsCanonicalAccelStampedLinearAndAngular", test_source)
+        self.assertIn("source.accel.linear.x", test_source)
+        self.assertIn("source.accel.angular.z", test_source)
+        for profile_path, definition_id, namespace in (
+            (SCOUT_PROFILE_PATH, "xgc2-scout-mini-ros1-adapter", "xgc_ugv::scout_mini"),
+            (MECANUM_PROFILE_PATH, MECANUM_DEFINITION_ID, "xgc_ugv::mecanum_ugv"),
         ):
-            with self.subTest(package=package):
+            with self.subTest(definition=definition_id):
                 profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
                 accel = next(
                     channel
@@ -217,42 +227,14 @@ class ContractGeneratorTest(unittest.TestCase):
                     self.messages,
                     loaded,
                     definition_id,
-                    package,
+                    namespace,
                 )
+                self.assertIn("namespace {} {{".format(namespace), header)
                 self.assertIn(
                     'EndpointKind::kInput, "acceleration", "{mocap_rigid_body}/accel", '
                     '"geometry_msgs/AccelStamped"',
                     header,
                 )
-                runtime = (
-                    REPOSITORY_ROOT / "src" / source_directory / "src" / "robot_runtime.cpp"
-                ).read_text(encoding="utf-8")
-                self.assertIn(converter_signature, runtime)
-                self.assertIn(converter_fields, runtime)
-                self.assertIn(
-                    "subscribe<geometry_msgs::AccelStamped>",
-                    runtime,
-                )
-                binding_block = runtime.split("kNativeBindings")[1].split("}};")[0]
-                accel_start = binding_block.find('"vrpn.acceleration"')
-                self.assertNotEqual(accel_start, -1)
-                next_binding = binding_block.find('{"', accel_start + 1)
-                accel_binding = binding_block[accel_start:next_binding]
-                self.assertIn("geometry_msgs/AccelStamped", accel_binding)
-                self.assertNotIn("TwistStamped", accel_binding)
-                test_source = (
-                    REPOSITORY_ROOT
-                    / "src"
-                    / source_directory
-                    / "test"
-                    / "robot_runtime_test.cpp"
-                ).read_text(encoding="utf-8")
-                self.assertIn(
-                    "MapsCanonicalAccelStampedLinearAndAngular",
-                    test_source,
-                )
-                self.assertIn("source.accel.linear.x", test_source)
-                self.assertIn("source.accel.angular.z", test_source)
 
     def test_px4_native_operation_policies_are_explicit(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -370,47 +352,32 @@ class ContractGeneratorTest(unittest.TestCase):
             contract_digest(PX4_PROFILE_PATH, "another-provider"), baseline
         )
 
-    def test_cmake_uses_one_provider_identity_for_header_and_catalog(self):
+    def test_cmake_gives_header_and_catalog_one_provider_identity(self):
         packages = (
+            ("px4_multirotor_ros1_adapter", ("xgc2-px4-multirotor-ros1-adapter",)),
             (
-                "xgc_px4_multirotor_ros1_adapter",
-                "px4_multirotor_ros1_adapter",
-                "xgc2-px4-multirotor-ros1-adapter",
-            ),
-            (
-                "xgc_scout_mini_ros1_adapter",
-                "scout_mini_ros1_adapter",
-                "xgc2-scout-mini-ros1-adapter",
-            ),
-            (
-                "xgc_mecanum_ugv_ros1_adapter",
-                "mecanum_ugv_ros1_adapter",
-                "xgc2-mecanum-ugv-ros1-adapter",
+                "ugv_ros1_adapter",
+                ("xgc2-scout-mini-ros1-adapter", "xgc2-mecanum-ugv-ros1-adapter"),
             ),
         )
-        for package, source_directory, definition_id in packages:
+        for source_directory, definition_ids in packages:
             cmake = (
                 REPOSITORY_ROOT / "src" / source_directory / "CMakeLists.txt"
             ).read_text(encoding="utf-8")
-            with self.subTest(package=package):
-                self.assertIn(
-                    'set(ADAPTER_DEFINITION_ID "{}")'.format(definition_id),
-                    cmake,
+            with self.subTest(package=source_directory):
+                self.assertEqual(
+                    cmake.count("xgc2_add_robot_profiles("), len(definition_ids)
                 )
-                self.assertIn(
-                    '--definition-id "${ADAPTER_DEFINITION_ID}"', cmake
-                )
-                self.assertIn(
-                    "robot-adapter-profile-v4.schema.json", cmake
-                )
-                self.assertIn(
-                    "xgc2_add_robot_runtime_manifests(\n"
-                    "  ${PROJECT_NAME}_node\n"
-                    "  ${ADAPTER_DEFINITION_ID}",
-                    cmake,
-                )
+                for definition_id in definition_ids:
+                    self.assertIn("DEFINITION_ID {}".format(definition_id), cmake)
+        function = (
+            REPOSITORY_ROOT / "src" / "common" / "cmake" / "robot_profiles.cmake"
+        ).read_text(encoding="utf-8")
+        self.assertIn("robot-adapter-profile-v4.schema.json", function)
+        # One call produces both artifacts from one definition identity.
+        self.assertEqual(function.count('--definition-id "${PROFILE_DEFINITION_ID}"'), 2)
 
-    def test_complete_descriptor_header_compiles_as_cxx14(self):
+    def test_complete_contract_header_compiles_and_answers_the_lookups(self):
         compiler = shutil.which("c++")
         if compiler is None:
             self.skipTest("C++ compiler is unavailable")
@@ -434,24 +401,38 @@ class ContractGeneratorTest(unittest.TestCase):
 #include "generated_contract.hpp"
 
 int main() {
-  using namespace fixture_robot_adapter::contract;
+  using namespace xgc2_ros1_robot_adapter::contract;
+  const Contract& installed = fixture_robot_adapter::InstalledContract();
+  if (std::string(installed.providerDefinitionId()) != "xgc2-px4-multirotor-ros1-adapter" ||
+      installed.registryFingerprint() != 987654321ULL) {
+    return 1;
+  }
+  const std::string profile = installed.primaryProfile().profile_id;
   std::size_t channel_count = 0u;
-  const ChannelMetadata* channels = profileChannels(kProfileId, &channel_count);
+  const ChannelMetadata* channels = installed.profileChannels(profile, &channel_count);
   ChannelMetadata arm{};
   if (channels == nullptr || channel_count == 0u ||
-      !channelMetadata(kProfileId, "operation.arm", &arm)) {
-    return 1;
+      !installed.channelMetadata(profile, "operation.arm", &arm) ||
+      installed.profileDigest(profile) == nullptr ||
+      installed.profileDigest("unknown.profile") != nullptr) {
+    return 2;
   }
   const EndpointMetadata* service =
       channelEndpoint(arm, EndpointKind::kService, "service");
   std::int64_t timeout = 0;
   if (service == nullptr ||
       !channelPolicyInteger(arm, "timeout_ms", &timeout)) {
-    return 2;
+    return 3;
   }
   OperationMetadata mode{};
-  if (!operationMetadata(kProfileId, "set-flight-mode", &mode)) {
-    return 3;
+  if (!installed.operationMetadata(profile, "set-flight-mode", &mode)) {
+    return 4;
+  }
+  MessageMetadata empty{};
+  if (!installed.messageMetadata(arm.output_message_id, &empty) ||
+      std::string(empty.type_name) != "xgc.v1.Empty" ||
+      installed.messageMetadata(999999u, &empty)) {
+    return 5;
   }
   const std::string schema(mode.parameter_schema_json);
   return timeout == 5000 && arm.output_message_id == 1u &&
@@ -459,21 +440,26 @@ int main() {
                  schema.find("additionalProperties") != std::string::npos &&
                  schema.find("OFFBOARD") != std::string::npos
              ? 0
-             : 4;
+             : 6;
 }
 """,
             encoding="utf-8",
         )
+        program = self.temp / "contract_test"
         completed = subprocess.run(
             [
                 compiler,
-                "-std=c++14",
+                "-std=c++17",
                 "-Wall",
                 "-Wextra",
                 "-Wpedantic",
                 "-Werror",
-                "-fsyntax-only",
+                "-I",
+                str(REPOSITORY_ROOT / "src" / "common" / "include"),
                 str(translation_unit),
+                str(REPOSITORY_ROOT / "src" / "common" / "src" / "contract.cpp"),
+                "-o",
+                str(program),
             ],
             cwd=self.temp,
             check=False,
@@ -481,6 +467,8 @@ int main() {
             text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+        ran = subprocess.run([str(program)], check=False, capture_output=True, text=True)
+        self.assertEqual(ran.returncode, 0, "contract program failed at step {}".format(ran.returncode))
 
     def test_schema_rejects_unowned_native_fields(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
@@ -839,11 +827,9 @@ int main() {
 
         self.assertNotIn("kNamespaceParameter", header)
         self.assertNotIn("kRosNamespace", header)
-        self.assertIn(
-            'if (profile_id == "scout-mini.physical.vrpn") {\n'
-            "    *count = 0u;\n"
-            "    return nullptr;",
+        self.assertRegex(
             header,
+            r'\{"scout-mini\.physical\.vrpn", "[0-9a-f]{64}", nullptr, 0u, ',
         )
 
 

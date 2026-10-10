@@ -1,0 +1,236 @@
+#pragma once
+
+#include <condition_variable>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <vector>
+
+#include <geometry_msgs/AccelStamped.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/Twist.h>
+#include <geometry_msgs/TwistStamped.h>
+#include <ros/ros.h>
+#include <sensor_msgs/Imu.h>
+#include <std_msgs/Float32.h>
+#include <std_msgs/String.h>
+#include <std_msgs/UInt32.h>
+
+#include "xgc/robot/v1/message.pb.h"
+#include "xgc/semantic/common/v1/acceleration.pb.h"
+#include "xgc/semantic/ground/v1/chassis.pb.h"
+#include "xgc2_ros1_robot_adapter/ground_health.hpp"
+#include "xgc2_ros1_robot_adapter/localization_projection.hpp"
+#include "xgc2_ros1_robot_adapter/robot_domain.hpp"
+#include "xgc_ugv_ros1_adapter/variant.hpp"
+
+namespace xgc_ugv_ros1_adapter {
+
+std::string topicName(const std::string &robot_namespace,
+                      const std::string &relative_name);
+bool validRobotNamespace(const std::string &value, std::string *error);
+bool validMocapRigidBodyName(const std::string &value, std::string *error);
+bool resolveMotionCommandTopic(
+    const UgvVariant &variant,
+    const xgc2_ros1_robot_adapter::RobotConfig &config, std::string *topic,
+    std::string *error);
+bool sourceIsFresh(const ros::WallTime &last_seen, const ros::WallTime &now,
+                   double stale_after_seconds);
+struct StreamRateEstimate {
+  double source_rate_hz = 0.0;
+  double output_rate_hz = 0.0;
+};
+StreamRateEstimate updateStreamRateEstimate(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh);
+// One stream-health emit: `close` tells whether the observation window ended
+// and its sample counters restart. A window of zero seconds ends at every emit.
+struct StreamRateWindow {
+  StreamRateEstimate rates;
+  bool close = false;
+};
+StreamRateWindow updateStreamRateWindow(
+    const StreamRateEstimate &previous, std::uint64_t source_samples,
+    std::uint64_t output_samples, double elapsed_seconds, bool source_fresh,
+    double window_seconds);
+double vrpnForwardSpeedMetersPerSecond(
+    double velocity_x, double velocity_y, double velocity_z,
+    double orientation_x, double orientation_y, double orientation_z,
+    double orientation_w);
+xgc::semantic::ground::v1::ChassisStatus::ControlMode
+chassisControlMode(std::uint8_t native_mode);
+xgc::semantic::common::v1::AccelerationEstimate
+vrpnAccelerationEstimate(const geometry_msgs::AccelStamped &message);
+
+// The chassis state word a Scout publishes: control mode, base state, fault.
+struct ChassisState {
+  unsigned control_mode = 0;
+  unsigned base_state = 0;
+  unsigned fault_code = 0;
+};
+
+std::uint32_t packChassisState(unsigned control_mode, unsigned base_state,
+                               unsigned fault_code);
+bool unpackChassisState(std::uint32_t word, ChassisState *out);
+// Checks that the installed profiles of this robot type bind the topics,
+// payloads and operations the runtime implements.
+bool validateNativeProfileContract(const UgvVariant &variant,
+                                   std::string *error);
+class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
+public:
+  using EnvelopeEmitter = std::function<void(xgc::robot::v1::RobotMessage)>;
+
+  static std::shared_ptr<RobotRuntime>
+  Create(const UgvVariant &variant, ros::NodeHandle node_handle,
+         const xgc2_ros1_robot_adapter::RobotConfig &config,
+         EnvelopeEmitter emitter, std::string *error);
+
+  ~RobotRuntime();
+
+  // Synchronously fences every ROS callback. After Stop returns no telemetry
+  // item can be emitted by this runtime.
+  void Stop();
+
+  const std::string &robotId() const { return robot_id_; }
+  const std::string &profileId() const { return profile_id_; }
+  bool channelEnabled(const std::string &channel_id) const;
+
+  void emitPeriodic(const ros::WallTime &now);
+
+private:
+  class CallbackGuard {
+  public:
+    explicit CallbackGuard(RobotRuntime *runtime);
+    ~CallbackGuard();
+    explicit operator bool() const { return active_; }
+
+  private:
+    RobotRuntime *runtime_;
+    bool active_;
+  };
+
+  struct SourceTracker {
+    ros::WallTime last_seen;
+    ros::WallTime window_started;
+    std::uint64_t source_samples = 0;
+    std::uint64_t output_samples = 0;
+    std::uint64_t dropped_samples = 0;
+    double source_rate_hz = 0.0;
+    double output_rate_hz = 0.0;
+    double stale_after_seconds = 1.0;
+  };
+
+  RobotRuntime(const UgvVariant &variant, ros::NodeHandle node_handle,
+               std::string robot_id, std::string profile_id,
+               std::string robot_namespace,
+               std::set<std::string> enabled_channels,
+               std::set<std::string> required_channels,
+               std::string mocap_rigid_body, std::string pose_endpoint,
+               std::string vrpn_velocity_endpoint,
+               std::string vrpn_acceleration_endpoint,
+               std::string canonical_pose_endpoint,
+               std::string canonical_velocity_endpoint,
+               std::string canonical_acceleration_endpoint,
+               xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
+               std::string command_velocity_endpoint, std::string imu_endpoint,
+               std::string voltage_endpoint, std::string chassis_state_endpoint,
+               std::string controller_status_endpoint,
+               xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
+               std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve,
+               EnvelopeEmitter emitter);
+
+  bool install(std::string *error);
+  bool beginCallback();
+  void endCallback();
+  bool shouldEmitLocked(const std::string &channel_id,
+                        const ros::WallTime &now);
+  xgc::robot::v1::RobotMessage
+  makeEnvelopeLocked(const std::string &channel_id,
+                     const ros::Time &source_stamp,
+                     const google::protobuf::Message &payload);
+  void emit(std::vector<xgc::robot::v1::RobotMessage> messages);
+  void ensureSourceLocked(const std::string &endpoint,
+                          double stale_after_seconds);
+  void recordSourceLocked(const std::string &endpoint,
+                          const ros::WallTime &now);
+  void recordOutputLocked(const std::string &endpoint);
+  bool sourceFreshLocked(const std::string &endpoint,
+                         const ros::WallTime &now) const;
+  std::uint64_t sourceAgeMillisLocked(const std::string &endpoint,
+                                      const ros::WallTime &now) const;
+
+  void poseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void vrpnVelocityCallback(
+      const geometry_msgs::TwistStamped::ConstPtr &message);
+  void vrpnAccelerationCallback(
+      const geometry_msgs::AccelStamped::ConstPtr &message);
+  void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
+  void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
+  void voltageCallback(const std_msgs::Float32::ConstPtr &message);
+  void chassisStateCallback(const std_msgs::UInt32::ConstPtr &message);
+  void controllerStatusCallback(const std_msgs::String::ConstPtr &message);
+  void emitHealthLocked(const ros::WallTime &now,
+                        std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void emitStreamHealthLocked(const ros::WallTime &now,
+                              std::vector<xgc::robot::v1::RobotMessage> *messages);
+
+  const UgvVariant &variant_;
+  ros::NodeHandle node_handle_;
+  const std::string robot_id_;
+  const std::string profile_id_;
+  const std::string robot_namespace_;
+  const std::string mocap_rigid_body_;
+  const std::set<std::string> enabled_channels_;
+  const std::set<std::string> required_channels_;
+  std::map<std::string, xgc2_ros1_robot_adapter::MessageSchema> message_schemas_;
+  const EnvelopeEmitter emitter_;
+
+  const std::string pose_endpoint_;
+  const std::string vrpn_velocity_endpoint_;
+  const std::string vrpn_acceleration_endpoint_;
+  const std::string canonical_pose_endpoint_;
+  const std::string canonical_velocity_endpoint_;
+  const std::string canonical_acceleration_endpoint_;
+  const std::string command_velocity_endpoint_;
+  const std::string imu_endpoint_;
+  const std::string voltage_endpoint_;
+  const std::string chassis_state_endpoint_;
+  const std::string controller_status_endpoint_;
+  const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
+  xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
+  const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
+  xgc2_ros1_robot_adapter::BatteryVoltageFilter battery_voltage_filter_;
+
+  mutable std::mutex mutex_;
+  std::condition_variable callbacks_idle_;
+  bool stopping_ = false;
+  bool stop_complete_ = false;
+  std::size_t active_callbacks_ = 0;
+  std::map<std::string, SourceTracker> sources_;
+  std::map<std::string, ros::WallTime> last_output_;
+  std::map<std::string, std::uint64_t> sequences_;
+
+  ChassisState chassis_status_;
+  ros::Time status_stamp_;
+  bool has_chassis_ = false;
+  geometry_msgs::Quaternion vrpn_orientation_;
+  bool has_vrpn_orientation_ = false;
+
+  ros::Subscriber pose_subscriber_;
+  ros::Subscriber vrpn_velocity_subscriber_;
+  ros::Subscriber vrpn_acceleration_subscriber_;
+  ros::Subscriber command_velocity_subscriber_;
+  ros::Subscriber imu_subscriber_;
+  ros::Subscriber voltage_subscriber_;
+  ros::Subscriber chassis_state_subscriber_;
+  ros::Subscriber controller_status_subscriber_;
+  ros::Publisher canonical_pose_publisher_;
+  ros::Publisher canonical_velocity_publisher_;
+  ros::Publisher canonical_acceleration_publisher_;
+};
+
+} // namespace xgc_ugv_ros1_adapter

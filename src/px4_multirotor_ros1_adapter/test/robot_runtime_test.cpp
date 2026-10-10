@@ -16,7 +16,7 @@ namespace {
 xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   xgc2_ros1_robot_adapter::RobotConfig config;
   config.robot_id = "uav1";
-  config.profile_id = contract::kProfileId;
+  config.profile_id = InstalledContract().primaryProfile().profile_id;
   config.parameters["namespace"] = "/uav1";
   config.parameters["mocap_rigid_body"] = "FS150_01";
   config.parameters["mocap_source_root"] = "/vrpn_client_node_physical";
@@ -168,14 +168,14 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
       native.allowed_modes);
 
   contract::ChannelMetadata mocap_pose{};
-  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.mocap.pose",
+  ASSERT_TRUE(InstalledContract().channelMetadata(InstalledContract().primaryProfile().profile_id, "state.mocap.pose",
                                         &mocap_pose));
   EXPECT_STREQ("px4.mocap-pose", mocap_pose.processor);
   EXPECT_EQ(2u, mocap_pose.endpoint_count);
   EXPECT_EQ(1u, mocap_pose.policy_count);
 
   contract::ChannelMetadata vision_pose{};
-  ASSERT_TRUE(contract::channelMetadata(contract::kProfileId, "state.vision.pose",
+  ASSERT_TRUE(InstalledContract().channelMetadata(InstalledContract().primaryProfile().profile_id, "state.vision.pose",
                                         &vision_pose));
   EXPECT_STREQ("px4.vision-pose", vision_pose.processor);
   EXPECT_EQ(1u, vision_pose.endpoint_count);
@@ -206,7 +206,7 @@ TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
 TEST(Freshness, AppliesThePx4PoseBoundary) {
   contract::ChannelMetadata pose{};
   ASSERT_TRUE(
-      contract::channelMetadata(contract::kProfileId, "state.pose", &pose));
+      InstalledContract().channelMetadata(InstalledContract().primaryProfile().profile_id, "state.pose", &pose));
   const double stale_after_seconds =
       static_cast<double>(pose.stale_after_millis) / 1000.0;
   const ros::WallTime now(10, 0);
@@ -247,31 +247,31 @@ TEST(InstalledProfile, VisionForwardingIsOptionalAndRequiresAnExplicitBoolean) {
 }
 
 TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
-  const char *digest = contract::profileDigest("px4-multirotor.physical.vrpn");
+  const char *digest = InstalledContract().profileDigest("px4-multirotor.physical.vrpn");
   ASSERT_NE(nullptr, digest);
   EXPECT_EQ(64u, std::string(digest).size());
 
   contract::ChannelMetadata pose;
   ASSERT_TRUE(
-      contract::channelMetadata("px4-multirotor.physical.vrpn", "state.pose", &pose));
+      InstalledContract().channelMetadata("px4-multirotor.physical.vrpn", "state.pose", &pose));
   EXPECT_EQ(contract::ChannelKind::kStreamOut, pose.kind);
   EXPECT_EQ(2001u, pose.output_message_id);
 
   contract::ChannelMetadata controller;
-  ASSERT_TRUE(contract::channelMetadata("px4-multirotor.physical.vrpn",
+  ASSERT_TRUE(InstalledContract().channelMetadata("px4-multirotor.physical.vrpn",
                                         "state.controller", &controller));
   EXPECT_EQ(2012u, controller.output_message_id);
   EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
   EXPECT_EQ("px4.controller-status", std::string(controller.processor));
 
   contract::ChannelMetadata arm;
-  ASSERT_TRUE(contract::channelMetadata("px4-multirotor.physical.vrpn",
+  ASSERT_TRUE(InstalledContract().channelMetadata("px4-multirotor.physical.vrpn",
                                         "operation.arm", &arm));
   EXPECT_EQ(contract::ChannelKind::kOperation, arm.kind);
   EXPECT_EQ(3201u, arm.input_message_id);
 
   contract::OperationMetadata mode;
-  ASSERT_TRUE(contract::operationMetadata(
+  ASSERT_TRUE(InstalledContract().operationMetadata(
       "px4-multirotor.physical.vrpn", "set-flight-mode", &mode));
   EXPECT_EQ(5000u, mode.timeout_millis);
   const std::string parameter_schema(mode.parameter_schema_json);
@@ -281,30 +281,23 @@ TEST(InstalledProfile, KeepsRobotMetadataOutOfTheRuntimeProtocol) {
 
 TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
   contract::MessageMetadata metadata;
-  EXPECT_TRUE(contract::messageMetadata(3201, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3202, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3203, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3206, &metadata));
-  EXPECT_FALSE(contract::messageMetadata(5001, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3002, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3003, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3004, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(3005, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(2006, &metadata));
-  EXPECT_TRUE(contract::messageMetadata(2007, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3201, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3202, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3203, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3206, &metadata));
+  EXPECT_FALSE(InstalledContract().messageMetadata(5001, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3002, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3003, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3004, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(3005, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(2006, &metadata));
+  EXPECT_TRUE(InstalledContract().messageMetadata(2007, &metadata));
 }
 
-TEST(InstalledContract, PinsRobotWireSchemaIdentities) {
-  EXPECT_EQ(6362961126724301134ULL, contract::kRegistryFingerprint);
-
-  contract::MessageMetadata metadata;
-  ASSERT_TRUE(contract::messageMetadata(4001u, &metadata));
-  EXPECT_EQ(3u, metadata.version);
-  EXPECT_EQ(2292867660820935957ULL, metadata.fingerprint);
-
-  ASSERT_TRUE(contract::messageMetadata(4002u, &metadata));
-  EXPECT_EQ(1u, metadata.version);
-  EXPECT_EQ(17732826818852005547ULL, metadata.fingerprint);
+TEST(InstalledContract, PinsTheRegistryItWasGeneratedFrom) {
+  EXPECT_EQ(6362961126724301134ULL, InstalledContract().registryFingerprint());
+  EXPECT_EQ(std::string("xgc2-px4-multirotor-ros1-adapter"),
+            InstalledContract().providerDefinitionId());
 }
 
 } // namespace

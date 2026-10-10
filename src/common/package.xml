@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>xgc_ros1_adapter_common</name>
+  <version>0.6.0</version>
+  <description>
+    Shared code of the XGC2 ROS1 robot type servers: the ROS-agnostic gRPC
+    server core (members, commands, status, Run-owned lifecycle), the ROS1
+    binding behind it, and the generated robot protocol.
+  </description>
+
+  <maintainer email="lxk@example.com">XGC</maintainer>
+  <license>Unspecified</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend version_gte="1.16">libgrpc++-dev</build_depend>
+  <build_depend>libxgc2-xrpc-grpc-dev</build_depend>
+  <build_depend>libc-ares-dev</build_depend>
+  <build_depend>libprotobuf-dev</build_depend>
+  <build_depend>protobuf-compiler-grpc</build_depend>
+  <build_depend>nlohmann-json3-dev</build_depend>
+  <build_depend>xgc2-protobuf-dev</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>roscpp</build_depend>
+
+  <build_export_depend>geometry_msgs</build_export_depend>
+  <build_export_depend>roscpp</build_export_depend>
+
+  <exec_depend>libgrpc++1</exec_depend>
+  <exec_depend>libxgc2-xrpc-grpc1</exec_depend>
+  <exec_depend>libc-ares2</exec_depend>
+  <exec_depend>libprotobuf17</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>roscpp</exec_depend>
+
+  <test_depend>rostest</test_depend>
+</package>
