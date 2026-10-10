@@ -15,10 +15,7 @@
 
 namespace xgc2_ros1_robot_adapter {
 struct RobotServerArguments {
-  std::string bootstrap_file, socket_path, provider, target_id, ros_master_uri,
-      ros_ip;
-  bool check = false;
-  int timeout_ms = 2000;
+  std::string socket_path, provider, target_id, ros_master_uri, ros_ip;
 };
 
 inline bool ValidRuntimeReferenceId(const std::string &value) {
@@ -59,17 +56,12 @@ ParseRobotServerArguments(int argc, char **argv,
   std::set<std::string> seen;
   for (int index = 1; index < argc; ++index) {
     const std::string flag(argv[index]);
-    if (flag != "--adapter-bootstrap-file" && flag != "--socket-path" &&
-        flag != "--provider" && flag != "--target-id" &&
-        flag != "--ros-master-uri" && flag != "--ros-ip" && flag != "--check" &&
-        flag != "--timeout-ms")
+    if (flag != "--socket-path" && flag != "--provider" &&
+        flag != "--target-id" && flag != "--ros-master-uri" &&
+        flag != "--ros-ip")
       throw std::runtime_error("unknown argument: " + flag);
     if (!seen.insert(flag).second)
       throw std::runtime_error("argument occurs more than once: " + flag);
-    if (flag == "--check") {
-      result.check = true;
-      continue;
-    }
     if (index + 1 >= argc ||
         std::string(argv[index + 1]).compare(0, 2, "--") == 0)
       throw std::runtime_error("missing value for " + flag);
@@ -77,9 +69,7 @@ ParseRobotServerArguments(int argc, char **argv,
     if ((value.empty() && flag != "--ros-ip") ||
         value.find('\0') != std::string::npos)
       throw std::runtime_error("empty value for " + flag);
-    if (flag == "--adapter-bootstrap-file")
-      result.bootstrap_file = value;
-    else if (flag == "--socket-path")
+    if (flag == "--socket-path")
       result.socket_path = value;
     else if (flag == "--provider")
       result.provider = value;
@@ -87,44 +77,14 @@ ParseRobotServerArguments(int argc, char **argv,
       result.target_id = value;
     else if (flag == "--ros-master-uri")
       result.ros_master_uri = value;
-    else if (flag == "--ros-ip")
+    else
       result.ros_ip = value;
-    else {
-      unsigned int timeout = 0;
-      for (const char character : value) {
-        if (character < '0' || character > '9' || timeout > 6000)
-          throw std::runtime_error(
-              "timeout-ms must be an integer between 1 and 60000");
-        timeout = timeout * 10 + static_cast<unsigned int>(character - '0');
-      }
-      if (!timeout || timeout > 60000)
-        throw std::runtime_error(
-            "timeout-ms must be an integer between 1 and 60000");
-      result.timeout_ms = static_cast<int>(timeout);
-    }
-  }
-  if (!result.bootstrap_file.empty()) {
-    if (seen.size() != 1)
-      throw std::runtime_error(
-          "bootstrap and native arguments cannot be mixed");
-    return result;
   }
   ValidateRobotSocketPath(result.socket_path);
-  if (result.check) {
-    if (!ValidRuntimeReferenceId(result.target_id))
-      throw std::runtime_error("check requires a bounded target-id");
-    if (seen.count("--provider") || seen.count("--ros-master-uri") ||
-        seen.count("--ros-ip"))
-      throw std::runtime_error(
-          "check accepts only socket-path, target-id and timeout-ms");
-  } else {
-    if (seen.count("--timeout-ms"))
-      throw std::runtime_error("timeout-ms requires check");
-    if (!ValidRuntimeReferenceId(result.target_id))
-      throw std::runtime_error("target-id must be a bounded XRPC identifier");
-    if (result.provider != native_provider)
-      throw std::runtime_error("provider must match this native robot server");
-  }
+  if (!ValidRuntimeReferenceId(result.target_id))
+    throw std::runtime_error("target-id must be a bounded XRPC identifier");
+  if (result.provider != native_provider)
+    throw std::runtime_error("provider must match this native robot server");
   return result;
 }
 

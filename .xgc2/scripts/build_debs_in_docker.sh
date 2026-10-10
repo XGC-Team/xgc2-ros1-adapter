@@ -184,7 +184,7 @@ docker exec "${container_name}" bash -lc '
       planned="$(cat)"
       while read -r package; do
         case "${package%%:*}" in
-          libxgc2-*|xgc2-*|ros-noetic-xgc2-*|ros-noetic-scout-msgs) ;;
+          libxgc2-*|xgc2-*|ros-noetic-xgc2-*) ;;
           *)
             echo "Managed build image lacks dependency ${package}; refusing third-party install" >&2
             exit 1
@@ -226,9 +226,6 @@ docker exec "${container_name}" bash -lc '
         >> /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
-    planned_transaction="$(apt-get --simulate install -y --no-install-recommends ros-noetic-scout-msgs)"
-    verify_firstparty_transaction <<<"${planned_transaction}"
-    apt-get install -y --no-install-recommends ros-noetic-scout-msgs
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \

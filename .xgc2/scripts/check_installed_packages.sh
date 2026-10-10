@@ -44,9 +44,8 @@ if grep -q 'scout-msgs' <<<"${px4_depends}"; then
   echo "PX4 adapter package must not depend on Scout messages" >&2
   exit 1
 fi
-grep -q "ros-${ROS_DISTRO}-scout-msgs" <<<"${scout_depends}"
-if grep -q 'mavros-msgs' <<<"${scout_depends}"; then
-  echo "Scout adapter package must not depend on MAVROS messages" >&2
+if grep -Eq 'mavros-msgs|scout-msgs' <<<"${scout_depends}"; then
+  echo "Scout adapter package must not depend on MAVROS or Scout messages" >&2
   exit 1
 fi
 if grep -Eq 'mavros-msgs|scout-msgs|sensor-msgs' <<<"${mecanum_depends}"; then

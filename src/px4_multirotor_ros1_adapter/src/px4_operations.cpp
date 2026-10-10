@@ -67,79 +67,10 @@ bool OperationResult::succeeded() const {
   return outcome == OperationOutcome::kSucceeded;
 }
 
-OperationTiming::OperationTiming(double timeout_seconds_value,
-                                 ros::WallTime deadline_value)
-    : timeout_seconds(timeout_seconds_value), deadline(deadline_value) {}
-
-bool OperationWindow::ready() const {
-  return state == OperationWindowState::kReady;
-}
-
-OperationWindow makeOperationWindow(const OperationTiming &timing,
-                                    const ros::WallTime &started_at,
-                                    double maximum_timeout_seconds) {
-  OperationWindow window;
-  window.started_at = started_at;
-
-  if (!std::isfinite(timing.timeout_seconds) || timing.timeout_seconds <= 0.0) {
-    window.detail = "operation timeout must be finite and positive";
-    return window;
-  }
-  if (!std::isfinite(maximum_timeout_seconds) ||
-      maximum_timeout_seconds <= 0.0) {
-    window.detail = "maximum operation timeout must be finite and positive";
-    return window;
-  }
-  if (!timing.deadline.isZero() && timing.deadline <= started_at) {
-    window.state = OperationWindowState::kExpired;
-    window.deadline = timing.deadline;
-    window.detail = "operation deadline has expired";
-    return window;
-  }
-
-  const double bounded_timeout =
-      std::min(timing.timeout_seconds, maximum_timeout_seconds);
-  try {
-    window.deadline = started_at + ros::WallDuration(bounded_timeout);
-  } catch (const std::runtime_error &) {
-    window.detail = "operation timeout exceeds the ROS wall-time range";
-    return window;
-  }
-  if (!timing.deadline.isZero() && timing.deadline < window.deadline) {
-    window.deadline = timing.deadline;
-  }
-  window.state = OperationWindowState::kReady;
-  window.detail = "operation may be dispatched";
-  return window;
-}
-
-ros::WallDuration operationTimeRemaining(const OperationWindow &window,
-                                         const ros::WallTime &now) {
-  if (!window.ready() || now < window.started_at || now >= window.deadline) {
-    return ros::WallDuration(0.0);
-  }
-  return window.deadline - now;
-}
-
 bool isAllowedPx4Mode(const std::string &mode,
                       const std::vector<std::string> &allowed_modes) {
   return std::find(allowed_modes.begin(), allowed_modes.end(), mode) !=
          allowed_modes.end();
-}
-
-ros::WallTime operationDeadlineFromUnixNanos(std::int64_t unix_nanos) {
-  if (unix_nanos <= 0)
-    return ros::WallTime();
-
-  constexpr std::uint64_t kNanosPerSecond = 1000000000ULL;
-  const std::uint64_t value = static_cast<std::uint64_t>(unix_nanos);
-  const std::uint64_t seconds = value / kNanosPerSecond;
-  if (seconds > std::numeric_limits<std::uint32_t>::max()) {
-    return ros::WallTime(std::numeric_limits<std::uint32_t>::max(),
-                         static_cast<std::uint32_t>(kNanosPerSecond - 1u));
-  }
-  return ros::WallTime(static_cast<std::uint32_t>(seconds),
-                       static_cast<std::uint32_t>(value % kNanosPerSecond));
 }
 
 const char *mavResultName(std::uint8_t result) {

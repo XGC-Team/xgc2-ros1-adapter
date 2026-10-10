@@ -25,7 +25,6 @@
 #include <unistd.h>
 
 namespace xgc2_ros1_robot_adapter {
-void ConfigureBoundedRosMaster();
 namespace {
 namespace wire = xgc::robot::v1;
 namespace operation = xgc::adapter::v1;
@@ -1235,9 +1234,6 @@ int RunRobotServer(int argc, char **argv, const std::string &node_name,
                    const std::string &provider, RobotFactory factory) {
   try {
     const auto arguments = ParseRobotServerArguments(argc, argv, provider);
-    if (arguments.check)
-      return CheckRobotServer(arguments, provider);
-    ConfigureBoundedRosMaster();
     auto bootstrap = ReadRobotServerBootstrap(arguments, provider);
     for (const auto &name : {std::make_pair("ros_master_uri", "ROS_MASTER_URI"),
                              std::make_pair("ros_ip", "ROS_IP")}) {
@@ -1250,7 +1246,6 @@ int RunRobotServer(int argc, char **argv, const std::string &node_name,
     ros::init(argc, argv, node_name, ros::init_options::NoSigintHandler);
     std::signal(SIGINT, stopSignal);
     std::signal(SIGTERM, stopSignal);
-    ros::master::setRetryTimeout(ros::WallDuration(3));
     Server server(std::move(bootstrap), std::move(factory));
     return server.run();
   } catch (const std::exception &exception) {

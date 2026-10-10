@@ -403,9 +403,6 @@ class ContractGeneratorTest(unittest.TestCase):
                 self.assertIn(
                     "robot-adapter-profile-v4.schema.json", cmake
                 )
-                self.assertNotIn(
-                    "robot-adapter-profile-v3.schema.json", cmake
-                )
                 self.assertIn(
                     "xgc2_add_robot_runtime_manifests(\n"
                     "  ${PROJECT_NAME}_node\n"

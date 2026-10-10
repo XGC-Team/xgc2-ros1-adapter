@@ -9,24 +9,9 @@
 #include "xgc_scout_mini_ros1_adapter/generated_contract.hpp"
 #include "xgc_scout_mini_ros1_adapter/motion_command.hpp"
 #include "xgc_scout_mini_ros1_adapter/robot_runtime.hpp"
-#include "xgc_scout_mini_ros1_adapter/shutdown_signal.hpp"
-#include "xgc_scout_mini_ros1_adapter/telemetry_batch.hpp"
 
 namespace xgc_scout_mini_ros1_adapter {
 namespace {
-
-TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
-  ShutdownSignalHandler handler;
-  EXPECT_FALSE(handler.requested());
-
-  ASSERT_EQ(0, raise(SIGINT));
-  EXPECT_TRUE(handler.requested());
-  EXPECT_EQ(SIGINT, handler.signalNumber());
-
-  ASSERT_EQ(0, raise(SIGTERM));
-  EXPECT_TRUE(handler.requested());
-  EXPECT_EQ(SIGTERM, handler.signalNumber());
-}
 
 TEST(RosNames, BuildsNamespacedScoutTopics) {
   EXPECT_EQ("/scout1/cmd_vel", topicName("/scout1", "cmd_vel"));
@@ -469,60 +454,6 @@ TEST(InstalledContract, ContainsScoutMotionButNotPx4Operations) {
   EXPECT_EQ("xgc.semantic.common.v1.RemoteControlIntentRequest",
             std::string(metadata.type_name));
   EXPECT_FALSE(contract::messageMetadata(3201, &metadata));
-}
-
-TEST(TelemetryBatch, BindsItemsToAnExactQueuePrefix) {
-  const std::deque<TelemetryQueueItem> queue{
-      {1u, "pose"}, {2u, "velocity"}, {3u, "power"}};
-  const auto batch = buildTelemetryBatch(queue, 2u, 1024u);
-  ASSERT_EQ(2u, batch.items.size());
-  EXPECT_EQ((std::vector<std::uint64_t>{1u, 2u}), batch.tokens);
-  EXPECT_EQ((std::vector<std::string>{"pose", "velocity"}), batch.items);
-  EXPECT_EQ(12u, batch.bytes);
-  EXPECT_TRUE(telemetryBatchMatchesPrefix(queue, batch.tokens));
-
-  auto advanced = queue;
-  advanced.pop_front();
-  EXPECT_FALSE(telemetryBatchMatchesPrefix(advanced, batch.tokens));
-}
-
-TEST(TelemetryBatch, EnforcesBothItemAndByteLimitsWithoutSplittingItems) {
-  const std::deque<TelemetryQueueItem> queue{
-      {1u, "1234"}, {2u, "5678"}, {3u, "9"}};
-  const auto byte_limited = buildTelemetryBatch(queue, 3u, 8u);
-  EXPECT_EQ(2u, byte_limited.items.size());
-  EXPECT_EQ(8u, byte_limited.bytes);
-
-  const auto item_limited = buildTelemetryBatch(queue, 1u, 1024u);
-  ASSERT_EQ(1u, item_limited.items.size());
-  EXPECT_EQ("1234", item_limited.items.front());
-
-  EXPECT_TRUE(buildTelemetryBatch(queue, 0u, 1024u).items.empty());
-  EXPECT_TRUE(buildTelemetryBatch(queue, 3u, 3u).items.empty());
-}
-
-TEST(TelemetryBatch, DrainsQueuesLargerThanTheProtocolWindowInBoundedBatches) {
-  std::deque<TelemetryQueueItem> queue;
-  for (std::uint64_t token = 1u; token <= 37u; ++token)
-    queue.push_back({token, "telemetry"});
-
-  std::vector<std::size_t> batch_sizes;
-  std::uint64_t expected_token = 1u;
-  while (!queue.empty()) {
-    const auto batch =
-        buildTelemetryBatch(queue, 256u, kMaximumTelemetryBatchBytes);
-    ASSERT_FALSE(batch.items.empty());
-    ASSERT_LE(batch.items.size(), kMaximumTelemetryBatchItems);
-    ASSERT_EQ(batch.items.size(), batch.tokens.size());
-    for (const auto token : batch.tokens)
-      EXPECT_EQ(expected_token++, token);
-    batch_sizes.push_back(batch.items.size());
-    for (std::size_t index = 0u; index < batch.items.size(); ++index)
-      queue.pop_front();
-  }
-
-  EXPECT_EQ((std::vector<std::size_t>{16u, 16u, 5u}), batch_sizes);
-  EXPECT_EQ(38u, expected_token);
 }
 
 } // namespace

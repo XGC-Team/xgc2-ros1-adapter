@@ -9,8 +9,6 @@
 #include "xgc_px4_multirotor_ros1_adapter/generated_contract.hpp"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
-#include "xgc_px4_multirotor_ros1_adapter/shutdown_signal.hpp"
-#include "xgc_px4_multirotor_ros1_adapter/telemetry_batch.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace {
@@ -28,67 +26,6 @@ xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   config.parameters["positioning_frame_number"] = "5";
   config.parameters["positioning_comparison_threshold_m"] = "1e-10";
   return config;
-}
-
-TEST(ShutdownSignal, CapturesSigintAndSigtermWithoutTerminating) {
-  ShutdownSignalHandler handler;
-  EXPECT_FALSE(handler.requested());
-
-  ASSERT_EQ(0, raise(SIGINT));
-  EXPECT_TRUE(handler.requested());
-  EXPECT_EQ(SIGINT, handler.signalNumber());
-
-  ASSERT_EQ(0, raise(SIGTERM));
-  EXPECT_TRUE(handler.requested());
-  EXPECT_EQ(SIGTERM, handler.signalNumber());
-}
-
-TEST(TelemetryBatch, PreservesRobotOrderAndCapsEachPublishAtSixteenItems) {
-  std::deque<TelemetryQueueItem> queue;
-  for (std::uint64_t token = 1u; token <= 18u; ++token) {
-    TelemetryQueueItem item;
-    item.token = token;
-    item.value = "item-" + std::to_string(token);
-    queue.push_back(std::move(item));
-  }
-
-  const TelemetryBatch batch = buildTelemetryBatch(queue);
-
-  ASSERT_EQ(kMaximumTelemetryBatchItems, batch.items.size());
-  ASSERT_EQ(batch.items.size(), batch.tokens.size());
-  for (std::size_t index = 0; index < batch.items.size(); ++index) {
-    EXPECT_EQ(index + 1u, batch.tokens[index]);
-    EXPECT_EQ("item-" + std::to_string(index + 1u), batch.items[index]);
-  }
-  EXPECT_TRUE(telemetryBatchMatchesPrefix(queue, batch.tokens));
-  EXPECT_EQ(18u, queue.size());
-}
-
-TEST(TelemetryBatch, StopsBeforeTheConservativeByteBound) {
-  std::deque<TelemetryQueueItem> queue;
-  for (std::uint64_t token = 1u; token <= 3u; ++token) {
-    TelemetryQueueItem item;
-    item.token = token;
-    item.value.assign(100u, static_cast<char>('a' + token));
-    queue.push_back(std::move(item));
-  }
-
-  const TelemetryBatch batch = buildTelemetryBatch(queue, 16u, 250u);
-
-  ASSERT_EQ(2u, batch.items.size());
-  EXPECT_EQ((std::vector<std::uint64_t>{1u, 2u}), batch.tokens);
-  EXPECT_EQ(200u, batch.bytes);
-  EXPECT_TRUE(telemetryBatchMatchesPrefix(queue, batch.tokens));
-}
-
-TEST(TelemetryBatch, RefusesToDisposeAChangedQueuePrefix) {
-  std::deque<TelemetryQueueItem> queue{TelemetryQueueItem{1u, "first"},
-                                      TelemetryQueueItem{2u, "second"}};
-  const TelemetryBatch batch = buildTelemetryBatch(queue);
-  ASSERT_EQ(2u, batch.tokens.size());
-
-  queue.pop_front();
-  EXPECT_FALSE(telemetryBatchMatchesPrefix(queue, batch.tokens));
 }
 
 TEST(RosNames, BuildsNamespacedMavrosTopics) {

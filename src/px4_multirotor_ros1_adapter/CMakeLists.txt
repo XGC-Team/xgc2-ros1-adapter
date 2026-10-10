@@ -71,8 +71,6 @@ add_custom_target(${PROJECT_NAME}_contract_metadata
   DEPENDS "${CONTRACT_METADATA_HDR}")
 
 catkin_package(
-  INCLUDE_DIRS include
-  LIBRARIES ${PROJECT_NAME}_operations
   CATKIN_DEPENDS roscpp mavros_msgs
 )
 
@@ -119,7 +117,6 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp
     src/robot_runtime.cpp
-    src/shutdown_signal.cpp
   )
   if(TARGET ${PROJECT_NAME}_test)
     add_dependencies(${PROJECT_NAME}_test
@@ -155,14 +152,6 @@ if(CATKIN_ENABLE_TESTING)
   endif()
 endif()
 
-install(TARGETS ${PROJECT_NAME}_operations
-  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-)
-install(FILES
-  include/${PROJECT_NAME}/px4_operations.hpp
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
-)
-
 install(TARGETS
   ${PROJECT_NAME}_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -177,9 +166,6 @@ xgc2_add_robot_runtime_manifests(
   "${PROFILE_SCHEMA}"
   "${XSIM_PROFILE_FILE}"
   "${GAZEBO_PROFILE_FILE}"
-)
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
 )
 install(FILES "${PROFILE_FILE}" "${XSIM_PROFILE_FILE}" "${GAZEBO_PROFILE_FILE}"
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/ros1

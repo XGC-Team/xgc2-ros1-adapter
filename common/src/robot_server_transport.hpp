@@ -8,5 +8,4 @@ xgc2::xrpc::GrpcLimits ProductGrpcLimits();
 xgc::robot::v1::RobotServerBootstrap
 ReadRobotServerBootstrap(const RobotServerArguments &,
                          const std::string &provider);
-int CheckRobotServer(const RobotServerArguments &, const std::string &provider);
 } // namespace xgc2_ros1_robot_adapter

@@ -166,7 +166,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         )
 
 
-    def test_profile_v4_contract_and_legacy_schema_are_explicit(self):
+    def test_profile_v4_contract_is_the_only_schema(self):
         self.assertEqual(
             CONTRACT_GENERATOR.PROFILE_SCHEMA_ID,
             "xgc.robot.adapter-profile/v4",
@@ -176,20 +176,8 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
             "xgc.robot.profile-contract-digest/v4",
         )
 
-        legacy_schema = json.loads(
-            (REPOSITORY_ROOT / "profiles/schema/robot-adapter-profile-v3.schema.json").read_text(
-                encoding="utf-8"
-            )
-        )
         current_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        legacy_parameter = legacy_schema["definitions"]["parameter"]
         current_parameter = current_schema["definitions"]["parameter"]
-        self.assertEqual(
-            legacy_schema["properties"]["schema"]["const"],
-            "xgc.robot.adapter-profile/v3",
-        )
-        self.assertNotIn("delivery", legacy_parameter["properties"])
-        self.assertNotIn("delivery", legacy_parameter["required"])
         self.assertEqual(
             current_schema["properties"]["schema"]["const"],
             "xgc.robot.adapter-profile/v4",
@@ -201,6 +189,7 @@ class RuntimeManifestGeneratorTest(unittest.TestCase):
         )
         for legacy in (
             "profiles/schema/robot-adapter-profile-v{}.schema.json".format(2),
+            "profiles/schema/robot-adapter-profile-v{}.schema.json".format(3),
             "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(4),
             "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(7),
             "profiles/ros1/px4-multirotor-ros1-v{}.yaml".format(8),

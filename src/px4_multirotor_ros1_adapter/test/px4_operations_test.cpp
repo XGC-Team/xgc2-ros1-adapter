@@ -51,62 +51,6 @@ TEST(Px4OperationPolicy, AllowsOnlyTheProfileModeAllowlist) {
   EXPECT_FALSE(isAllowedPx4Mode("OFFBOARD", {}));
 }
 
-TEST(Px4OperationTiming, SaturatesUnrepresentableUnixDeadlines) {
-  EXPECT_TRUE(operationDeadlineFromUnixNanos(0).isZero());
-  EXPECT_EQ(ros::WallTime(123u, 456u),
-            operationDeadlineFromUnixNanos(123000000456LL));
-  EXPECT_EQ(
-      ros::WallTime(std::numeric_limits<std::uint32_t>::max(), 999999999u),
-      operationDeadlineFromUnixNanos(std::numeric_limits<std::int64_t>::max()));
-}
-
-
-
-
-
-TEST(Px4OperationTiming, UsesTheEarliestBoundedDeadline) {
-  const ros::WallTime started_at(100u, 0u);
-
-  const OperationWindow timeout_bounded =
-      makeOperationWindow(OperationTiming(20.0), started_at, 5.0);
-  ASSERT_TRUE(timeout_bounded.ready());
-  EXPECT_EQ(ros::WallTime(105u, 0u), timeout_bounded.deadline);
-  EXPECT_DOUBLE_EQ(2.5, operationTimeRemaining(timeout_bounded,
-                                               ros::WallTime(102u, 500000000u))
-                            .toSec());
-
-  const OperationWindow absolute_deadline = makeOperationWindow(
-      OperationTiming(5.0, ros::WallTime(103u, 0u)), started_at, 5.0);
-  ASSERT_TRUE(absolute_deadline.ready());
-  EXPECT_EQ(ros::WallTime(103u, 0u), absolute_deadline.deadline);
-  EXPECT_DOUBLE_EQ(
-      0.0, operationTimeRemaining(absolute_deadline, ros::WallTime(103u, 0u))
-               .toSec());
-}
-
-TEST(Px4OperationTiming, RejectsInvalidExpiredAndClockRollbackWindows) {
-  const ros::WallTime started_at(100u, 0u);
-
-  const OperationWindow zero_timeout =
-      makeOperationWindow(OperationTiming(0.0), started_at);
-  EXPECT_EQ(OperationWindowState::kInvalid, zero_timeout.state);
-
-  const OperationWindow non_finite_timeout = makeOperationWindow(
-      OperationTiming(std::numeric_limits<double>::quiet_NaN()), started_at);
-  EXPECT_EQ(OperationWindowState::kInvalid, non_finite_timeout.state);
-
-  const OperationWindow expired =
-      makeOperationWindow(OperationTiming(5.0, started_at), started_at);
-  EXPECT_EQ(OperationWindowState::kExpired, expired.state);
-
-  const OperationWindow ready =
-      makeOperationWindow(OperationTiming(5.0), started_at);
-  ASSERT_TRUE(ready.ready());
-  EXPECT_DOUBLE_EQ(
-      0.0,
-      operationTimeRemaining(ready, ros::WallTime(99u, 999999999u)).toSec());
-}
-
 TEST(Px4RebootSafety, RequiresKnownFreshConnectedDisarmedState) {
   const ros::WallTime now(100u, 0u);
   Px4StateSnapshot state;

@@ -11,7 +11,6 @@ thread_local std::chrono::steady_clock::time_point master_deadline;
 thread_local bool master_failed = false;
 }
 namespace xgc2_ros1_robot_adapter {
-void ConfigureBoundedRosMaster() {}
 RosMasterDeadline::RosMasterDeadline(std::chrono::milliseconds budget)
     : previous_(master_deadline), previous_failed_(master_failed) {
   master_deadline = std::chrono::steady_clock::now() + budget;

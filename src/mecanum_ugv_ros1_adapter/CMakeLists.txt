@@ -102,7 +102,6 @@ if(CATKIN_ENABLE_TESTING)
     test/robot_runtime_test.cpp
     src/motion_command.cpp
     src/robot_runtime.cpp
-    src/shutdown_signal.cpp
   )
   if(TARGET ${PROJECT_NAME}_test)
     add_dependencies(${PROJECT_NAME}_test
@@ -129,9 +128,6 @@ xgc2_add_robot_runtime_manifests(
   "${PROFILE_SCHEMA}"
   "${XSIM_PROFILE_FILE}"
   "${GAZEBO_PROFILE_FILE}"
-)
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
 )
 install(FILES "${PROFILE_FILE}" "${XSIM_PROFILE_FILE}" "${GAZEBO_PROFILE_FILE}"
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/ros1

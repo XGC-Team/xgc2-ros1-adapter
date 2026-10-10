@@ -24,7 +24,7 @@ struct PrivateDirectory {
   }
   ~PrivateDirectory() { rmdir(path.c_str()); }
 };
-TEST(RobotServerEntry, NativeAndBootstrapModesPreserveTheirInputs) {
+TEST(RobotServerEntry, PreservesItsInputs) {
   auto args =
       parse({"--socket-path", "/run/xgc2/robot/server.sock", "--provider",
              "native", "--target-id", "station-test", "--ros-master-uri",
@@ -32,10 +32,6 @@ TEST(RobotServerEntry, NativeAndBootstrapModesPreserveTheirInputs) {
   EXPECT_EQ(args.provider, "native");
   EXPECT_EQ(args.ros_ip, "127.0.0.1");
   EXPECT_EQ(args.ros_master_uri, "http://127.0.0.1:11311");
-  EXPECT_FALSE(args.check);
-  EXPECT_EQ(
-      parse({"--adapter-bootstrap-file", "/tmp/private.pb"}).bootstrap_file,
-      "/tmp/private.pb");
   EXPECT_EQ(parse({"--socket-path", "/tmp/native.sock", "--provider", "native",
                    "--target-id", "station-test"})
                 .ros_ip,
@@ -45,55 +41,18 @@ TEST(RobotServerEntry, NativeAndBootstrapModesPreserveTheirInputs) {
                 .ros_ip,
             "");
 }
-TEST(RobotServerEntry, CheckRequiresTargetAndIsFiniteWithoutRosSettings) {
-  EXPECT_EQ(parse({"--check", "--socket-path", "/tmp/health.sock",
-                   "--target-id", "station-test"})
-                .timeout_ms,
-            2000);
-  EXPECT_EQ(parse({"--check", "--socket-path", "/tmp/health.sock",
-                   "--target-id", "station-test", "--timeout-ms", "60000"})
-                .timeout_ms,
-            60000);
-  EXPECT_THROW(parse({"--check", "--socket-path", "/tmp/health.sock"}),
-               std::runtime_error);
-  EXPECT_THROW(parse({"--check", "--socket-path", "/tmp/health.sock",
-                      "--target-id", "bad target"}),
-               std::runtime_error);
-  for (const auto &value :
-       {"0", "60001", "-1", "1.0", "1junk", "99999999999999999999999"})
-    EXPECT_THROW(parse({"--check", "--socket-path", "/tmp/health.sock",
-                        "--target-id", "station-test", "--timeout-ms", value}),
-                 std::runtime_error);
-  EXPECT_THROW(parse({"--check", "--socket-path", "/tmp/health.sock",
-                      "--target-id", "station-test", "--provider", "native"}),
-               std::runtime_error);
-  EXPECT_THROW(parse({"--check", "--socket-path", "/tmp/health.sock",
-                      "--target-id", "station-test", "--ros-ip", "127.0.0.1"}),
-               std::runtime_error);
-  EXPECT_THROW(
-      parse({"--socket-path", "/tmp/health.sock", "--provider", "native",
-             "--target-id", "station-test", "--timeout-ms", "1"}),
-      std::runtime_error);
-}
-TEST(RobotServerEntry, RejectsMissingRepeatedMixedAndWrongProvider) {
+TEST(RobotServerEntry, RejectsMissingRepeatedRetiredAndWrongProvider) {
   EXPECT_THROW(parse({}), std::runtime_error);
-  for (const auto &flag :
-       {"--socket-path", "--provider", "--target-id", "--ros-ip",
-        "--ros-master-uri", "--adapter-bootstrap-file", "--timeout-ms"}) {
+  for (const auto &flag : {"--socket-path", "--provider", "--target-id",
+                           "--ros-ip", "--ros-master-uri"}) {
     EXPECT_THROW(parse({flag}), std::runtime_error);
-    EXPECT_THROW(parse({flag, "--check"}), std::runtime_error);
     if (std::string(flag) != "--ros-ip") {
       EXPECT_THROW(parse({flag, ""}), std::runtime_error);
     }
     EXPECT_THROW(parse({flag, "value", flag, "value"}), std::runtime_error);
   }
-  EXPECT_THROW(parse({"--check", "--check", "--socket-path", "/tmp/a.sock"}),
-               std::runtime_error);
-  EXPECT_THROW(parse({"--adapter-bootstrap-file", "/tmp/a.pb", "--socket-path",
-                      "/tmp/a.sock"}),
-               std::runtime_error);
-  EXPECT_THROW(parse({"--adapter-bootstrap-file", "/tmp/a.pb", "--check"}),
-               std::runtime_error);
+  for (const auto &retired : {"--check", "--timeout-ms", "--adapter-bootstrap-file"})
+    EXPECT_THROW(parse({retired, "value"}), std::runtime_error);
   EXPECT_THROW(parse({"--socket-path", "/tmp/a.sock", "--provider", "foreign"}),
                std::runtime_error);
   EXPECT_THROW(parse({"--unknown", "value"}), std::runtime_error);
