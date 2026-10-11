@@ -45,22 +45,3 @@ TEST(SceneCache, WaitingAndRefusedRevisionsFailClosed) {
   EXPECT_TRUE(cache.setScene({}, 2));
   EXPECT_TRUE(cache.ready());
 }
-
-TEST(SceneCache, GazeboTruthUsesTheMathDescriptionsAndRefusals) {
-  ConvexBodyDescription cube;
-  cube.name = "wall";
-  cube.geometry_type = "cube";
-  cube.pose.position = {4, 0, 1};
-  cube.scale = {1, 4, 2};
-  const auto obstacles = fromGazeboTruth({}, {cube});
-  ASSERT_EQ(1u, obstacles.size());
-  LidarScene scene(obstacles);
-  EXPECT_DOUBLE_EQ(3.5, scene.closest({0, 0, 1}, {1, 0, 0}, 20));
-  cube.geometry_type = "absent";
-  try {
-    fromGazeboTruth({}, {cube});
-    FAIL();
-  } catch (const std::invalid_argument &e) {
-    EXPECT_NE(std::string::npos, std::string(e.what()).find("wall"));
-  }
-}

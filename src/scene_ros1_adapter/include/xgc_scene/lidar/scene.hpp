@@ -41,9 +41,4 @@ private:
   bool ready_ = false;
 };
 
-// Gazebo truth crosses this seam as Math descriptions, never ROS messages.
-std::vector<xgc2_math::scene::Obstacle> fromGazeboTruth(
-    const std::vector<xgc2_math::scene::GeometryTemplateDescription> &library,
-    const std::vector<xgc2_math::scene::ConvexBodyDescription> &bodies);
-
 } // namespace xgc_scene::lidar

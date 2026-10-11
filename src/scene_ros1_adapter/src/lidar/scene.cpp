@@ -59,10 +59,4 @@ SceneCache::scene(std::size_t policy) const {
   return scenes_.at(policy);
 }
 
-std::vector<xgc2_math::scene::Obstacle> fromGazeboTruth(
-    const std::vector<xgc2_math::scene::GeometryTemplateDescription> &library,
-    const std::vector<xgc2_math::scene::ConvexBodyDescription> &bodies) {
-  return xgc2_math::scene::fromConvexBodies(library, bodies);
-}
-
 } // namespace xgc_scene::lidar

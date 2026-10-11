@@ -18,6 +18,9 @@ namespace xgc_scene {
 class RosOutputs {
  public:
   virtual ~RosOutputs() = default;
+  // Native application boundary, before any new definition/state is visible.
+  // Pending, failed or mismatched application must invalidate fleet truth.
+  virtual void application(const std::string&, std::uint64_t, bool) {}
   virtual void snapshot(const xgc2_geometry_msgs::SceneSnapshot& message) = 0;
   virtual void state(const xgc2_geometry_msgs::SceneState& message) = 0;
   virtual void document(const std::string& text) = 0;

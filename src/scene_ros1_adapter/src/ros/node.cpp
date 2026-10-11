@@ -81,6 +81,7 @@ bool SceneNode::online() const { return online_.load(); }
 
 void SceneNode::applyScene(const Json& document, const std::string& epoch, std::uint64_t revision) {
   if (!simulation_) return;
+  outputs_.application(epoch, revision, false);
   try {
     applied_snapshot_ = projection_.snapshot(document, epoch, revision, clock_());
     simulation_->apply(document, epoch, revision);
@@ -91,6 +92,7 @@ void SceneNode::applyScene(const Json& document, const std::string& epoch, std::
   native_report_ = Json{{"consumer", "gazebo"}, {"epoch", epoch}, {"revision", revision},
                         {"applied", true}, {"operational", true}, {"capability", "ok"},
                         {"message", "Native scene operation completed"}, {"header_stamp", clock_()}};
+  outputs_.application(epoch, revision, true);
 }
 void SceneNode::applyMotion(const std::string& operation, const std::string& epoch, std::uint64_t revision) {
   if (simulation_) simulation_->motion(operation, epoch, revision);
@@ -101,6 +103,7 @@ void SceneNode::gazeboFailure(const std::string& epoch, std::uint64_t revision, 
   native_report_ = Json{{"consumer", "gazebo"}, {"epoch", epoch}, {"revision", revision},
                         {"applied", false}, {"operational", false}, {"capability", ""},
                         {"message", message}, {"header_stamp", clock_()}};
+  outputs_.application(epoch, revision, false);
 }
 
 Json SceneNode::applicationView(const std::string& epoch, std::uint64_t revision) {
@@ -190,6 +193,8 @@ void SceneNode::publishDefinition() {
   const auto envelope = store_->envelope();
   const auto epoch = envelope.at("epoch").get<std::string>();
   const auto revision = envelope.at("revision").get<std::uint64_t>();
+  if (parameters_.profile == "gazebo")
+    outputs_.application(epoch, revision, applicationView(epoch, revision).at("synchronized").get<bool>());
   definition_ = envelope.at("document");
   xgc2_geometry_msgs::SceneSnapshot message;
   if (applied_snapshot_ && applied_snapshot_->epoch == epoch && applied_snapshot_->revision == revision)
