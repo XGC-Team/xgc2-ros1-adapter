@@ -174,4 +174,59 @@ explicit document ID and 129-part boundaries are required by this package's
 brief and marked as boundaries beyond the related test's original inputs.
 
 <!-- coverage:start -->
+| Python test case | Source line | Coverage or explicit exclusion |
+| --- | ---: | --- |
+| `test_prepare.py:test_native_world_keeps_exact_geometry_and_owns_only_its_granted_output` | 36 | [prepare/native-world.json](corpus/prepare/native-world.json) |
+| `test_prepare.py:test_document_editability_and_media_attachments_are_provider_owned` | 54 | [prepare/document-and-media.json](corpus/prepare/document-and-media.json) |
+| `test_prepare.py:test_wrong_revision_bad_hash_unknown_physics_and_symlink_escape_are_rejected` | 72 | [prepare/revision-hash-parameters-grant.json](corpus/prepare/revision-hash-parameters-grant.json) |
+| `test_prepare.py:test_random_generator_output_is_bounded_before_world_commit` | 85 | [generation/output-limit.json](corpus/generation/output-limit.json), [prepare/random-output-limit.json](corpus/prepare/random-output-limit.json) |
+| `test_prepare.py:test_explicit_chassis_and_component_rosters_are_not_inferred` | 100 | [prepare/explicit-rosters.json](corpus/prepare/explicit-rosters.json) |
+| `test_prepare.py:test_asset_attachment_symlink_cannot_escape_its_asset_directory` | 113 | [prepare/attachment-symlink.json](corpus/prepare/attachment-symlink.json) |
+| `test_scene_consumers.py:test_success_is_not_an_applied_authority` | 14 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_capability_gap_does_not_count_as_retryable_unsync` | 26 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_version_lag_and_apply_failure_remain_retryable` | 36 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_applied_capability_limit_still_counts_as_document_sync` | 45 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_exited_consumers_expire_and_reentry_replaces_them` | 55 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_old_epoch_and_out_of_order_stamps_do_not_overwrite` | 71 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_consumers.py:test_public_envelope_splits_sync_from_capability_and_derives_success` | 87 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_frozen.py:test_every_edit_save_and_reload_channel_is_rejected_with_an_explicit_error` | 29 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
+| `test_scene_frozen.py:test_rejection_is_a_result_not_a_silent_drop_or_exception` | 49 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
+| `test_scene_frozen.py:test_frozen_scene_still_serves_reads_motion_clock_and_resync` | 59 | [store/frozen-read-motion-resync.json](corpus/store/frozen-read-motion-resync.json) |
+| `test_scene_frozen.py:test_frozen_source_yaml_is_never_reloaded_or_written` | 72 | [store/frozen-source.json](corpus/store/frozen-source.json) |
+| `test_scene_frozen.py:test_unfrozen_default_keeps_every_existing_channel_open` | 85 | [store/external-edit-reload.json](corpus/store/external-edit-reload.json) |
+| `test_scene_frozen.py:test_scene_launch_forwards_the_frozen_argument_as_a_param` | 100 | ROS-bound launch forwarding; to be written as a C++ launch contract test from the Python intent. |
+| `test_scene_generation.py:test_external_generator_runs_once_and_saves_exact_parameters` | 11 | [generation/external-once.json](corpus/generation/external-once.json) |
+| `test_scene_generation.py:test_generator_failure_does_not_publish_a_scene` | 33 | [generation/failure-no-publish.json](corpus/generation/failure-no-publish.json) |
+| `test_scene_projection.py:test_equals_json_dumps` | 153 | [document/envelope-json.json](corpus/document/envelope-json.json); Plain encoder cases only; consumer fields are dropped. JSON converts integer object keys to strings; cache branch identity is a later C++ test concern. |
+| `test_scene_projection.py:test_snapshots_markers_and_states_equal_the_uncached_projections` | 187 | [motion/rotating-twist.json](corpus/motion/rotating-twist.json); ROS-bound snapshots/markers/state projections are excluded; motion/rotating-twist records only the plain motion sample. To be written as C++ ROS output tests. |
+| `test_scene_scaling.py:test_gazebo_receives_one_batched_apply_per_revision` | 175 | ROS-bound node/application batching; to be written as a C++ test from the Python intent. |
+| `test_scene_scaling.py:test_unchanged_consumer_heartbeats_do_not_republish_the_document` | 181 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
+| `test_scene_scaling.py:test_native_failure_and_recovery_change_the_published_view` | 187 | ROS-bound published synchronization view; store/native-failure and store/lost-reply-resync retain native applied status. To be written as a C++ output test. |
+| `test_scene_scaling.py:test_tick_and_definition_scan_the_obstacle_list_a_constant_number_of_times` | 202 | Performance-only obstacle scan counts (also ROS-bound). |
+| `test_scene_store.py:test_obstacle_visual_color_is_product_amber` | 30 | [document/visual-color.json](corpus/document/visual-color.json) |
+| `test_scene_store.py:test_compounds_preserve_parts_and_geometry_has_explicit_sizes` | 39 | [document/compound-sizes.json](corpus/document/compound-sizes.json) |
+| `test_scene_store.py:test_invalid_geometry_does_not_become_another_shape` | 49 | [document/invalid-geometry.json](corpus/document/invalid-geometry.json) |
+| `test_scene_store.py:test_duplicate_fields_and_huge_numbers_are_rejected` | 57 | [document/duplicate-and-huge.json](corpus/document/duplicate-and-huge.json) |
+| `test_scene_store.py:test_convex_manifold_required_without_filling_compound_holes` | 68 | [document/convex-manifold.json](corpus/document/convex-manifold.json) |
+| `test_scene_store.py:test_ids_are_stable_through_delete_copy_undo_and_reload` | 77 | [document/identifiers.json](corpus/document/identifiers.json), [motion/hold.json](corpus/motion/hold.json), [store/stable-ids-undo-redo.json](corpus/store/stable-ids-undo-redo.json) |
+| `test_scene_store.py:test_stale_epoch_revision_and_request_reuse_cannot_overwrite` | 88 | [store/identity-and-stale.json](corpus/store/identity-and-stale.json) |
+| `test_scene_store.py:test_simulator_rejection_does_not_commit_or_create_undo_entry` | 99 | [store/simulator-rejected.json](corpus/store/simulator-rejected.json) |
+| `test_scene_store.py:test_edits_undo_and_redo_automatically_survive_restart` | 112 | [store/autosave-restart.json](corpus/store/autosave-restart.json) |
+| `test_scene_store.py:test_agent_file_edits_require_reload_and_are_never_overwritten` | 126 | [store/external-edit-reload.json](corpus/store/external-edit-reload.json) |
+| `test_scene_store.py:test_save_failure_keeps_live_edit_and_retry_does_not_apply_it_twice` | 145 | [store/save-failure-retry.json](corpus/store/save-failure-retry.json) |
+| `test_scene_store.py:test_lost_reply_and_partial_apply_recover_without_reusing_revision` | 164 | [store/lost-reply-resync.json](corpus/store/lost-reply-resync.json) |
+| `test_scene_store.py:test_source_changed_during_startup_is_not_overwritten` | 184 | [store/startup-digest.json](corpus/store/startup-digest.json) |
+| `test_scene_store.py:test_motion_clock_and_saved_initial_definition_remain_separate` | 193 | [motion/constant-twist.json](corpus/motion/constant-twist.json), [store/motion-clock.json](corpus/store/motion-clock.json) |
+| `test_scene_store.py:test_motion_path_and_initial_pose_cannot_disagree` | 210 | [document/motion-start.json](corpus/document/motion-start.json), [motion/circle.json](corpus/motion/circle.json), [motion/ping-pong.json](corpus/motion/ping-pong.json) |
+| `test_scene_store.py:test_full_snapshot_can_be_empty_but_bad_document_cannot_clear_it` | 223 | [document/empty-snapshot.json](corpus/document/empty-snapshot.json), [store/empty-snapshot.json](corpus/store/empty-snapshot.json) |
+| `test_scene_store.py:test_experiment_working_files_are_isolated_and_persist_edits` | 230 | [store/working-isolation.json](corpus/store/working-isolation.json) |
+| `test_scene_store.py:test_working_file_is_created_on_first_edit_before_apply` | 269 | [store/working-before-apply.json](corpus/store/working-before-apply.json) |
+| `test_scene_store.py:test_first_working_copy_write_failure_does_not_apply_or_change_source` | 297 | [store/working-copy-failure.json](corpus/store/working-copy-failure.json) |
+| `test_scene_store.py:test_existing_working_file_wins_over_changed_source_on_reopen` | 323 | [store/working-reopen.json](corpus/store/working-reopen.json) |
+| `test_scene_store.py:test_incremental_yaml_equals_a_full_dump` | 366 | [motion/circle-phase.json](corpus/motion/circle-phase.json), [store/incremental-yaml.json](corpus/store/incremental-yaml.json) |
+| `test_scene_store.py:test_one_edit_validates_and_emits_only_the_edited_obstacle` | 374 | Performance-only validation/emission counts and Python object identity; to be written as a C++ immutability/cost test from the intent. Store undo and YAML behavior are recorded separately. |
+| `test_scene_store.py:test_scene_limits_still_apply_to_incremental_edits` | 401 | [document/limits.json](corpus/document/limits.json), [store/duplicate-obstacle.json](corpus/store/duplicate-obstacle.json), [store/obstacle-limit.json](corpus/store/obstacle-limit.json), [store/part-limit.json](corpus/store/part-limit.json) |
+| `test_xrpc_control.py:test_real_authoring_host_and_retained_receipts` | 28 | [wire/authoring-http.json](corpus/wire/authoring-http.json) |
+| `test_xrpc_control.py:test_simulation_waits_once_and_never_probes_entities` | 56 | Simulation-client transport sequencing; to be written as a C++ client integration test from the Python intent. |
+| `test_xrpc_control.py:test_failed_native_effect_does_not_promote_desired_or_persisted` | 83 | [store/native-failure.json](corpus/store/native-failure.json) |
 <!-- coverage:end -->
