@@ -22,6 +22,8 @@ FleetManifest parseManifest(std::string_view text,
   boost::property_tree::read_json(input, fleet);
   if (fleet.get<int>("schemaVersion") != 1)
     throw std::invalid_argument("unsupported fleet sensor schema");
+  if (fleet.get<std::string>("backend", "cpu") != "cpu")
+    throw std::invalid_argument("fleet backend must be cpu; GPU is not supported");
   const auto &robots = fleet.get_child("robots");
   const std::regex name_pattern(
       "/[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*");
@@ -67,6 +69,8 @@ FleetManifest parseManifest(std::string_view text,
   for (const auto &entry : robots) {
     const auto &spec = entry.second;
     SensorSpec sensor;
+    if (spec.get<std::string>("backend", "cpu") != "cpu")
+      throw std::invalid_argument("fleet backend must be cpu; GPU is not supported");
     sensor.name_space = spec.get<std::string>("namespace");
     if (!std::regex_match(sensor.name_space, name_pattern) ||
         !namespaces.insert(sensor.name_space).second)

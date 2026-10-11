@@ -15,7 +15,7 @@ find_package(Threads REQUIRED)
 # The package is a catkin package; the authoring core and the lidar fleet engine need no ROS and also build with plain CMake.
 find_package(catkin QUIET)
 if(catkin_FOUND)
-  catkin_package(INCLUDE_DIRS include LIBRARIES xgc_scene_core xgc_scene_lidar)
+  catkin_package(INCLUDE_DIRS include LIBRARIES xgc_scene_core xgc_scene_lidar xgc_scene_lidar_ros)
 endif()
 
 # Sources and tests are globbed: a new file needs no CMake edit.
@@ -68,7 +68,7 @@ if(catkin_FOUND)
   endif()
 
   # --- ROS outputs and the simulation client (package sa-ros) ---
-  find_package(catkin REQUIRED COMPONENTS roscpp tf2_ros geometry_msgs visualization_msgs std_msgs
+  find_package(catkin REQUIRED COMPONENTS roscpp tf2_ros geometry_msgs visualization_msgs std_msgs sensor_msgs
                                          xgc2_geometry_msgs xgc_ros1_adapter_common)
   file(GLOB SIM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/sim/*.cpp)
   add_library(xgc_scene_sim STATIC ${SIM_SOURCES})
@@ -78,11 +78,22 @@ if(catkin_FOUND)
   target_include_directories(xgc_scene_ros PUBLIC ${catkin_INCLUDE_DIRS})
   target_link_libraries(xgc_scene_ros PUBLIC xgc_scene_core xgc_scene_sim ${catkin_LIBRARIES})
   add_dependencies(xgc_scene_ros ${catkin_EXPORTED_TARGETS})
+  file(GLOB LIDAR_ROS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/lidar_ros/*.cpp)
+  add_library(xgc_scene_lidar_ros STATIC ${LIDAR_ROS_SOURCES})
+  target_link_libraries(xgc_scene_lidar_ros PUBLIC xgc_scene_lidar xgc_scene_ros ${catkin_LIBRARIES})
+  add_dependencies(xgc_scene_lidar_ros ${catkin_EXPORTED_TARGETS})
   add_executable(xgc2_scene_adapter src/node_main.cpp)
-  target_link_libraries(xgc2_scene_adapter PRIVATE xgc_scene_service xgc_scene_ros)
+  target_link_libraries(xgc2_scene_adapter PRIVATE xgc_scene_service xgc_scene_ros xgc_scene_lidar_ros)
   install(TARGETS xgc2_scene_adapter RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
   if(BUILD_TESTING)
+    file(GLOB LIDAR_ROS_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/lidar_ros/*_test.cpp)
+    foreach(test_source ${LIDAR_ROS_TESTS})
+      get_filename_component(test_name ${test_source} NAME_WE)
+      add_executable(${test_name} ${test_source})
+      target_link_libraries(${test_name} PRIVATE xgc_scene_lidar_ros GTest::gtest_main)
+      add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
     file(GLOB ROS_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/ros/*_test.cpp)
     file(GLOB SIM_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/sim/*_test.cpp)
     foreach(test_source ${ROS_TESTS} ${SIM_TESTS})
@@ -102,6 +113,8 @@ endif()
 include(cmake/lidar_control.cmake)
 
 if(catkin_FOUND)
+  install(TARGETS xgc_scene_lidar_ros ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+  install(DIRECTORY include/xgc_scene/lidar_ros DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/xgc_scene)
   if(TARGET xgc2_scene_adapter)
     install(TARGETS xgc2_scene_adapter
       RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
