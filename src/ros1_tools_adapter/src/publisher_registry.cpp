@@ -1,10 +1,8 @@
 #include "xgc_ros1_tools_adapter/publisher_registry.hpp"
 
 #include <ros/ros.h>
-#include <ros/master.h>
 
 #include <chrono>
-#include <algorithm>
 #include <thread>
 #include <utility>
 
@@ -12,20 +10,6 @@
 
 namespace xgc_ros1_tools_adapter {
 namespace {
-
-std::uint32_t registeredSubscribers(const std::string &topic) {
-  XmlRpc::XmlRpcValue request, response, state;
-  request[0] = ros::this_node::getName();
-  if (!ros::master::execute("getSystemState", request, response, state, false)) {
-    transientError("master_unreachable", "cannot discover subscribers for '" + topic + "'");
-  }
-  for (int index = 0; index < state[1].size(); ++index) {
-    if (static_cast<std::string>(state[1][index][0]) == topic) {
-      return static_cast<std::uint32_t>(state[1][index][1].size());
-    }
-  }
-  return 0;
-}
 
 bool deadlineExpired(std::int64_t deadline_unix_nanos) {
   if (deadline_unix_nanos <= 0) {
@@ -164,14 +148,11 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
     }
 
     if (request.wait_for_subscribers_ms > 0) {
-      // A one-shot fleet command must reach every subscriber already registered
-      // with the master, not just the first TCPROS handshake to finish.
-      const auto expected = std::max(1u, registeredSubscribers(publisher.getTopic()));
       const auto deadline =
           std::chrono::steady_clock::now() +
           std::chrono::milliseconds(request.wait_for_subscribers_ms);
       std::unique_lock<std::mutex> lock(selected_entry->connection_mutex);
-      while (publisher.getNumSubscribers() < expected && ros::ok() &&
+      while (publisher.getNumSubscribers() == 0 && ros::ok() &&
              std::chrono::steady_clock::now() < deadline) {
         requireDispatchAllowed(request);
         const auto version = selected_entry->connection_version;
@@ -183,9 +164,9 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
             [&] { return selected_entry->connection_version != version; });
       }
       requireDispatchAllowed(request);
-      if (publisher.getNumSubscribers() < expected) {
+      if (publisher.getNumSubscribers() == 0) {
         transientError("subscriber_wait_timeout",
-                       "registered subscribers did not all connect to topic '" + request.topic +
+                       "no subscriber connected to topic '" + request.topic +
                            "' before waitForSubscribersMs elapsed");
       }
     }

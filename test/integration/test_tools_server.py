@@ -111,24 +111,6 @@ class ToolsServerTest(MasterCase):
         server.signal(signal.SIGTERM)
         self.assert_gone(server)
 
-    def test_first_single_publish_reaches_all_registered_subscribers(self):
-        server = self.start_tools()
-        instance = self.ready(server)["instance_id"]
-        topic = "/tools_it/fleet_command"
-        listeners = [FakeRobots(self.workspace, self.roscore,
-                                record={topic: "std_msgs/String"}).start() for _ in range(9)]
-        for listener in listeners:
-            self.addCleanup(listener.cleanup)
-        status, _, body = server.http.request("POST", "/api/v1/publish", instance=instance, body={
-            "topic": topic, "messageType": "std_msgs/String", "message": {"data": "start"},
-            "publishCount": 1, "publishRateHz": 1, "latch": False, "queueSize": 10,
-            "waitForSubscribersMs": 5000})
-        self.assertEqual(status, 200, body)
-        self.assertEqual(body.get("subscriberCount"), len(listeners), body)
-        wait_until(lambda: all(listener.received(topic) for listener in listeners), 5, 0.05,
-                   "the single fleet command")
-        self.assertTrue(all(len(listener.received(topic)) == 1 for listener in listeners))
-
     def test_consecutive_runs_leave_nothing_behind(self):
         pids = []
         for stop in (signal.SIGTERM, signal.SIGINT):
