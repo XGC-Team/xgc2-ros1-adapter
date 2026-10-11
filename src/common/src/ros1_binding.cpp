@@ -31,39 +31,46 @@ void Ros1Binding::Init(const ServerOptions &options,
 }
 
 void Ros1Binding::Connect() {
+  RosMasterDeadline budget(std::chrono::milliseconds(3000));
+  run_id_cache_ready_ = false;
   node_.reset(new ros::NodeHandle());
   node_->setCallbackQueue(&queues_[0]);
+  // Subscribe once, including when /run_id does not exist yet. Later reads
+  // use the local cache; paramUpdate detects a changed run without polling.
+  std::string run_id;
+  ros::param::getCached("/run_id", run_id);
+  run_id_cache_ready_ = !budget.failed();
 }
 
 // ros::ok() is true from ros::init (Init) until ros::shutdown, which is what
 // ends the node when the master or a user (rosnode kill) asks it to.
 bool Ros1Binding::Running() const { return ros::ok(); }
 
-// getPid and getUri are the cheapest calls that name a master incarnation: a
-// restarted master has another pid even when it listens on the same URI. Both
-// run under the bounded master execution, so a silent master fails the probe
-// within seconds.
+// Exactly one lightweight liveness call. URI is fixed by Init; the run id is
+// delivered through ROS parameter updates after Connect.
 bool Ros1Binding::ProbeMaster(MasterIdentity *identity) {
   XmlRpc::XmlRpcValue request, response, payload;
   request.setSize(1);
   request[0] = "/" + node_name_;
   if (!ros::master::execute("getPid", request, response, payload, false) ||
-      payload.getType() != XmlRpc::XmlRpcValue::TypeInt)
+      payload.getType() != XmlRpc::XmlRpcValue::TypeInt ||
+      static_cast<int>(payload) <= 0)
     return false;
-  const long pid = static_cast<int>(payload);
-  if (!ros::master::execute("getUri", request, response, payload, false) ||
-      payload.getType() != XmlRpc::XmlRpcValue::TypeString)
-    return false;
-  identity->pid = pid;
-  identity->uri = static_cast<std::string>(payload);
-  // Read the run id on every probe so a new run is detected even if a pid
-  // is reused. A bare rosmaster has no run id.
-  identity->run_id.clear();
-  ros::param::get("/run_id", identity->run_id);
+  identity->pid = static_cast<int>(payload);
+  identity->uri = ros::master::getURI();
+  identity->run_id = MasterRunId();
   return true;
 }
 
+std::string Ros1Binding::MasterRunId() const {
+  std::string run_id;
+  if (run_id_cache_ready_)
+    ros::param::getCached("/run_id", run_id);
+  return run_id;
+}
+
 void Ros1Binding::Shutdown() {
+  run_id_cache_ready_ = false;
   node_.reset();
   ros::shutdown();
 }

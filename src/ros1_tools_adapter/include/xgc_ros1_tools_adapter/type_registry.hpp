@@ -27,7 +27,8 @@ class TypeRegistry {
       const ros_babel_fish::Message::ConstPtr& message);
   ros::Publisher advertise(ros::NodeHandle& node_handle,
                            const std::string& type, const std::string& topic,
-                           std::uint32_t queue_size, bool latch);
+                           std::uint32_t queue_size, bool latch,
+                           const ros::SubscriberStatusCallback &connection_changed);
 
  private:
   std::shared_ptr<ros_babel_fish::DescriptionProvider> provider_;

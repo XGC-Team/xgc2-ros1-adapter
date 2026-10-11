@@ -15,9 +15,18 @@ namespace xgc2_ros1_robot_adapter {
 RosMasterDeadline::RosMasterDeadline(std::chrono::milliseconds budget)
     : previous_(master_deadline), previous_failed_(master_failed) {
   master_deadline = std::chrono::steady_clock::now() + budget;
+  if (previous_ != std::chrono::steady_clock::time_point{})
+    master_deadline = std::min(master_deadline, previous_);
   master_failed = false;
 }
-RosMasterDeadline::~RosMasterDeadline() { master_deadline = previous_; master_failed = previous_failed_; }
+RosMasterDeadline::~RosMasterDeadline() {
+  // A nested registration budget must preserve the caller's deadline and
+  // propagate failure; otherwise startup could publish a partial binding.
+  const bool failed = master_failed;
+  master_deadline = previous_;
+  master_failed = previous_failed_ ||
+                  (previous_ != std::chrono::steady_clock::time_point{} && failed);
+}
 bool RosMasterDeadline::failed() const { return master_failed; }
 }
 namespace ros { namespace master {

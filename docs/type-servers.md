@@ -31,8 +31,12 @@ ROS registrations.
 The server uses the ROS master URI supplied at process start (`--ros-master-uri`, `--ros-ip`)
 and waits for its first binding. While waiting it serves `Describe` with `ready:false` and
 `facts_json.reason: "waiting for ROS master binding"`; SIGTERM/SIGINT exits 0. It never
-re-binds after startup. It watches the identity of the bound master once per second
-(`getPid`, `getUri` and `/run_id`); if the master is replaced (another pid or a changed known
+re-binds after startup. One watcher checks liveness with one `getPid` XML-RPC call;
+the URI is fixed and `/run_id` changes arrive through a cached parameter subscription.
+Successful probes run once per second. Failed probes use exponential full jitter from
+250 ms to a 10 s ceiling, reset on success; the startup wait releases its condition-variable
+lock and never blocks Describe. The first outage failure is logged, then at most one
+summary per 10 s with a count of suppressed attempts. If the master is replaced (another pid or a changed known
 run id, even on the same URI) or stays unreachable for 5 s, it stops its robots like a drain would, and
 exits with a status that names the reason. The Run that owns it fails or restarts it
 explicitly.
@@ -90,11 +94,14 @@ the socket over after a restart.
   | Fact | Value |
   |---|---|
   | `ros_master_uri` | the master the process was started with |
-  | `ros_master_pid`, `ros_master_reported_uri` | identity of that master as it reported itself |
+  | `ros_master_pid` | master process identity from the liveness response |
   | `ros_master_run_id` | the `/run_id` parameter of the master (roslaunch/roscore), `""` for a bare `rosmaster` |
   | `ros_node` | the node name in the ROS graph |
   | `run_id`, `provider` | as started |
   | `members` | robots registered |
+  | `members_revision` | monotonic revision of the registered member set; an identical ApplyMembers leaves it unchanged |
+  | `robots` | per-robot health state (`online` or `waiting`) and reason, including late telemetry |
+  | `master_probe_attempts`, `master_bindings` | cumulative lifecycle probes and completed bindings (zero while waiting, one after binding) |
   | `state` | `starting`, `ready`, `draining` or `stopped` |
   | `reason` | `waiting for ROS master binding` while waiting for startup binding, otherwise `""` |
 

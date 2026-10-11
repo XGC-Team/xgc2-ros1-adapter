@@ -8,6 +8,7 @@
 #include <xgc2/xrpc/http.hpp>
 #include <xgc2/xrpc/unix.hpp>
 #include <xgc2_ros1_robot_adapter/ros1_binding.hpp>
+#include <xgc2_ros1_robot_adapter/master_retry.hpp>
 #include "xgc_ros1_tools_adapter/error.hpp"
 #include "xgc_ros1_tools_adapter/tools.hpp"
 #include <atomic>
@@ -103,7 +104,19 @@ public:
   Describe(std::string instance, std::string target, std::string run_id,
            std::string node, const NativeContext &context)
       : instance_(std::move(instance)), target_(std::move(target)),
-        run_id_(std::move(run_id)), node_(std::move(node)), context_(context) {}
+        run_id_(std::move(run_id)), node_(std::move(node)), context_(context),
+        timer_([this] { expireLoop(); }) {}
+
+  ~Describe() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      timer_stopping_ = true;
+    }
+    changed_.notify_all();
+    timer_.join();
+  }
+
+  void probe() { ++probe_attempts_; }
 
   void ready(long master_pid, const std::string &master_run_id) {
     std::vector<HttpReply> released;
@@ -116,6 +129,7 @@ public:
         released.push_back(std::move(waiter.reply));
       waiters_.clear();
     }
+    changed_.notify_all();
     for (auto &reply : released)
       answer(reply);
   }
@@ -156,24 +170,7 @@ public:
     const auto until = std::min(Clock::now() + std::chrono::milliseconds(wait),
                                 request.deadline - std::chrono::milliseconds(250));
     waiters_.push_back({std::move(reply), until});
-  }
-
-  // Answers held requests whose budget ended; called from the IO owner.
-  void expire() {
-    std::vector<HttpReply> expired;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      for (auto waiter = waiters_.begin(); waiter != waiters_.end();) {
-        if (Clock::now() >= waiter->until || waiter->reply.cancelled()) {
-          expired.push_back(std::move(waiter->reply));
-          waiter = waiters_.erase(waiter);
-        } else {
-          ++waiter;
-        }
-      }
-    }
-    for (auto &reply : expired)
-      answer(reply);
+    changed_.notify_all();
   }
 
   // Ends the held requests with the current (not ready) state.
@@ -185,11 +182,42 @@ public:
         released.push_back(std::move(waiter.reply));
       waiters_.clear();
     }
+    changed_.notify_all();
     for (auto &reply : released)
       answer(reply);
   }
 
 private:
+  // Wake on a new deadline, readiness, shutdown, or the earliest deadline.
+  // HttpServer admission bounds the number of retained replies.
+  void expireLoop() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (!timer_stopping_) {
+      if (waiters_.empty()) {
+        changed_.wait(lock, [this] { return timer_stopping_ || !waiters_.empty(); });
+        continue;
+      }
+      auto until = waiters_.front().until;
+      for (const auto &waiter : waiters_)
+        until = std::min(until, waiter.until);
+      if (changed_.wait_until(lock, until) != std::cv_status::timeout)
+        continue;
+      std::vector<HttpReply> expired;
+      for (auto waiter = waiters_.begin(); waiter != waiters_.end();) {
+        if (Clock::now() >= waiter->until) {
+          expired.push_back(std::move(waiter->reply));
+          waiter = waiters_.erase(waiter);
+        } else {
+          ++waiter;
+        }
+      }
+      lock.unlock();
+      for (auto &reply : expired)
+        answer(reply);
+      lock.lock();
+    }
+  }
+
   struct Waiter {
     HttpReply reply;
     Clock::time_point until;
@@ -213,6 +241,8 @@ private:
     facts["ros_master_uri"] = context_.ros_master_uri;
     facts["ros_master_run_id"] = master_run_id;
     facts["ros_master_pid"] = static_cast<Json::Int64>(master_pid);
+    facts["master_probe_attempts"] = static_cast<Json::UInt64>(probe_attempts_.load());
+    facts["master_bindings"] = static_cast<Json::UInt64>(master_pid > 0 ? 1 : 0);
     facts["ros_ip"] = context_.ros_ip;
     facts["ros_hostname"] = context_.ros_hostname;
     facts["ros_node"] = "/" + node_;
@@ -228,10 +258,14 @@ private:
   const std::string instance_, target_, run_id_, node_;
   const NativeContext context_;
   std::mutex mutex_;
+  std::condition_variable changed_;
+  std::atomic<std::uint64_t> probe_attempts_{0};
+  bool timer_stopping_ = false;
   bool ready_ = false;
   long master_pid_ = 0;
   std::string master_run_id_;
   std::deque<Waiter> waiters_;
+  std::thread timer_;
 };
 
 struct Work {
@@ -352,27 +386,32 @@ private:
   void run() {
     try {
       adapter::MasterIdentity master;
+      adapter::MasterRetry retry;
       for (;;) {
         if (stopping.load())
           return;
         {
           auto budget = binding_.BoundMasterCalls(std::chrono::milliseconds(3000));
-          if (binding_.ProbeMaster(&master)) {
+          describe_.probe();
+          if (binding_.ProbeMaster(&master) && !budget->failed()) {
             binding_.Connect();
-            if (!budget->failed() && binding_.ProbeMaster(&master) &&
-                !budget->failed())
+            if (!budget->failed()) {
+              master.run_id = binding_.MasterRunId();
               break;
+            }
           }
         }
+        const auto delay = retry.failed();
         std::unique_lock<std::mutex> lock(stop_mutex);
-        stop_changed.wait_for(lock, kProbeInterval, [] { return stopping.load(); });
+        stop_changed.wait_for(lock, delay, [] { return stopping.load(); });
       }
       if (stopping.load())
         return;
       ros::NodeHandle node;
       ros::AsyncSpinner spinner(4);
       spinner.start();
-      tools_.reset(new Tools(node, context_, master.pid));
+      observed_master_pid_.store(master.pid);
+      tools_.reset(new Tools(node, context_, master.pid, observed_master_pid_));
       {
         std::lock_guard<std::mutex> lock(mutex_);
         workers_.reset(new Workers(*tools_));
@@ -386,25 +425,31 @@ private:
   void watch(adapter::MasterIdentity master) {
     bool unreachable = false;
     Clock::time_point since;
+    adapter::MasterRetry retry;
     while (!stopping.load() && ros::ok()) {
       adapter::MasterIdentity current;
       bool answered;
       {
         auto budget = binding_.BoundMasterCalls(std::chrono::milliseconds(3000));
+        describe_.probe();
         answered = binding_.ProbeMaster(&current) && !budget->failed();
       }
       if (answered) {
         unreachable = false;
+        retry.reset();
         if (!master.sameMaster(current)) {
+          observed_master_pid_.store(0);
           requestStop(kExitMasterChanged, "the ROS master was replaced (pid " +
                           std::to_string(current.pid) + ")");
           return;
         }
+        observed_master_pid_.store(current.pid);
         if (master.run_id.empty() && !current.run_id.empty()) {
           master.run_id = current.run_id;
           describe_.ready(master.pid, master.run_id);
         }
       } else {
+        observed_master_pid_.store(0);
         if (!unreachable)
           since = Clock::now();
         unreachable = true;
@@ -415,8 +460,12 @@ private:
           return;
         }
       }
+      const auto delay = answered ? kProbeInterval
+                                 : std::min(retry.failed(),
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                since + kUnreachableAfter - Clock::now()));
       std::unique_lock<std::mutex> lock(stop_mutex);
-      stop_changed.wait_for(lock, kProbeInterval,
+      stop_changed.wait_for(lock, delay,
                             [] { return stopping.load(); });
     }
     if (!stopping.load() && !ros::ok())
@@ -426,6 +475,7 @@ private:
   const NativeContext context_;
   Describe &describe_;
   std::mutex mutex_;
+  std::atomic<long> observed_master_pid_{0};
   std::unique_ptr<Tools> tools_;
   std::unique_ptr<Workers> workers_;
   std::thread thread_;
@@ -528,7 +578,6 @@ int main(int argc, char **argv) {
     watch.reset(new MasterWatch(binding, context, describe));
     while (!stopping.load()) {
       server.poll(std::chrono::milliseconds(100));
-      describe.expire();
     }
     stopping.store(true);
     stop_changed.notify_all();

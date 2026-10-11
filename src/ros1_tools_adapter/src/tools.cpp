@@ -309,11 +309,12 @@ bool NativeContext::operator==(const NativeContext& other) const noexcept {
 }
 
 Tools::Tools(ros::NodeHandle node_handle,
-             NativeContext native_context, std::int64_t bound_master_pid)
+             NativeContext native_context, std::int64_t bound_master_pid,
+             const std::atomic<long> &observed_master_pid)
     : native_context_(std::move(native_context)),
       codec_(),
       types_(),
-      publishers_(node_handle, types_, codec_, bound_master_pid),
+      publishers_(node_handle, types_, codec_, bound_master_pid, observed_master_pid),
       services_(types_, codec_) {}
 
 Json::Value Tools::Publish(const std::string& raw, const CallContext& call) {

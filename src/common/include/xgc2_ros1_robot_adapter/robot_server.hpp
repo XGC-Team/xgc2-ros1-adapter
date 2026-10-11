@@ -57,7 +57,7 @@ enum ExitCode : int {
 // Identity of the ROS master as the master itself reports it. A restarted
 // master has another pid even when it listens on the same URI.
 struct MasterIdentity {
-  std::string uri; // getUri
+  std::string uri; // URI fixed by Init
   long pid = 0;    // getPid
   std::string run_id; // parameter /run_id when the master has one
   bool sameMaster(const MasterIdentity &other) const {
@@ -108,6 +108,8 @@ public:
   virtual bool Running() const = 0;
   // Reads the identity of the bound master within the master-call bound.
   virtual bool ProbeMaster(MasterIdentity *identity) = 0;
+  // Local parameter cache, populated once during Connect and updated by ROS.
+  virtual std::string MasterRunId() const = 0;
   // Unregisters the node. Callable once, after every robot is stopped.
   virtual void Shutdown() = 0;
 

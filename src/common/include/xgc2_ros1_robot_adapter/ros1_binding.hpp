@@ -47,6 +47,7 @@ public:
   void Connect() override;
   bool Running() const override;
   bool ProbeMaster(MasterIdentity *identity) override;
+  std::string MasterRunId() const override;
   void Shutdown() override;
   std::size_t Lanes() const override { return queues_.size(); }
   void PumpLane(std::size_t lane, std::chrono::milliseconds wait) override;
@@ -61,6 +62,7 @@ private:
   std::array<ros::CallbackQueue, 2> queues_;
   std::unique_ptr<ros::NodeHandle> node_;
   std::string node_name_;
+  bool run_id_cache_ready_ = false;
 };
 
 // A robot type served by one ROS1 executable.

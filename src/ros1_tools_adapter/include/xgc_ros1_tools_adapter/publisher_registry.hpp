@@ -1,10 +1,12 @@
 #pragma once
+#include <atomic>
 
 #include <ros/node_handle.h>
 #include <ros/publisher.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -39,12 +41,10 @@ struct PublishResult {
 
 class PublisherRegistry {
  public:
-  using MasterGenerationProvider = std::function<std::int64_t()>;
-
   PublisherRegistry(ros::NodeHandle node_handle, TypeRegistry &types,
                     const JsonCodec &codec, std::int64_t bound_master_pid,
-                    std::size_t maximum_publishers = 128,
-                    MasterGenerationProvider master_generation_provider = {});
+                    const std::atomic<long> &observed_master_pid,
+                    std::size_t maximum_publishers = 128);
 
   PublishResult publish(const PublishRequest &request);
   void clear();
@@ -58,6 +58,9 @@ class PublisherRegistry {
     ros::Publisher publisher;
     std::size_t active_calls{0};
     bool native_dispatch_committed{false};
+    std::mutex connection_mutex;
+    std::condition_variable connection_changed;
+    std::uint64_t connection_version{0};
   };
 
   void release(const std::string &topic, const std::shared_ptr<Entry> &entry,
@@ -68,7 +71,7 @@ class PublisherRegistry {
   TypeRegistry &types_;
   const JsonCodec &codec_;
   const std::size_t maximum_publishers_;
-  MasterGenerationProvider master_generation_provider_;
+  const std::atomic<long> &observed_master_pid_;
   const std::int64_t master_generation_;
   mutable std::mutex mutex_;
   std::map<std::string, std::shared_ptr<Entry>> entries_;

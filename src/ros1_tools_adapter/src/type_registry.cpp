@@ -95,10 +95,12 @@ ros_babel_fish::BabelFishMessage::Ptr TypeRegistry::serialize(
 ros::Publisher TypeRegistry::advertise(ros::NodeHandle& node_handle,
                                        const std::string& type,
                                        const std::string& topic,
-                                       std::uint32_t queue_size, bool latch) {
+                                       std::uint32_t queue_size, bool latch,
+                                       const ros::SubscriberStatusCallback &connection_changed) {
   std::lock_guard<std::mutex> lock(resolver_mutex_);
   try {
-    return babel_fish_.advertise(node_handle, type, topic, queue_size, latch);
+    return babel_fish_.advertise(node_handle, type, topic, queue_size, latch,
+                                connection_changed, connection_changed);
   } catch (const std::exception& exception) {
     permanentError("publisher_advertise_failed",
                    "unable to advertise ROS1 topic '" + topic + "' as '" +

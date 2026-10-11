@@ -1,6 +1,5 @@
 #include "xgc_ros1_tools_adapter/publisher_registry.hpp"
 
-#include <ros/master.h>
 #include <ros/ros.h>
 
 #include <chrono>
@@ -11,21 +10,6 @@
 
 namespace xgc_ros1_tools_adapter {
 namespace {
-
-std::int64_t currentMasterGeneration() {
-  XmlRpc::XmlRpcValue request;
-  XmlRpc::XmlRpcValue response;
-  XmlRpc::XmlRpcValue payload;
-  request.setSize(1);
-  request[0] = "/xgc_ros1_tools_adapter_master_generation";
-  if (!ros::master::execute("getPid", request, response, payload, false) ||
-      payload.getType() != XmlRpc::XmlRpcValue::TypeInt ||
-      static_cast<int>(payload) <= 0) {
-    transientError("ros_master_generation_unavailable",
-                   "ROS1 master process generation is unavailable");
-  }
-  return static_cast<int>(payload);
-}
 
 bool deadlineExpired(std::int64_t deadline_unix_nanos) {
   if (deadline_unix_nanos <= 0) {
@@ -78,15 +62,13 @@ void waitUntil(const PublishRequest &request,
 
 PublisherRegistry::PublisherRegistry(
     ros::NodeHandle node_handle, TypeRegistry &types, const JsonCodec &codec,
-    std::int64_t bound_master_pid, std::size_t maximum_publishers,
-    MasterGenerationProvider master_generation_provider)
+    std::int64_t bound_master_pid, const std::atomic<long> &observed_master_pid,
+    std::size_t maximum_publishers)
     : node_handle_(std::move(node_handle)),
       types_(types),
       codec_(codec),
       maximum_publishers_(maximum_publishers),
-      master_generation_provider_(master_generation_provider
-                                      ? std::move(master_generation_provider)
-                                      : currentMasterGeneration),
+      observed_master_pid_(observed_master_pid),
       master_generation_(bound_master_pid) {
   if (maximum_publishers_ == 0) {
     permanentError("invalid_configuration",
@@ -124,9 +106,19 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
       entry->message_type = request.message_type;
       entry->latch = request.latch;
       entry->queue_size = request.queue_size;
+      const std::weak_ptr<Entry> weak = entry;
+      const auto connection_changed = [weak](const ros::SingleSubscriberPublisher &) {
+        if (auto connected = weak.lock()) {
+          {
+            std::lock_guard<std::mutex> lock(connected->connection_mutex);
+            ++connected->connection_version;
+          }
+          connected->connection_changed.notify_all();
+        }
+      };
       entry->publisher =
           types_.advertise(node_handle_, request.message_type, request.topic,
-                           request.queue_size, request.latch);
+                           request.queue_size, request.latch, connection_changed);
       entry->active_calls = 1u;
       publisher = entry->publisher;
       selected_entry = entry;
@@ -159,10 +151,17 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
       const auto deadline =
           std::chrono::steady_clock::now() +
           std::chrono::milliseconds(request.wait_for_subscribers_ms);
+      std::unique_lock<std::mutex> lock(selected_entry->connection_mutex);
       while (publisher.getNumSubscribers() == 0 && ros::ok() &&
              std::chrono::steady_clock::now() < deadline) {
         requireDispatchAllowed(request);
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        const auto version = selected_entry->connection_version;
+        // roscpp's connect event wakes the wait. The cancellation API is a
+        // predicate, so only cancellation/deadline checks need a timer.
+        selected_entry->connection_changed.wait_until(
+            lock, std::min(deadline, std::chrono::steady_clock::now() +
+                                        std::chrono::milliseconds(100)),
+            [&] { return selected_entry->connection_version != version; });
       }
       requireDispatchAllowed(request);
       if (publisher.getNumSubscribers() == 0) {
@@ -246,7 +245,8 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
 }
 
 void PublisherRegistry::refreshMasterGeneration() {
-  const std::int64_t current = master_generation_provider_();
+  // The single lifecycle watcher owns liveness. Requests never probe a master.
+  const std::int64_t current = observed_master_pid_.load();
   if (current <= 0) {
     transientError("ros_master_generation_unavailable",
                    "ROS1 master process generation is invalid");

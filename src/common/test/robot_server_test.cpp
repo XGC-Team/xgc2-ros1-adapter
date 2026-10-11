@@ -4,6 +4,7 @@
 #include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc2/xrpc/grpc.hpp"
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/master_retry.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -137,10 +138,13 @@ public:
       return false;
     identity->uri = "http://devbox:11311/";
     identity->pid = master_pid;
-    identity->run_id = !master_run_known ? "" : master_run_changed
+    identity->run_id = MasterRunId();
+    return true;
+  }
+  std::string MasterRunId() const override {
+    return !master_run_known ? "" : master_run_changed
                                                    ? "master-run-2"
                                                    : "master-run-1";
-    return true;
   }
   void Shutdown() override { world_.record("ros-shutdown"); }
   std::size_t Lanes() const override { return 2; }
@@ -505,6 +509,23 @@ protected:
 };
 
 using ServerLifecycle = Fixture;
+
+TEST(MasterRetry, UsesFullJitterExponentialCeilingsAndResetsAfterSuccess) {
+  MasterRetry retry;
+  auto ceiling = milliseconds(250);
+  std::set<long long> capped_delays;
+  for (int attempt = 0; attempt < 40; ++attempt) {
+    const auto delay = retry.failed();
+    EXPECT_GE(delay, milliseconds(1));
+    EXPECT_LE(delay, ceiling);
+    if (ceiling == milliseconds(10000))
+      capped_delays.insert(delay.count());
+    ceiling = std::min(ceiling * 2, milliseconds(10000));
+  }
+  EXPECT_GT(capped_delays.size(), 1u);
+  retry.reset();
+  EXPECT_LE(retry.failed(), milliseconds(250));
+}
 
 TEST_F(ServerLifecycle, DescribeHoldsUntilTheRosNodeIsRegisteredThenReportsTheFacts) {
   binding_->hold_connect = true;

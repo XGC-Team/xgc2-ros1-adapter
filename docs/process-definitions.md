@@ -104,6 +104,18 @@ The type server definitions differ in the provider, the executable and the node 
 `--provider` and no Shutdown RPC, takes `rosHostname` (mutually exclusive with `rosIp`) and
 passes `--run-id` and `--node-name` the same way (`xgc_ros1_tools_${runId}`).
 
+Type servers and Tools share one master watcher per process. Before binding, failures
+use exponential full jitter (250 ms start, factor 2, 10 s ceiling) with an interruptible
+condition-variable wait. Each probe is one `getPid` XML-RPC call; `/run_id` is cached
+through ROS parameter updates after binding. Describe remains available throughout the
+wait and held requests wake on readiness or their deadline. Failure logs contain the
+first attempt and at most one suppressed-attempt summary per 10 s. Tools publishes use
+the watcher's observed master identity without issuing another liveness probe.
+ROS subscriptions and cached publishers follow native connection events. The member
+set stays revisioned and idempotent; topic state stays latest-wins, and a latched Tools
+publisher delivers its latest value once to each newly connected subscriber. Replacing
+the master ends the process, so it never replays Run state into a new master.
+
 The Scene definition starts `xgc2_scene_adapter` directly with ROS remappings:
 `__ns`, `__master` and `__ip` select the namespace and ROS environment, and `_scene_file`,
 `_working_file`, `_generation_parameters_json`, `_save_directory`, `_target_id`,

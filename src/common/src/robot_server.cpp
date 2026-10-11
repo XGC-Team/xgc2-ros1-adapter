@@ -1,5 +1,7 @@
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/master_retry.hpp"
 #include "xgc/robot/v1/server.grpc.pb.h"
+#include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc2/xrpc/grpc.hpp"
 #include <algorithm>
 #include <array>
@@ -556,6 +558,7 @@ private:
     pthread_setname_np(pthread_self(), "master-watch");
     bool unreachable = false;
     Steady::time_point unreachable_since;
+    MasterRetry retry(std::min(timings_.master_probe_interval, Milliseconds(250)));
     std::unique_lock<std::mutex> lock(watch_mutex_);
     while (!watch_stop_) {
       lock.unlock();
@@ -567,6 +570,7 @@ private:
       bool known;
       {
         auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
+        ++master_probe_attempts_;
         known = binding_.ProbeMaster(&now) && !budget->failed();
       }
       lock.lock();
@@ -574,6 +578,7 @@ private:
         break;
       if (known) {
         unreachable = false;
+        retry.reset();
         if (!now.sameMaster(pinned_)) {
           setDetail("pinned pid " + std::to_string(pinned_.pid) + " at " +
                     pinned_.uri + ", now pid " + std::to_string(now.pid) +
@@ -601,7 +606,12 @@ private:
           return;
         }
       }
-      watch_changed_.wait_for(lock, timings_.master_probe_interval,
+      const auto delay = known ? timings_.master_probe_interval
+                               : std::min(retry.failed(),
+                                          std::chrono::duration_cast<Milliseconds>(
+                                              unreachable_since + timings_.master_unreachable_after -
+                                              Steady::now()));
+      watch_changed_.wait_for(lock, delay,
                               [this] { return watch_stop_; });
     }
   }
@@ -687,10 +697,9 @@ private:
     const auto until =
         std::min(Steady::now() + wait, scope.deadline() - kReadyAnswerMargin);
     std::unique_lock<std::mutex> lock(phase_mutex_);
-    while (phase_ == Phase::Starting && !scope.cancelled() &&
-           Steady::now() < until)
-      phase_changed_.wait_until(
-          lock, std::min(until, Steady::now() + Milliseconds(100)));
+    phase_changed_.wait_until(lock, until, [this] {
+      return phase_ != Phase::Starting;
+    });
   }
   bool awaitDrained(const xgc2::xrpc::GrpcCallScope &scope) {
     std::unique_lock<std::mutex> lock(phase_mutex_);
@@ -747,13 +756,33 @@ private:
     facts["ros_master_uri"] = options_.ros_master_uri;
     facts["ros_master_run_id"] = pinned ? master.run_id : "";
     facts["ros_master_pid"] = pinned ? master.pid : 0;
-    facts["ros_master_reported_uri"] = pinned ? master.uri : "";
+    facts["master_probe_attempts"] = master_probe_attempts_.load();
+    facts["master_bindings"] = master_bindings_.load();
     facts["ros_node"] = "/" + ros_node_name_;
     facts["run_id"] = options_.run_id;
     facts["provider"] = options_.provider;
+    std::vector<std::shared_ptr<Member>> members;
     {
       std::lock_guard<std::mutex> lock(table_mutex_);
       facts["members"] = members_.size();
+      facts["members_revision"] = members_revision_;
+      for (const auto &entry : members_)
+        members.push_back(entry.second);
+    }
+    facts["robots"] = nlohmann::json::object();
+    for (const auto &member : members) {
+      xgc::semantic::common::v1::VehicleHealth health;
+      {
+        std::lock_guard<std::mutex> lock(member->state_mutex);
+        const auto found = member->latest.find("state.health");
+        if (found != member->latest.end())
+          health.ParseFromString(found->second.second.message().payload().value());
+      }
+      auto &robot = facts["robots"][member->identity.robot_id()];
+      robot["state"] = health.online() ? "online" : "waiting";
+      robot["reason"] = health.online() ? ""
+                         : health.summary().empty() ? "waiting for robot telemetry"
+                                                    : health.summary();
     }
     facts["state"] = current == Phase::Starting   ? "starting"
                      : current == Phase::Ready    ? "ready"
@@ -832,6 +861,7 @@ private:
   void registrationLoop() {
     pthread_setname_np(pthread_self(), "ros-library");
     MasterIdentity identity;
+    MasterRetry retry(std::min(timings_.master_probe_interval, Milliseconds(250)));
     for (;;) {
       if (shutdown_ || stop_reason_.load() != StopReason::None)
         return;
@@ -839,15 +869,19 @@ private:
         auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
         // Do not start roscpp until its master exists. Each attempt is
         // bounded, but waiting for the first binding has no deadline.
-        if (binding_.ProbeMaster(&identity)) {
+        ++master_probe_attempts_;
+        if (binding_.ProbeMaster(&identity) && !budget->failed()) {
           binding_.Connect();
-          if (!budget->failed() && binding_.ProbeMaster(&identity) &&
-              !budget->failed())
+          if (!budget->failed()) {
+            identity.run_id = binding_.MasterRunId();
+            ++master_bindings_;
             break;
+          }
         }
       }
-      std::unique_lock<std::mutex> lock(jobs_mutex_);
-      jobs_ready_.wait_for(lock, timings_.master_probe_interval, [this] {
+      const auto delay = retry.failed();
+      std::unique_lock<std::mutex> lock(watch_mutex_);
+      watch_changed_.wait_for(lock, delay, [this] {
         return shutdown_ || stop_reason_.load() != StopReason::None;
       });
     }
@@ -954,7 +988,7 @@ private:
             if (!shutdown_ && !member->in_flight && !member->commands.empty())
               dispatch(member, *io);
           }
-          io->Pump(Milliseconds(2));
+          io->Pump(members.empty() ? Milliseconds(100) : Milliseconds(2));
         }
       } catch (...) {
         failure = std::current_exception();
@@ -1539,6 +1573,7 @@ private:
   std::mutex watch_mutex_;
   std::condition_variable watch_changed_;
   bool watch_stop_ = false;
+  std::atomic<std::uint64_t> master_probe_attempts_{0}, master_bindings_{0};
   std::thread watch_;
 
   std::mutex status_mutex_;
