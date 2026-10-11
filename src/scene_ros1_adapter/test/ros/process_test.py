@@ -137,12 +137,13 @@ def fleet_process(args, root, node_log, namespace, source):
             observed[name] = message
             counts[name] = counts.get(name, 0) + 1
             changed.notify_all()
-    fleet = {'schemaVersion': 1, 'robots': [
-        {'namespace': '/lf_process/A', 'poseTopic': '/lf_process/A/pose', 'hRes': 1, 'vRes': 1,
-         'hFovDeg': 90, 'vFovDeg': 0, 'publishBeams': True, 'rateHz': 20},
-        {'namespace': '/lf_process/B', 'poseTopic': '/lf_process/B/pose', 'hRes': 1, 'vRes': 1,
-         'hFovDeg': 90, 'vFovDeg': 0, 'publishBeams': True, 'rateHz': 10}],
-        'referenceCloud': {'surfaceSpacing': 0.5}}
+    session = {'runMode': 'simulation', 'robots': [
+        {'namespace': '/lf_process/A', 'binding': {'simulationSensors': {'simpleLidar': {
+            'enabled': True, 'mode': 'raycast', 'acceleration': 'cpu', 'publishBeams': True,
+            'hRes': 1, 'vRes': 1, 'hFovDeg': 90, 'rateHz': 20}}}},
+        {'namespace': '/lf_process/B', 'binding': {'simulationSensors': {'simpleLidar': True}}}],
+        'visualizationTopics': [[{'topic': '/xgc/scene/reference_cloud',
+            'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]]}
     simulation_ref = {'target_id': 'fixture', 'service': 'xgc2.simulation', 'api_version': 'v1',
                       'instance_id': 'simulation-fixture', 'profile': 'http.v1',
                       'endpoint': {'kind': 'unix', 'address': str(sim_path)}}
@@ -151,11 +152,13 @@ def fleet_process(args, root, node_log, namespace, source):
                '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
                '_scene_file:=' + str(source), '_profile:=gazebo', '__ns:=' + namespace,
                '_simulation_service_ref_json:=' + json.dumps(simulation_ref),
-               '_lidar_xrpc_socket:=' + str(path), '_lidar_fleet_json:=' + json.dumps(fleet),
+               '_lidar_xrpc_socket:=' + str(path), '--session-stdin',
                '_lidar_defaults_json:={"worker_threads":2}', '_lidar_enabled:=false']
     try:
         with node_log.open('a') as output:
-            node = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            node = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        node.stdin.write(json.dumps(session).encode())
+        node.stdin.close()
         wait_socket(str(scene_socket), node, unix=True)
         wait_socket(str(path), node, unix=True)
         assert native.applying.wait(timeout=5), 'Native application did not start'
@@ -169,14 +172,15 @@ def fleet_process(args, root, node_log, namespace, source):
             native.release.set()
             described, lidar_described = authoring.result(timeout=5), lidar.result(timeout=5)
         assert described['ready'] and lidar_described['ready']
-        assert lidar_described['facts'] == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 2, 'backend': 'cpu'}
+        assert lidar_described['facts'] == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 1, 'backend': 'cpu'}
         instance = lidar_described['instance_id']
-        for robot in fleet['robots']:
+        assert not any(topic.startswith('/lf_process/B/simple_lidar/') for topic, _ in rospy.get_published_topics())
+        for robot in session['robots'][:1]:
             name = robot['namespace']
             for suffix in ['points', 'beams']:
                 topic = name + '/simple_lidar/' + suffix
                 subscribers.append(rospy.Subscriber(topic, PointCloud2, lambda msg, topic=topic: receive(topic, msg)))
-            poses.append(rospy.Publisher(robot['poseTopic'], PoseStamped, queue_size=1))
+            poses.append(rospy.Publisher('/vrpn_client_node' + name + '/pose', PoseStamped, queue_size=1))
         subscribers.append(rospy.Subscriber('/xgc/scene/reference_cloud', PointCloud2, lambda msg: receive('reference', msg)))
         def send(duration, predicate=None):
             until = time.monotonic() + duration
@@ -198,7 +202,7 @@ def fleet_process(args, root, node_log, namespace, source):
         receipt = http_call(path, 'POST', '/v1/configure', 'enable', instance,
                             {'expected_revision': 1, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
         assert receipt['state'] == 'succeeded'
-        assert send(5, lambda: len(observed) == 5 and observed['reference'].width > 0), list(observed)
+        assert send(5, lambda: len(observed) == 3 and observed['reference'].width > 0), list(observed)
         with changed:
             for name, cloud in observed.items():
                 assert cloud.header.frame_id == 'world' and cloud.height == 1 and cloud.is_dense, name
@@ -237,15 +241,36 @@ def fleet_process(args, root, node_log, namespace, source):
         stop(node, signal.SIGTERM)
         assert node.returncode == 0
         assert not path.exists() and not scene_socket.exists()
-        for key, value in [('lidar_defaults_json', '{"typo":1}'), ('lidar_fleet_json', '{"schemaVersion":2}')]:
-            invalid = [arg for arg in command if not arg.startswith('_' + key + ':=')]
-            invalid.append('_' + key + ':=' + value)
-            with node_log.open('a') as output:
-                node = subprocess.Popen(invalid, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            assert node.wait(timeout=10) == 1
+        invalid = [arg for arg in command if not arg.startswith('_lidar_defaults_json:=')]
+        invalid.append('_lidar_defaults_json:={"typo":1}')
+        result = subprocess.run(invalid, input=json.dumps(session), text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
+        assert result.returncode == 1 and '~lidar_defaults_json' in result.stdout, result.stdout
+        assert not path.exists() and not scene_socket.exists()
+        for refusal in ['cpu', 'namespace', 'beams']:
+            invalid_session = json.loads(json.dumps(session))
+            selected = invalid_session['robots'][0]['binding']['simulationSensors']['simpleLidar']
+            if refusal == 'cpu':
+                selected.pop('acceleration')
+                message = 'sampled-scene lidar requires an explicit CPU acceleration selection'
+            elif refusal == 'namespace':
+                invalid_session['robots'][0]['namespace'] = 'invalid namespace'
+                message = 'invalid lidar namespace'
+            else:
+                selected['mode'] = 'penetrating'
+                message = 'penetrating sampled clouds have no beams'
+            result = subprocess.run(command, input=json.dumps(invalid_session), text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
+            assert result.returncode == 1 and message in result.stdout, result.stdout
             assert not path.exists() and not scene_socket.exists()
-            assert '~' + key in node_log.read_text()
-        print('PASS: two sockets held unbound readiness, real two-sensor timer, beams/reference, enable control, pending/refused truth, SIGTERM')
+        for profile in ['gazebo', 'xsim', 'physical']:
+            invalid_command = [arg.replace('_profile:=gazebo', '_profile:=' + profile) for arg in command]
+            for invalid_text in ['{', '{"runMode":"invalid","robots":[],"visualizationTopics":[]}', ' ' * (8388608 + 1)]:
+                result = subprocess.run(invalid_command, input=invalid_text, text=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
+                assert result.returncode == 2 and '--session-stdin' in result.stdout, result.stdout
+                assert not path.exists() and not scene_socket.exists()
+        print('PASS: two sockets held unbound readiness, sampled/default roster, beams/reference, enable control, stdin/refusal errors, SIGTERM')
     finally:
         native.release.set()
         stop(node, signal.SIGTERM)
@@ -316,7 +341,10 @@ def main():
                             '_scene_file:=' + str(source), '_profile:=physical', '__ns:=' + namespace,
                             '_lidar_xrpc_socket:=' + str(lidar_socket)]
             with node_log.open('w') as output:
-                node = subprocess.Popen(command_line, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                node = subprocess.Popen(command_line, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            # With no --session-stdin flag, even invalid input is not read.
+            node.stdin.write(b'not a session document')
+            node.stdin.close()
             wait_socket(str(socket_path), node, unix=True)
             # Exactly one successful unbound readiness call; no describe polling.
             describe = http_call(socket_path, 'GET', '/v1/describe?wait_ready_ms=30000', 'readiness')
@@ -361,11 +389,24 @@ def main():
             with changed:
                 assert changed.wait_for(lambda: not json.loads(observed['document'].data)['online'], timeout=3)
             # A declared lidar service also answers in xsim with no engine,
-            # even when launch configuration supplies a nonempty manifest.
-            xsim_command = [arg.replace('_profile:=physical', '_profile:=xsim') for arg in command_line]
-            xsim_command.append('_lidar_fleet_json:=' + json.dumps({'schemaVersion': 1, 'robots': [{'namespace': '/lf_absent'}]}))
+            # even when stdin contains a roster with a sampled selection.
             with node_log.open('a') as output:
-                node = subprocess.Popen(xsim_command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                node = subprocess.Popen(command_line + ['--session-stdin'], stdin=subprocess.DEVNULL,
+                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            wait_socket(str(lidar_socket), node, unix=True)
+            empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'empty-stdin')
+            assert empty['ready'] and empty['facts']['sensors'] == 0
+            stop(node, signal.SIGTERM)
+            assert node.returncode == 0 and not lidar_socket.exists()
+            xsim_command = [arg.replace('_profile:=physical', '_profile:=xsim') for arg in command_line]
+            xsim_command.append('--session-stdin')
+            session = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_absent',
+                'binding': {'simulationSensors': {'simpleLidar': {'enabled': True,
+                    'mode': 'depth_frustum', 'acceleration': 'cpu'}}}}], 'visualizationTopics': []}
+            with node_log.open('a') as output:
+                node = subprocess.Popen(xsim_command, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            node.stdin.write(json.dumps(session).encode())
+            node.stdin.close()
             wait_socket(str(lidar_socket), node, unix=True)
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'xsim-fleet')
             assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}

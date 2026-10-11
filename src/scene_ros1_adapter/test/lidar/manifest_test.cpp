@@ -151,7 +151,11 @@ TEST(Manifest, BodyRosterIdentityGeometryAndPoseSources) {
   EXPECT_TRUE(f.body_roster);
   EXPECT_EQ(41, f.robots[0].body_id);
   EXPECT_EQ("/truth/A", f.robots[0].pose_topic);
+  d["robots"][0]["poseTopic"] = "/measurement/A";
+  EXPECT_EQ("/measurement/A", parseManifest(d.dump()).robots[0].pose_topic);
   d["robots"][0]["mode"] = "penetrating";
+  EXPECT_EQ("/measurement/A", parseManifest(d.dump()).robots[0].pose_topic);
+  d["robots"][0].erase("poseTopic");
   EXPECT_EQ("/vrpn_client_node/A/pose",
             parseManifest(d.dump()).robots[0].pose_topic);
   d["robots"][0]["bodyId"] = 7;

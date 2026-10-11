@@ -81,7 +81,7 @@ class ProcessDefinitionTest(unittest.TestCase):
                 for parameter in definition["parameters"]["properties"].values():
                     self.assertLessEqual(
                         set(parameter),
-                        {"type", "default", "enum", "minimum", "maximum", "sensitive", "output", "fixedOnly"},
+                        {"type", "default", "enum", "minimum", "maximum", "sensitive", "output", "fixedOnly", "description"},
                     )
                 self.assertEqual(definition["readiness"]["kind"], "describe")
                 readiness = definition["readiness"]
@@ -129,8 +129,10 @@ class ProcessDefinitionTest(unittest.TestCase):
                 definition = load(path)
                 args = definition["command"]["args"]
                 if path.stem == "xgc2-ros1-scene-adapter":
-                    remappings = dict(argument.split(":=", 1) for argument in args)
-                    self.assertEqual(len(remappings), len(args))
+                    self.assertIn("--session-stdin", args)
+                    self.assertEqual(args.count("--session-stdin"), 1)
+                    remappings = dict(argument.split(":=", 1) for argument in args if ":=" in argument)
+                    self.assertEqual(len(remappings) + 1, len(args))
                     self.assertEqual(remappings, {
                         "__name": "xgc2_scene_adapter",
                         "__ns": "${namespace}",
@@ -146,12 +148,16 @@ class ProcessDefinitionTest(unittest.TestCase):
                         "_profile": "${profile}",
                         "_simulation_service_ref_json": "${simulationServiceRefJson}",
                         "_lidar_xrpc_socket": "${lidarSocketPath}",
-                        "_lidar_fleet_json": "${lidarFleetJson}",
                         "_lidar_enabled": "${lidarEnabled}",
                         "_lidar_defaults_json": "${lidarDefaultsJson}",
                     })
                     declared = definition["parameters"]["properties"]
                     used = set(re.findall(r"\$\{([A-Za-z0-9]+)\}", " ".join(args)))
+                    stdin_parameter = definition["command"]["stdinParameter"]
+                    self.assertEqual(stdin_parameter, "sessionJson")
+                    self.assertIn(stdin_parameter, declared)
+                    self.assertEqual(declared[stdin_parameter]["type"], "string")
+                    used.add(stdin_parameter)
                     self.assertEqual(used, set(declared))
                     self.assertEqual(
                         set(definition["parameters"]["required"]),
@@ -161,9 +167,10 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertEqual(set(declared), {
                         "socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
                         "sceneFile", "workingFile", "generationParametersJson", "saveDirectory", "frozen",
-                        "profile", "simulationServiceRefJson", "lidarFleetJson", "lidarEnabled", "lidarDefaultsJson",
+                        "profile", "simulationServiceRefJson", "sessionJson", "lidarEnabled", "lidarDefaultsJson",
                     })
-                    self.assertEqual(declared["lidarFleetJson"], {"type": "string", "default": ""})
+                    self.assertEqual(declared["sessionJson"]["default"], "")
+                    self.assertIn("unchanged", declared["sessionJson"]["description"])
                     self.assertEqual(declared["lidarEnabled"], {"type": "boolean", "default": True})
                     self.assertEqual(declared["lidarDefaultsJson"], {"type": "string", "default": "{}"})
                     continue

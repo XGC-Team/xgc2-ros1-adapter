@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <future>
 #include <cstring>
+#include <sstream>
 #include <algorithm>
 #include <unistd.h>
 
@@ -65,10 +66,11 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
     if (i < 2) robots.push_back({{"namespace", ns}, {"mode", "raycast"}, {"hRes", 1}, {"vRes", 1},
         {"hFovDeg", 90}, {"vFovDeg", 0}, {"publishBeams", true}, {"rateHz", 10}});
   }
-  const auto config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-edge.sock"},
-      {"lidar_fleet_json", Json{{"schemaVersion", 1}, {"robots", robots}, {"bodies", bodies},
-          {"referenceCloud", {{"surfaceSpacing", 0.5}}}}.dump()},
+  auto config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-edge.sock"},
       {"lidar_defaults_json", "{\"worker_threads\":2}"}}, "gazebo");
+  config.manifest = lidar::parseManifest(Json{{"schemaVersion", 1}, {"robots", robots}, {"bodies", bodies},
+      {"referenceCloud", {{"surfaceSpacing", 0.5}}}}.dump());
+  config.have_fleet = true;
   Edge edge(handle, config);
   edge.stopTimer();
   ASSERT_NE(edge.engine(), nullptr);
@@ -256,10 +258,11 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   ros::Time::setNow(ros::Time(100));
   EXPECT_TRUE(ros::Time::isSimTime());
   const auto clock_ns = prefix + "/clock_sensor";
-  const auto clock_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-clock.sock"},
-      {"lidar_fleet_json", Json{{"schemaVersion", 1}, {"robots", Json::array({
-          {{"namespace", clock_ns}, {"poseTopic", clock_ns + "/pose"}, {"hRes", 1}, {"vRes", 1},
-           {"hFovDeg", 90}, {"vFovDeg", 0}, {"rateHz", 10}}})}}.dump()}}, "gazebo");
+  const auto clock_session = lidar::parseSessionInput(Json{{"runMode", "simulation"},
+      {"robots", Json::array({{{"namespace", clock_ns}, {"binding", {{"simulationSensors", {{"simpleLidar",
+          {{"enabled", true}, {"mode", "depth_frustum"}, {"acceleration", "cpu"},
+           {"hRes", 1}, {"vRes", 1}, {"rateHz", 10}}}}}}}}})}, {"visualizationTopics", Json::array()}}.dump());
+  const auto clock_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-clock.sock"}}, "gazebo", clock_session);
   Edge clock_edge(handle, clock_config);
   clock_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
   unsigned clock_deliveries = 0;
@@ -268,7 +271,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
         ++clock_deliveries;
         EXPECT_EQ(cloud->header.stamp, ros::Time(100));
       });
-  auto clock_pose = handle.advertise<geometry_msgs::PoseStamped>(clock_ns + "/pose", 1);
+  auto clock_pose = handle.advertise<geometry_msgs::PoseStamped>("/vrpn_client_node" + clock_ns + "/pose", 1);
   ASSERT_TRUE(pump([&] { return clock_pose.getNumSubscribers() > 0; }));
   geometry_msgs::PoseStamped clock_sample;
   clock_sample.header.frame_id = "world";
@@ -291,9 +294,10 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   reference_sub.shutdown();
   late_sub.shutdown();
   reference.reset();
-  const auto reference_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-reference.sock"},
-      {"lidar_fleet_json", Json{{"schemaVersion", 1}, {"robots", Json::array()},
-          {"referenceCloud", {{"surfaceSpacing", 0.5}}}}.dump()}}, "gazebo");
+  const auto reference_session = lidar::parseSessionInput(Json{{"runMode", "simulation"}, {"robots", Json::array()},
+      {"visualizationTopics", Json::array({Json::array({{{"topic", "/xgc/scene/reference_cloud"},
+          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})})}}.dump());
+  const auto reference_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-reference.sock"}}, "gazebo", reference_session);
   Edge reference_edge(handle, reference_config);
   reference_edge.stopTimer();
   ASSERT_TRUE(reference_edge.engine()->manifest().robots.empty());
@@ -311,6 +315,40 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   EXPECT_EQ(reference->point_step, 12u);
   EXPECT_EQ(reference->fields.size(), 3u);
   reference_edge.shutdown();
+
+  const auto sampled_ns = prefix + "/sampled";
+  const auto native_ns = prefix + "/native";
+  const auto roster = Json{{"runMode", "simulation"}, {"robots", Json::array({
+      {{"namespace", sampled_ns}, {"binding", {{"simulationSensors", {{"simpleLidar", {{"enabled", true},
+          {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 1}, {"vRes", 1}}}}}}}},
+      {{"namespace", native_ns}, {"binding", {{"simulationSensors", {{"simpleLidar", true}}}}}}
+      })}, {"visualizationTopics", Json::array()}};
+  std::istringstream session_stream(roster.dump());
+  const auto roster_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-roster.sock"}},
+      "gazebo", readSessionInput(session_stream));
+  ASSERT_EQ(roster_config.manifest.robots.size(), 1u);
+  EXPECT_EQ(roster_config.manifest.robots[0].pose_topic, "/vrpn_client_node" + sampled_ns + "/pose");
+  Edge roster_edge(handle, roster_config);
+  roster_edge.stopTimer();
+  roster_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
+  sensor_msgs::PointCloud2::ConstPtr roster_cloud;
+  auto roster_sub = handle.subscribe<sensor_msgs::PointCloud2>(sampled_ns + "/simple_lidar/points", 1,
+      [&](const sensor_msgs::PointCloud2::ConstPtr& cloud) { roster_cloud = cloud; });
+  auto roster_pose = handle.advertise<geometry_msgs::PoseStamped>("/vrpn_client_node" + sampled_ns + "/pose", 1);
+  ASSERT_TRUE(pump([&] { return roster_pose.getNumSubscribers() > 0; }));
+  clock_sample.header.stamp = ros::Time::now();
+  roster_pose.publish(clock_sample);
+  ASSERT_TRUE(pump([&] {
+    roster_edge.engine()->tick(ros::Time::now().toNSec());
+    return roster_cloud != nullptr;
+  }));
+  EXPECT_EQ(roster_cloud->header.stamp, clock_sample.header.stamp);
+  EXPECT_GT(roster_cloud->width, 0u);
+  ASSERT_TRUE(ros::master::getTopics(topics));
+  EXPECT_FALSE(std::any_of(topics.begin(), topics.end(), [&](const auto& topic) {
+    return topic.name == sampled_ns + "/simple_lidar/beams" || topic.name.find(native_ns + "/simple_lidar/") == 0;
+  }));
+  roster_edge.shutdown();
 }
 }  // namespace
 }  // namespace xgc_scene::lidar_ros

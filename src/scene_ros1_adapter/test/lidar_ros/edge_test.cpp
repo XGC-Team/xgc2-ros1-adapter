@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <ros/serialization.h>
 #include <cstring>
+#include <sstream>
 
 namespace xgc_scene::lidar_ros {
 namespace {
@@ -76,20 +77,74 @@ xgc2_geometry_msgs::SceneState state(const xgc2_geometry_msgs::SceneSnapshot& de
   return message;
 }
 
+Json sessionDocument(std::size_t sensors = 1) {
+  Json robots = Json::array();
+  for (std::size_t i = 0; i < sensors; ++i)
+    robots.push_back({{"namespace", "/A" + std::to_string(i)},
+        {"binding", {{"simulationSensors", {{"simpleLidar", {{"enabled", true},
+            {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 1}, {"vRes", 1}}}}}}}});
+  return {{"runMode", "simulation"}, {"robots", robots},
+      {"visualizationTopics", Json::array({Json::array({{{"topic", "/xgc/scene/reference_cloud"},
+          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})})}};
+}
+
+TEST(LidarSession, StdinEmptyValidSizeJsonRunModesAndReadFailures) {
+  std::istringstream empty;
+  EXPECT_FALSE(readSessionInput(empty));
+  auto document = sessionDocument();
+  document["robots"][0]["asset"] = {{"opaque", "unchanged"}};
+  for (const auto* mode : {"simulation", "hybrid", "physical"}) {
+    document["runMode"] = mode;
+    std::istringstream stream(document.dump());
+    auto input = readSessionInput(stream);
+    ASSERT_TRUE(input);
+    EXPECT_EQ(input->run_mode, mode);
+    EXPECT_EQ(input->robots, document["robots"]);
+    EXPECT_EQ(input->visualization_topics, document["visualizationTopics"]);
+  }
+  auto maximum = document.dump();
+  maximum.resize(kMaxDocumentBytes, ' ');
+  std::istringstream boundary(maximum);
+  EXPECT_TRUE(readSessionInput(boundary));
+  maximum.push_back(' ');
+  std::istringstream oversized(maximum);
+  try { readSessionInput(oversized); FAIL(); }
+  catch (const SceneError& error) {
+    EXPECT_NE(std::string(error.what()).find("--session-stdin"), std::string::npos);
+    EXPECT_NE(std::string(error.what()).find("exceeds 8 MiB"), std::string::npos);
+  }
+  for (const auto& invalid : {std::string("{"), std::string("[]"),
+      std::string("{\"runMode\":\"invalid\",\"robots\":[],\"visualizationTopics\":[]}"),
+      std::string("{\"robots\":[],\"visualizationTopics\":[]}")}) {
+    std::istringstream stream(invalid);
+    try { readSessionInput(stream); FAIL(); }
+    catch (const SceneError& error) {
+      EXPECT_NE(std::string(error.what()).find("--session-stdin"), std::string::npos);
+      EXPECT_NE(std::string(error.what()).find("runMode"), std::string::npos);
+    }
+  }
+  std::istringstream failed;
+  failed.setstate(std::ios::badbit);
+  try { readSessionInput(failed); FAIL(); }
+  catch (const SceneError& error) {
+    EXPECT_NE(std::string(error.what()).find("--session-stdin: read failed"), std::string::npos);
+  }
+}
+
 TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
   auto values = parameters();
   auto empty = Parameters::parse(values, "gazebo");
   EXPECT_FALSE(empty.have_fleet);
   EXPECT_EQ(empty.facts("gazebo"), (Json{{"profile", "gazebo"}, {"sensors", 0}, {"backend", "cpu"}}));
-  values["lidar_fleet_json"] = manifest().dump();
+  const auto session = lidar::parseSessionInput(sessionDocument().dump());
   values["lidar_enabled"] = false;
-  values["lidar_defaults_json"] = Json{{"range", 8}, {"noise_std", 0.01}, {"seed", 42},
+  values["lidar_defaults_json"] = Json{{"min_range", 0.2}, {"noise_std", 0.01}, {"seed", 42},
       {"yaw_only", true}, {"pose_timeout", 0.8}, {"worker_threads", 2}, {"vehicle_bodies", true},
       {"vehicle_body_radius", 0.4}}.dump();
-  const auto fleet = Parameters::parse(values, "gazebo");
+  const auto fleet = Parameters::parse(values, "gazebo", session);
   ASSERT_EQ(fleet.manifest.robots.size(), 1u);
   EXPECT_FALSE(fleet.enabled);
-  EXPECT_EQ(fleet.manifest.robots[0].config.range, 8);
+  EXPECT_EQ(fleet.manifest.robots[0].config.min_range, 0.2);
   EXPECT_EQ(fleet.manifest.robots[0].config.noise_std, 0.01);
   EXPECT_EQ(fleet.manifest.robots[0].config.seed, 42u);
   EXPECT_TRUE(fleet.options.yaw_only);
@@ -98,37 +153,41 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
   EXPECT_TRUE(fleet.options.vehicle_bodies);
   EXPECT_EQ(fleet.options.vehicle_body_radius, 0.4);
   for (const auto* profile : {"xsim", "physical"}) {
-    const auto absent = Parameters::parse(values, profile);
+    const auto absent = Parameters::parse(values, profile, session);
     EXPECT_FALSE(absent.have_fleet);
     EXPECT_TRUE(absent.manifest.robots.empty());
     EXPECT_EQ(absent.facts(profile), (Json{{"profile", profile}, {"sensors", 0}, {"backend", "none"}}));
   }
-  values["lidar_fleet_json"] = manifest(0).dump();
-  EXPECT_TRUE(Parameters::parse(values, "gazebo").have_fleet);
+  EXPECT_TRUE(Parameters::parse(values, "gazebo", lidar::parseSessionInput(sessionDocument(0).dump())).have_fleet);
+  auto no_sensors = sessionDocument(0);
+  no_sensors["visualizationTopics"] = Json::array();
+  EXPECT_FALSE(Parameters::parse(values, "gazebo", lidar::parseSessionInput(no_sensors.dump())).have_fleet);
   const std::pair<const char*, Json> errors[] = {
       {"lidar_defaults_json", "[]"}, {"lidar_defaults_json", "{\"preset\":\"test\"}"},
       {"lidar_defaults_json", "{\"seed\":-1}"}, {"lidar_defaults_json", "{\"h_res\":1.5}"},
-      {"lidar_defaults_json", "{\"pose_timeout\":0}"}, {"lidar_fleet_json", "{\"schemaVersion\":2}"},
-      {"lidar_fleet_json", std::string(lidar::kMaxManifestBytes + 1, ' ')},
-      {"lidar_fleet_json", "{"}, {"lidar_enabled", "true"}, {"lidar_xrpc_socket", "relative"}};
+      {"lidar_defaults_json", "{\"pose_timeout\":0}"},
+      {"lidar_enabled", "true"}, {"lidar_xrpc_socket", "relative"}};
   for (const auto& test : errors) {
     auto invalid = parameters();
     invalid[test.first] = test.second;
-    try { Parameters::parse(invalid, "gazebo"); FAIL() << test.first; }
+    try { Parameters::parse(invalid, "gazebo", session); FAIL() << test.first; }
     catch (const SceneError& error) { EXPECT_NE(std::string(error.what()).find(test.first), std::string::npos); }
   }
   values["lidar_defaults_json"] = "{\"typo\":1}";
   try { Parameters::parse(values, "gazebo"); FAIL(); }
   catch (const SceneError& error) { EXPECT_NE(std::string(error.what()).find("unknown key 'typo'"), std::string::npos); }
-  auto gpu = manifest();
-  gpu["backend"] = "gpu";
-  values = parameters();
-  values["lidar_fleet_json"] = gpu.dump();
-  EXPECT_THROW(Parameters::parse(values, "gazebo"), SceneError);
-  gpu.erase("backend");
-  gpu["robots"][0]["backend"] = "gpu";
-  values["lidar_fleet_json"] = gpu.dump();
-  EXPECT_THROW(Parameters::parse(values, "gazebo"), SceneError);
+  for (int refusal = 0; refusal < 3; ++refusal) {
+    auto invalid = sessionDocument();
+    auto& sensor = invalid["robots"][0]["binding"]["simulationSensors"]["simpleLidar"];
+    const char* message;
+    if (refusal == 0) { sensor["acceleration"] = "gpu"; message = "explicit CPU acceleration"; }
+    else if (refusal == 1) { invalid["robots"][0]["namespace"] = "invalid namespace"; message = "invalid lidar namespace"; }
+    else { sensor["mode"] = "penetrating"; sensor["publishBeams"] = true; message = "penetrating sampled clouds have no beams"; }
+    const auto input = lidar::parseSessionInput(invalid.dump());
+    try { Parameters::parse(parameters(), "gazebo", input); FAIL(); }
+    catch (const SceneError& error) { EXPECT_NE(std::string(error.what()).find(message), std::string::npos); }
+    EXPECT_FALSE(Parameters::parse(parameters(), "xsim", input).have_fleet);
+  }
 }
 
 TEST(LidarDemand, PointsAndBeamsConnectDisconnectWithoutPolling) {
