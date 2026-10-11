@@ -469,7 +469,8 @@ std::string sha256(const fs::path& path) {
 }
 
 std::string attachment(const fs::path& directory, const Json& value, bool required) {
-  if (value.is_null() || (value.is_object() && value.empty())) {
+  if (value.is_null() || (value.is_object() && value.empty()) ||
+      value == Json{{"file", ""}, {"sha256", ""}}) {
     if (required) throw SceneError("Required scene attachment is absent");
     return {};
   }

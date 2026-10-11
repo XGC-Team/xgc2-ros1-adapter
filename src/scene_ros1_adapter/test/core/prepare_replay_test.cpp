@@ -385,6 +385,17 @@ TEST(Prepare, InvalidWorldsNeverReplacePreparedArtifacts) {
   }
 }
 
+TEST(Prepare, NativeWorldAcceptsCoreEmptyDocumentAttachment) {
+  Fixture fixture("native-world");
+  auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
+  manifest["sceneDocument"] = Json{{"file", ""}, {"sha256", ""}};
+  write(fixture.asset() / "manifest.json", manifest.dump());
+  auto request = fixture.bind(fixture.scenario.at("steps").at(0).at("request"));
+  EXPECT_EQ(prepare(request).at("sceneFile"), "");
+  EXPECT_EQ(attachment(fixture.asset(), manifest["sceneDocument"]), "");
+  EXPECT_THROW(attachment(fixture.asset(), manifest["sceneDocument"], true), SceneError);
+}
+
 TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
   Fixture fixture("document-and-media", true);
   auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
