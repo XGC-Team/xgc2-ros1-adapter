@@ -61,13 +61,17 @@ parameters; there is no wrapper script, probe command or environment preparation
   of two Runs on one ROS master never share a node name, and every robot registered with the
   process must carry the same Run id. `rosMasterUri` is the Run's ROS master, `rosIp` the
   address of this host in the ROS network.
-- **Service.** One service on the socket parameter: `xgc2.robot-adapter` with `grpc.v1` for
-  the type servers, `ros1.tools` with `http.v1` for the Tools and
-  `xgc2.scene.authoring` v1 with `http.v1` for Scene.
+- **Services.** The type servers expose `xgc2.robot-adapter` with `grpc.v1`; Tools
+  exposes `ros1.tools` with `http.v1`. Scene exposes `xgc2.scene.authoring` v1 on
+  `socketPath` and `xgc2.sensor.lidar` v1 on `lidarSocketPath`, both with `http.v1`
+  in every profile. Each service needs a unique, non-sensitive string endpoint
+  parameter. Both Scene socket parameters are required and `fixedOnly`.
 - **Readiness.** Kind `describe`: Core holds one outstanding Describe with `wait_ready_ms`
   (gRPC `Describe`, HTTP `GET /v1/describe?wait_ready_ms=N`). The service answers once its
   ROS node is registered with the master; Scene also validates its document and profile
-  dependencies. `startGraceMs` is the time the process may take
+  dependencies. Every declared service must answer Describe before the process
+  is ready, including Scene's empty lidar service in `xsim` and `physical`.
+  `startGraceMs` is the time the process may take
   before a failed connection counts; `timeoutMs` ends the wait.
 - **Stop.** `rpc: Shutdown` asks Core to call the service's `Shutdown` first (drain, final zero
   commands, removal of the robots, exit); then SIGTERM, which does the same; SIGKILL after
@@ -94,11 +98,18 @@ The Scene definition starts `xgc2_scene_adapter` directly with ROS remappings:
 `__ns`, `__master` and `__ip` select the namespace and ROS environment, and `_scene_file`,
 `_working_file`, `_generation_parameters_json`, `_save_directory`, `_target_id`,
 `_xrpc_socket`, `_frozen`, `_profile` and `_simulation_service_ref_json` set the private
-parameters. `sceneFile` is required; the `gazebo` profile also requires a valid
+parameters. The lidar remappings are `_lidar_xrpc_socket`, `_lidar_fleet_json`,
+`_lidar_enabled` and `_lidar_defaults_json`, rendered from `lidarSocketPath`,
+`lidarFleetJson`, `lidarEnabled` and `lidarDefaultsJson`. Their defaults are empty
+manifest text, true and `{}`; the socket has no default. `sceneFile` is required;
+the `gazebo` profile also requires a valid
 `simulationServiceRefJson` at startup. The namespace defaults to `/xgc_scene` and the
 node name is `xgc2_scene_adapter`. See [Scene adapter](scene-adapter.md) for the profiles,
 topics, TF and CLI contract. Scene readiness holds the unbound
-`GET /v1/describe?wait_ready_ms=N` until ready or the wait ends, for at most 30000 ms.
+`GET /v1/describe?wait_ready_ms=N` on both sockets until ready or the wait ends,
+for at most 30000 ms. With two services Scene uses SIGTERM and no `stop.rpc`.
+Core owns manifest production and preset resolution; the former `prepare_fleet.py`
+provisioning producer is not part of this repository.
 
 ## Checks
 
