@@ -39,6 +39,70 @@ import yaml
 # A call to a master that never answers must fail the test, not hang it.
 socket.setdefaulttimeout(15)
 
+
+class _RetryingPopen(subprocess.Popen):
+    """Starting a process fails with EAGAIN while the process limit of the
+    container is reached, which happens when many builds and tests run side by
+    side; it passes as other processes end. The tests start dozens of short
+    lived processes, so they wait for room instead of failing."""
+
+    def __init__(self, *args, **kwargs):
+        for _ in range(60):
+            try:
+                super().__init__(*args, **kwargs)
+                return
+            except BlockingIOError:
+                time.sleep(0.25)
+        super().__init__(*args, **kwargs)
+
+
+subprocess.Popen = _RetryingPopen
+
+
+def become_subreaper():
+    """Processes whose parent ends are adopted by this process instead of init.
+
+    roscore starts rosmaster and rosout in sessions of their own; when a test
+    ends one of them hard, the dead process would stay a zombie of init, which
+    in a container is rarely a reaper, for as long as the container lives.
+    """
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+    except (OSError, AttributeError):
+        pass
+
+
+become_subreaper()
+
+
+def reap(pid, timeout=5.0):
+    """Collects the exit of a process this one has adopted."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if done or time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+
+
+def reap_orphans(timeout=3.0):
+    """At the end of a workspace, with every process of it ended: collects what
+    is left of the processes this one adopted."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            done, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if not done:
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.02)
+
 REPOSITORY = Path(__file__).resolve().parents[2]
 PROFILES = REPOSITORY / "profiles" / "ros1"
 FAKE_ROBOTS = Path(__file__).resolve().parent / "fake_robots.py"
@@ -125,6 +189,7 @@ class Workspace:
     def close(self):
         for process in reversed(self.processes):
             process.cleanup()
+        reap_orphans()
         shutil.rmtree(self.root, ignore_errors=True)
 
 
@@ -178,24 +243,45 @@ class Roscore:
     def pid(self):
         return self.call("getPid")
 
-    def _tree(self, pid):
-        """The process and all its descendants (roslaunch puts its children in
-        sessions of their own, so a process group does not reach them)."""
+    def _descendants(self, pid):
+        """All processes below pid (roslaunch puts its children in sessions of
+        their own, so a process group does not reach them)."""
         out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True).stdout.split()
-        pids = [pid]
+        pids = []
         for child in out:
-            pids.extend(self._tree(int(child)))
+            pids.append(int(child))
+            pids.extend(self._descendants(int(child)))
         return pids
 
+    def _finish(self, grace=20):
+        """Waits for roslaunch to end what it started and exit; ends the whole
+        tree if it does not."""
+        if self.process is None or self.process.poll() is not None:
+            return
+        try:
+            self.process.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        descendants = self._descendants(self.process.pid)
+        for pid in [self.process.pid] + descendants:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.process.wait()
+        for pid in descendants:
+            reap(pid)
+
     def kill(self):
-        """Ends the master the hard way, as a crash would."""
-        if self.process is not None and self.process.poll() is None:
-            for pid in reversed(self._tree(self.process.pid)):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            self.process.wait()
+        """Ends the master the hard way, as a crash would: roslaunch sees its
+        rosmaster die and shuts the rest of roscore down."""
+        for pid in self._master_pids():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self._finish()
         wait_until(lambda: not self.alive(), 10, 0.05, "the master to be gone")
 
     def restart(self):
@@ -235,13 +321,11 @@ class Roscore:
         return set(out.decode().split())
 
     def cleanup(self):
-        if self.process is not None and self.process.poll() is None:
-            for pid in reversed(self._tree(self.process.pid)):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            self.process.wait()
+        if self.process is None or self.process.poll() is not None:
+            return
+        self.resume()
+        self.process.send_signal(signal.SIGINT)  # roslaunch ends its children and exits
+        self._finish()
 
 
 class Client:
@@ -343,14 +427,16 @@ class Watch:
 class Server:
     """One type server process of a Run."""
 
-    def __init__(self, workspace, roscore, provider, run_id, name=None, extra=(), executable=None):
+    def __init__(self, workspace, roscore, provider, run_id, name=None, extra=(), executable=None,
+                 socket_name=None):
         self.workspace = workspace
         self.roscore = roscore
         self.provider = provider
         self.run_id = run_id
         self.name = name or "xgc_{}_{}".format(PROFILE_PREFIX[provider].replace("-", "_"), run_id)
-        self.socket = workspace.sockets / "{}.sock".format(run_id)
-        self.log = workspace.root / "{}.log".format(run_id)
+        socket_name = socket_name or run_id + ".sock"
+        self.socket = workspace.sockets / socket_name
+        self.log = workspace.root / (socket_name + ".log")
         self.executable = executable or devel_file(PX4 if provider == PX4_PROVIDER else UGV)
         self.extra = list(extra)
         self.process = None

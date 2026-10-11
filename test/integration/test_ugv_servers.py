@@ -454,7 +454,8 @@ class MasterLossTest(unittest.TestCase):
         # Run's node name carries its Run id, so only a process started again
         # for the same Run can meet this.
         first = self.start_server()
-        second = Server(self.workspace, self.roscore, SCOUT, new_run_id(), name=first.name).start()
+        second = Server(self.workspace, self.roscore, SCOUT, first.run_id, name=first.name,
+                        socket_name="started-again.sock").start()
         reply = second.client.describe(wait_ms=20000)
         self.assertTrue(reply["response"]["ready"], reply)
         self.assertEqual(first.wait(60), EXIT_ROS_SHUTDOWN, first.output())
