@@ -24,7 +24,7 @@ class Simulation {
 
 class SimulationClient final : public Simulation {
  public:
-  SimulationClient(const Json& reference, const std::string& local_target,
+  SimulationClient(const std::string& endpoint, const std::string& local_target,
                    std::chrono::milliseconds timeout = std::chrono::seconds(30));
   ~SimulationClient() override;
   void update(const Json& document, const std::string& epoch, std::uint64_t revision,

@@ -28,34 +28,17 @@ class SimulationFault : public std::runtime_error {
       : std::runtime_error(message), code(std::move(code)) {}
   std::string code;
 };
-std::string socketPath(const Json& reference, const std::string& local_target) {
-  if (!reference.is_object() || reference.value("service", Json()) != "xgc2.simulation" ||
-      reference.value("api_version", Json()) != "v1")
-    throw SceneError("An explicit simulation-v1 ServiceRef is required");
-  const std::regex identity("[A-Za-z0-9._:-]{1,128}");
-  for (const auto& key : {"target_id", "instance_id"}) {
-    if (!reference.contains(key) || !reference.at(key).is_string() ||
-        !std::regex_match(reference.at(key).get_ref<const std::string&>(), identity))
-      throw SceneError(std::string("Invalid simulation ServiceRef ") + key);
-  }
-  if (reference.at("target_id") != local_target)
-    throw SceneError("Simulation Unix endpoint must belong to the local target");
-  if (reference.value("profile", Json()) != "http.v1" || !reference.contains("endpoint") ||
-      !reference.at("endpoint").is_object() || reference.at("endpoint").value("kind", Json()) != "unix" ||
-      !reference.at("endpoint").contains("address") || !reference.at("endpoint").at("address").is_string())
-    throw SceneError("Simulation requires an explicit http.v1 Unix endpoint");
-  const auto path = reference.at("endpoint").at("address").get<std::string>();
-  if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
-    throw SceneError("Simulation Unix endpoint must be an absolute path");
-  return path;
-}
 }  // namespace
 
 
 class SimulationClient::Impl {
  public:
-  Impl(const Json& reference, const std::string& target, std::chrono::milliseconds timeout)
-      : path_(socketPath(reference, target)), target_(target), timeout_(timeout) {
+  Impl(const std::string& endpoint, const std::string& target, std::chrono::milliseconds timeout)
+      : path_(endpoint), target_(target), timeout_(timeout) {
+    if (path_.empty() || path_.front() != '/' || path_.find('\0') != std::string::npos)
+      throw SceneError("Scene parameter ~simulation_endpoint must be an absolute Unix socket path");
+    if (!std::regex_match(target_, std::regex("[A-Za-z0-9._:-]{1,128}")))
+      throw SceneError("Invalid simulation local target_id");
     if (timeout.count() <= 0) throw SceneError("Simulation timeout must be positive");
     wake_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (wake_ < 0) throw SceneError("Cannot create simulation wake descriptor");
@@ -228,7 +211,7 @@ class SimulationClient::Impl {
             if (!std::regex_match(discovered, std::regex("[A-Za-z0-9._:-]{1,128}")))
               throw SceneError("Invalid discovered world instance");
             if (description.contains("service_ref") && description.at("service_ref").value("target_id", Json()) != target_)
-              throw SceneError("Discovered world target differs from the original ServiceRef");
+              throw SceneError("Discovered world target differs from the local target");
             instance = discovered;
             client_ = connection(instance);
             connected = true;
@@ -308,8 +291,8 @@ class SimulationClient::Impl {
     if (watch >= 0) ::close(watch);
   }
 };
-SimulationClient::SimulationClient(const Json& reference, const std::string& target, std::chrono::milliseconds timeout)
-    : impl_(new Impl(reference, target, timeout)) {}
+SimulationClient::SimulationClient(const std::string& endpoint, const std::string& target, std::chrono::milliseconds timeout)
+    : impl_(new Impl(endpoint, target, timeout)) {}
 SimulationClient::~SimulationClient() = default;
 void SimulationClient::update(const Json& document, const std::string& epoch, std::uint64_t revision, const Json& motion) {
   impl_->update(document, epoch, revision, motion);

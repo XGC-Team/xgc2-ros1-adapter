@@ -39,8 +39,11 @@ SceneParameters SceneParameters::parse(const Json& values) {
   }
   result.generation_parameters = parseJson(string("generation_parameters_json", false, "{}"));
   if (!result.generation_parameters.is_object()) throw SceneError("Generation parameters must be an object");
-  if (result.profile == "gazebo")
-    result.simulation_service_ref = parseJson(string("simulation_service_ref_json", true));
+  if (result.profile == "gazebo") {
+    result.simulation_endpoint = string("simulation_endpoint", true);
+    if (result.simulation_endpoint.front() != '/' || result.simulation_endpoint.find('\0') != std::string::npos)
+      throw SceneError("Scene parameter ~simulation_endpoint must be an absolute Unix socket path");
+  }
   return result;
 }
 
@@ -66,7 +69,7 @@ void SceneNode::initialize(const Json& initial, const std::optional<std::string>
   if (parameters_.profile != "gazebo" && parameters_.profile != "xsim" && parameters_.profile != "physical")
     throw SceneError("Scene profile must be gazebo, xsim or physical");
   if (parameters_.profile == "gazebo" && !simulation_)
-    throw SceneError("An explicit simulation-v1 ServiceRef is required");
+    throw SceneError("The gazebo profile requires a simulation client");
   if (parameters_.profile != "gazebo" && simulation_)
     throw SceneError("Native scene application requires the gazebo profile");
   std::lock_guard<std::recursive_mutex> lock(mutex_);

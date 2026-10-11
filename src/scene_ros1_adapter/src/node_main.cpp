@@ -34,7 +34,8 @@ bool launchBoolean(const std::string& name, const std::string& text) {
 xgc_scene::Json parameters(ros::NodeHandle& private_node, const adapter::ServerOptions& options) {
   xgc_scene::Json values = xgc_scene::Json::object();
   for (const auto* key : {"scene_file", "working_file", "generation_parameters_json", "save_directory",
-                           "target_id", "xrpc_socket", "profile", "simulation_service_ref_json"}) {
+                           "target_id", "xrpc_socket", "profile", "simulation_endpoint"}) {
+    if (std::string(key) == "simulation_endpoint" && values.value("profile", "gazebo") != "gazebo") continue;
     std::string value;
     if (private_node.getParam(key, value)) values[key] = value;
     else if (private_node.hasParam(key)) throw xgc_scene::SceneError(std::string("Scene parameter ~") + key + " must be a string");
@@ -259,11 +260,16 @@ int main(int argc, char** argv) {
         xgc_scene::SceneParameters config;
         {
           auto budget = binding.BoundMasterCalls(seconds(5));
-          config = xgc_scene::SceneParameters::parse(parameters(private_node, options));
+          try {
+            config = xgc_scene::SceneParameters::parse(parameters(private_node, options));
+          } catch (const xgc_scene::SceneError& error) {
+            stop(adapter::kExitUsage, error.what());
+            return;
+          }
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply scene parameters");
         }
         std::shared_ptr<xgc_scene::SimulationClient> simulation;
-        if (config.profile == "gazebo") simulation = std::make_shared<xgc_scene::SimulationClient>(config.simulation_service_ref, config.target_id);
+        if (config.profile == "gazebo") simulation = std::make_shared<xgc_scene::SimulationClient>(config.simulation_endpoint, config.target_id);
         { std::lock_guard<std::mutex> lock(objects_mutex); objects.simulation = simulation; }
         if (stopping.load()) { if (simulation) simulation->close(); return; }
         std::shared_ptr<xgc_scene::RosPublishers> outputs;

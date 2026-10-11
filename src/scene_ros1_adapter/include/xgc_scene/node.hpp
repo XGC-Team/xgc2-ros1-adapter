@@ -15,8 +15,7 @@ namespace xgc_scene {
 struct SceneParameters {
   std::filesystem::path scene_file, working_file, save_directory;
   Json generation_parameters = Json::object();
-  std::string target_id, xrpc_socket, profile = "gazebo";
-  Json simulation_service_ref;
+  std::string target_id, xrpc_socket, profile = "gazebo", simulation_endpoint;
   bool frozen = false;
   static SceneParameters parse(const Json& private_parameters);
 };
