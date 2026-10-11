@@ -11,7 +11,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
 BUILD_JOBS="${BUILD_JOBS:-}"
-EXPECTED_PROTOBUF_PRODUCT_VERSION="0.6.0-1"
+EXPECTED_PROTOBUF_PRODUCT_VERSION="0.7.0-1"
 EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
 XGC2_XRPC_DEB_VERSION="0.1.0-2~focal"
@@ -103,9 +103,9 @@ esac
 if [[ "${COPY_OUTPUT}" == "true" ]]; then
   mkdir -p "${OUTPUT_DIR}"
   rm -f \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter-common_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-scout-mini-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-mecanum-ugv-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-ugv-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-tools-adapter_"*.deb
 fi
 
@@ -281,23 +281,21 @@ docker exec "${container_name}" bash -lc '
         mv /etc/dpkg/dpkg.cfg.d/excludes /tmp/xgc2-docker-dpkg-excludes
       fi
       planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
+        /tmp/out/ros-noetic-xgc2-ros1-adapter-common_*.deb \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb)"
       verify_firstparty_transaction <<<"${planned_transaction}"
       apt-get install -y --no-install-recommends \
+        /tmp/out/ros-noetic-xgc2-ros1-adapter-common_*.deb \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-scout-mini-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-mecanum-ugv-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-ugv-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb
       if ! /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh; then
         echo "Installed-package gate failed; replaying it with command tracing" >&2
         bash -x /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh
       fi
-      ROS_MASTER_URI=http://127.0.0.1:11331 ROS_IP=127.0.0.1 \
-      ROBOT_SERVER_PRIVATE_TEST=1 \
-        /tmp/ros1-adapter/.xgc2/scripts/test_robot_servers.sh \
+      /tmp/ros1-adapter/.xgc2/scripts/test_robot_servers.sh \
         /tmp/work/build /tmp/out/robot-server-tests
     fi
   '

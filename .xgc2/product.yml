@@ -1,9 +1,9 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.5.0-45
+version: 0.6.0-1
 kind: ros1-apt
-summary: ROS1 services for PX4, Scout Mini, Mecanum and typed ROS1 Tools.
+summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum and typed ROS1 Tools.
 groups:
 - ros1
 - communication
@@ -12,21 +12,20 @@ ros:
   distro: noetic
   workspace: catkin
   packages:
+  - xgc_ros1_adapter_common
   - xgc_px4_multirotor_ros1_adapter
-  - xgc_scout_mini_ros1_adapter
-  - xgc_mecanum_ugv_ros1_adapter
+  - xgc_ugv_ros1_adapter
   - xgc_ros1_tools_adapter
 apt:
   distribution: focal
   install:
   - ros-noetic-xgc2-px4-multirotor-adapter
-  - ros-noetic-xgc2-scout-mini-adapter
-  - ros-noetic-xgc2-mecanum-ugv-adapter
+  - ros-noetic-xgc2-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
   packages:
+  - ros-noetic-xgc2-ros1-adapter-common
   - ros-noetic-xgc2-px4-multirotor-adapter
-  - ros-noetic-xgc2-scout-mini-adapter
-  - ros-noetic-xgc2-mecanum-ugv-adapter
+  - ros-noetic-xgc2-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
   depends:
   - libgrpc++1
@@ -34,8 +33,6 @@ apt:
   - libc-ares2
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
-  - python3-jsonschema
-  - python3-yaml
   - ros-noetic-roscpp
   - ros-noetic-sensor-msgs
   - ros-noetic-std-msgs
@@ -51,33 +48,37 @@ apt:
 usage:
   install: 'sudo apt update
 
-    sudo apt install ros-noetic-xgc2-px4-multirotor-adapter ros-noetic-xgc2-scout-mini-adapter
-    ros-noetic-xgc2-mecanum-ugv-adapter ros-noetic-xgc2-ros1-tools-adapter
+    sudo apt install ros-noetic-xgc2-px4-multirotor-adapter ros-noetic-xgc2-ugv-adapter
+    ros-noetic-xgc2-ros1-tools-adapter
 
     '
-  smoke_test: 'rospack find xgc_px4_multirotor_ros1_adapter
+  smoke_test: 'rospack find xgc_ros1_adapter_common
 
-    rospack find xgc_scout_mini_ros1_adapter
+    rospack find xgc_px4_multirotor_ros1_adapter
 
-    rospack find xgc_mecanum_ugv_ros1_adapter
+    rospack find xgc_ugv_ros1_adapter
+
+    rospack find xgc_ros1_tools_adapter
+
+    test -e /opt/ros/noetic/lib/libxgc2_robot_server.so.0
+
+    test -e /opt/ros/noetic/lib/libxgc2_robot_server_ros1.so.0
 
     test -x /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
 
-    test -x /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
+    test -x /opt/ros/noetic/lib/xgc_ugv_ros1_adapter/xgc_ugv_ros1_adapter_node
 
-    test -x /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
+    test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node
 
-    test -f /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter/profiles/ros1/px4-multirotor-physical-vrpn.yaml
+    test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_recorder
 
-    test -f /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter/profiles/ros1/scout-mini-physical-vrpn.yaml
+    test -f /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
 
-    test -f /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter/profiles/ros1/mecanum-ugv-physical-vrpn.yaml
+    test -f /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
 
-    test -f /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
+    test -f /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
 
-    test -f /usr/share/xgc2/adapter-definitions/xgc2-scout-mini-ros1-adapter.json
-
-    test -f /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
+    test -f /usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json
 
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
 
@@ -85,25 +86,21 @@ usage:
 
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-mecanum-ugv-ros1-adapter.json
 
-    rospack find xgc_ros1_tools_adapter
-
-    test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_recorder
-
     '
 ownership:
   paths:
-  - /opt/ros/noetic/include/xgc_px4_multirotor_ros1_adapter
-  - /opt/ros/noetic/lib/libxgc_px4_multirotor_ros1_adapter_operations.a
-  - /opt/ros/noetic/lib/pkgconfig/xgc_px4_multirotor_ros1_adapter.pc
+  - /opt/ros/noetic/lib/libxgc2_robot_server.so.0
+  - /opt/ros/noetic/lib/libxgc2_robot_server.so.0.6.0
+  - /opt/ros/noetic/lib/libxgc2_robot_server_ros1.so.0
+  - /opt/ros/noetic/lib/libxgc2_robot_server_ros1.so.0.6.0
+  - /opt/ros/noetic/share/xgc_ros1_adapter_common
   - /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter
-  - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node
-  - /opt/ros/noetic/share/xgc_scout_mini_ros1_adapter
-  - /opt/ros/noetic/lib/xgc_scout_mini_ros1_adapter/xgc_scout_mini_ros1_adapter_node
-  - /opt/ros/noetic/share/xgc_mecanum_ugv_ros1_adapter
-  - /opt/ros/noetic/lib/xgc_mecanum_ugv_ros1_adapter/xgc_mecanum_ugv_ros1_adapter_node
-  - /usr/share/xgc2/adapter-definitions/xgc2-px4-multirotor-ros1-adapter.json
-  - /usr/share/xgc2/adapter-definitions/xgc2-scout-mini-ros1-adapter.json
-  - /usr/share/xgc2/adapter-definitions/xgc2-mecanum-ugv-ros1-adapter.json
+  - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter
+  - /opt/ros/noetic/share/xgc_ugv_ros1_adapter
+  - /opt/ros/noetic/lib/xgc_ugv_ros1_adapter
+  - /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
+  - /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
+  - /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-scout-mini-ros1-adapter.json
   - /usr/share/xgc2/robot-adapter-profiles/xgc2-mecanum-ugv-ros1-adapter.json
@@ -123,4 +120,4 @@ release:
     xgc2-protobuf: rebuild
     xgc2-ros-msgs: rebuild
   apt_versions:
-    focal: 0.5.0-45
+    focal: 0.6.0-1

@@ -3,160 +3,189 @@ set -euo pipefail
 
 ROS_DISTRO="${ROS_DISTRO:-noetic}"
 PREFIX="/opt/ros/${ROS_DISTRO}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+COMMON_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-adapter-common"
+COMMON_ROS_PACKAGE="xgc_ros1_adapter_common"
 PX4_PACKAGE="ros-${ROS_DISTRO}-xgc2-px4-multirotor-adapter"
 PX4_ROS_PACKAGE="xgc_px4_multirotor_ros1_adapter"
-SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
-SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
-MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
-MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
+UGV_PACKAGE="ros-${ROS_DISTRO}-xgc2-ugv-adapter"
+UGV_ROS_PACKAGE="xgc_ugv_ros1_adapter"
+TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
+TOOLS_ROS_PACKAGE="xgc_ros1_tools_adapter"
 EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
-    "$(dirname "$0")/../product.yml"
+    "${REPO_ROOT}/.xgc2/product.yml"
 )}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
-dpkg -s "${PX4_PACKAGE}" >/dev/null
-dpkg -s "${SCOUT_PACKAGE}" >/dev/null
-dpkg -s "${MECANUM_PACKAGE}" >/dev/null
-for base_version_package in \
-  "${PX4_PACKAGE}" "${SCOUT_PACKAGE}" "${MECANUM_PACKAGE}"; do
-  test "$(dpkg-query -W -f='${Version}' "${base_version_package}")" = \
-    "${EXPECTED_PRODUCT_VERSION}"
+for package in "${COMMON_PACKAGE}" "${PX4_PACKAGE}" "${UGV_PACKAGE}" "${TOOLS_PACKAGE}"; do
+  dpkg -s "${package}" >/dev/null
+  test "$(dpkg-query -W -f='${Version}' "${package}")" = "${EXPECTED_PRODUCT_VERSION}"
 done
 test -f "${PROTOBUF_REGISTRY}"
-if dpkg -s "ros-${ROS_DISTRO}-xgc2-ros1-adapter" >/dev/null 2>&1; then
-  echo "removed generic ROS1 adapter package is still installed" >&2
-  exit 1
-fi
-
-px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
-scout_depends="$(dpkg-query -W -f='${Depends}' "${SCOUT_PACKAGE}")"
-mecanum_depends="$(dpkg-query -W -f='${Depends}' "${MECANUM_PACKAGE}")"
-for depends in "${px4_depends}" "${scout_depends}" "${mecanum_depends}"; do
-  grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${depends}"
-  grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${depends}"
-  if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev' <<<"${depends}"; then
-    echo "Robot type server retains the old Runtime Link dependency" >&2; exit 1
+# Scout Mini and Mecanum share one executable and one package now; the
+# earlier per-type packages and the generic adapter must be gone.
+for removed in \
+    "ros-${ROS_DISTRO}-xgc2-ros1-adapter" \
+    "ros-${ROS_DISTRO}-xgc2-scout-mini-adapter" \
+    "ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"; do
+  if dpkg -s "${removed}" >/dev/null 2>&1; then
+    echo "removed package ${removed} is still installed" >&2
+    exit 1
   fi
 done
+
+common_depends="$(dpkg-query -W -f='${Depends}' "${COMMON_PACKAGE}")"
+px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
+ugv_depends="$(dpkg-query -W -f='${Depends}' "${UGV_PACKAGE}")"
+grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${common_depends}"
+grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${common_depends}"
+grep -Eq '(^|, )libxgc2-xrpc-grpc1( |[(,]|$)' <<<"${common_depends}"
+for depends in "${common_depends}" "${px4_depends}" "${ugv_depends}"; do
+  if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev|libxgc2-xrpc-(grpc-)?dev' <<<"${depends}"; then
+    echo "robot type server package depends on a build-only or removed package" >&2
+    exit 1
+  fi
+done
+for depends in "${px4_depends}" "${ugv_depends}"; do
+  grep -Fq "${COMMON_PACKAGE} (= ${EXPECTED_PRODUCT_VERSION})" <<<"${depends}"
+done
 grep -q "ros-${ROS_DISTRO}-mavros-msgs" <<<"${px4_depends}"
+if grep -Eq 'mavros-msgs|scout-msgs' <<<"${ugv_depends}"; then
+  echo "UGV adapter package must not depend on MAVROS or Scout messages" >&2
+  exit 1
+fi
 if grep -q 'scout-msgs' <<<"${px4_depends}"; then
   echo "PX4 adapter package must not depend on Scout messages" >&2
   exit 1
 fi
-if grep -Eq 'mavros-msgs|scout-msgs' <<<"${scout_depends}"; then
-  echo "Scout adapter package must not depend on MAVROS or Scout messages" >&2
-  exit 1
-fi
-if grep -Eq 'mavros-msgs|scout-msgs|sensor-msgs' <<<"${mecanum_depends}"; then
-  echo "Mecanum adapter package leaked unrelated robot message dependencies" >&2
-  exit 1
-fi
+
 set +u
 # shellcheck disable=SC1090
 source "${PREFIX}/setup.bash"
 set -u
-
 dpkg -s "ros-${ROS_DISTRO}-roscpp" >/dev/null
-check_ros_package() {
-  if [[ "$#" -ne 5 ]]; then
-    echo "check_ros_package requires package, launch, profile, schema, and definition" >&2
-    exit 1
-  fi
+
+# The shared libraries belong to the common package.
+for library in libxgc2_robot_server.so.0 libxgc2_robot_server_ros1.so.0; do
+  test -e "${PREFIX}/lib/${library}"
+  dpkg-query -S "${PREFIX}/lib/${library}" | grep -Fq "${COMMON_PACKAGE}:"
+done
+rospack find "${COMMON_ROS_PACKAGE}" >/dev/null
+
+# check_type_server <ros package> <package> <provider>...
+check_type_server() {
   local ros_package="$1"
-  local launch_file="$2"
-  local profile_file="$3"
-  local profile_schema_file="$4"
-  local definition_id="$5"
+  local package="$2"
+  shift 2
   local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
+  local share="${PREFIX}/share/${ros_package}"
+  local provider
+  local definition
+  local libraries
+  local needed
+  local profile_name
 
   rospack find "${ros_package}" >/dev/null
-  test -f "${PREFIX}/share/${ros_package}/package.xml"
-  test -f "${PREFIX}/share/${ros_package}/launch/${launch_file}"
-  test -f "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}"
-  test -f "${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}"
-  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" ]]; then
-    test -f "${PREFIX}/include/${ros_package}/px4_operations.hpp"
-    test -f "${PREFIX}/lib/lib${ros_package}_operations.a"
-  else
-    test ! -e "${PREFIX}/include/${ros_package}"
-  fi
+  test -f "${share}/package.xml"
+  test -f "${share}/profiles/schema/robot-adapter-profile-v4.schema.json"
+  test ! -e "${share}/launch"
+  test ! -e "${PREFIX}/include/${ros_package}"
   test -x "${executable}"
-  local libraries
+  dpkg-query -S "${executable}" | grep -Fq "${package}:"
+
   libraries="$(ldd "${executable}")"
-  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" || "${ros_package}" == "${SCOUT_ROS_PACKAGE}" || "${ros_package}" == "${MECANUM_ROS_PACKAGE}" ]]; then
-    grep -q 'libgrpc++' <<<"${libraries}"
-    grep -q 'libcares' <<<"${libraries}"
-    ! grep -q 'libxgc2_adapter_runtime_client' <<<"${libraries}"
+  if grep -q 'not found' <<<"${libraries}"; then
+    echo "${executable} has unresolved libraries" >&2
+    echo "${libraries}" >&2
+    exit 1
   fi
-  test -f "/usr/share/xgc2/adapter-definitions/${definition_id}.json"
-  test -f "/usr/share/xgc2/process-definitions/${definition_id}.json"
-  test -f "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"
-  local profile_args=(--profile-file "${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}")
-  if [[ "${ros_package}" == "${PX4_ROS_PACKAGE}" || "${ros_package}" == "${SCOUT_ROS_PACKAGE}" || "${ros_package}" == "${MECANUM_ROS_PACKAGE}" ]]; then
-    local profile_kind="${profile_file%-physical-vrpn.yaml}"
-    for variant in gazebo-vrpn xsim-ros; do
-      local variant_path="${PREFIX}/share/${ros_package}/profiles/ros1/${profile_kind}-${variant}.yaml"
-      test -f "${variant_path}"
-      profile_args+=(--profile-file "${variant_path}")
-    done
-  fi
-  python3 "$(dirname "$0")/../../tools/verify_runtime_manifests.py" \
-    --executable "${executable}" \
-    --ros-package "${ros_package}" \
-    --ros-executable "${ros_package}_node" \
-    --definition-id "${definition_id}" \
-    --registry "${PROTOBUF_REGISTRY}" \
-    "${profile_args[@]}" \
-    --profile-schema "${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}" \
-    --adapter-manifest "/usr/share/xgc2/adapter-definitions/${definition_id}.json" \
-    --process-manifest "/usr/share/xgc2/process-definitions/${definition_id}.json" \
-    --profile-catalog "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"
+  grep -q 'libxgc2_robot_server_ros1' <<<"${libraries}"
+  grep -q 'libgrpc++' <<<"${libraries}"
+  grep -q 'libcares' <<<"${libraries}"
+  # The bounded ros::master::execute lives in libxgc2_robot_server_ros1 and
+  # must come ahead of roscpp in the executable's own dependency list.
+  needed="$(readelf -d "${executable}" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p')"
+  test "$(grep -n '^libxgc2_robot_server_ros1' <<<"${needed}" | head -1 | cut -d: -f1)" -lt \
+       "$(grep -n '^libroscpp' <<<"${needed}" | head -1 | cut -d: -f1)"
+
+  for provider in "$@"; do
+    definition="/usr/share/xgc2/process-definitions/${provider}.json"
+    test -f "${definition}"
+    dpkg-query -S "${definition}" | grep -Fq "${package}:"
+    test -f "/usr/share/xgc2/robot-adapter-profiles/${provider}.json"
+    cmp "${definition}" "${REPO_ROOT}/src/${ros_package#xgc_}/process/${provider}.json"
+    python3 - "${definition}" "${executable}" "${provider}" <<'PYTHON'
+import json
+import os
+import sys
+
+path, executable, provider = sys.argv[1:]
+document = json.load(open(path))
+assert document["apiVersion"] == "xgc.execution.process/v1", document["apiVersion"]
+(definition,) = document["definitions"]
+assert definition["id"] == provider
+assert definition["command"]["executable"] == executable
+assert os.access(executable, os.X_OK)
+assert definition["services"][0]["service"] == "xgc2.robot-adapter"
+assert definition["services"][0]["profile"] == "grpc.v1"
+assert definition["readiness"]["kind"] == "describe"
+assert definition["stop"]["rpc"] == "Shutdown"
+assert definition["restart"] == {"mode": "never"}
+args = definition["command"]["args"]
+assert args[args.index("--provider") + 1] == provider
+PYTHON
+    # scout-mini, mecanum-ugv, px4-multirotor: the profile files of the type
+    profile_name="${provider#xgc2-}"
+    profile_name="${profile_name%-ros1-adapter}"
+    python3 "${REPO_ROOT}/tools/verify_profile_catalog.py" \
+      --registry "${PROTOBUF_REGISTRY}" \
+      --profile-file "${share}/profiles/ros1/${profile_name}-physical-vrpn.yaml" \
+      --profile-file "${share}/profiles/ros1/${profile_name}-xsim-ros.yaml" \
+      --profile-file "${share}/profiles/ros1/${profile_name}-gazebo-vrpn.yaml" \
+      --profile-schema "${share}/profiles/schema/robot-adapter-profile-v4.schema.json" \
+      --definition-id "${provider}" \
+      --catalog "/usr/share/xgc2/robot-adapter-profiles/${provider}.json"
+  done
 }
 
-check_ros_package \
-  "${PX4_ROS_PACKAGE}" \
-  "px4_multirotor_ros1_adapter.launch" \
-  "px4-multirotor-physical-vrpn.yaml" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc2-px4-multirotor-ros1-adapter"
-check_ros_package \
-  "${SCOUT_ROS_PACKAGE}" \
-  "scout_mini_ros1_adapter.launch" \
-  "scout-mini-physical-vrpn.yaml" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc2-scout-mini-ros1-adapter"
-check_ros_package \
-  "${MECANUM_ROS_PACKAGE}" \
-  "mecanum_ugv_ros1_adapter.launch" \
-  "mecanum-ugv-physical-vrpn.yaml" \
-  "robot-adapter-profile-v4.schema.json" \
-  "xgc2-mecanum-ugv-ros1-adapter"
+check_type_server "${PX4_ROS_PACKAGE}" "${PX4_PACKAGE}" \
+  xgc2-px4-multirotor-ros1-adapter
+check_type_server "${UGV_ROS_PACKAGE}" "${UGV_PACKAGE}" \
+  xgc2-scout-mini-ros1-adapter xgc2-mecanum-ugv-ros1-adapter
 
-
-test ! -e "${PREFIX}/share/xgc_ros1_adapter"
-test ! -e "${PREFIX}/lib/xgc_ros1_adapter/xgc_ros1_adapter_node"
+# Nothing of the structure before Run-owned type servers is left behind.
+for removed in xgc_ros1_adapter xgc_scout_mini_ros1_adapter xgc_mecanum_ugv_ros1_adapter; do
+  test ! -e "${PREFIX}/share/${removed}"
+  test ! -e "${PREFIX}/lib/${removed}"
+done
+test ! -e /usr/share/xgc2/adapter-definitions
 
 echo "Installed robot package checks passed"
 
-TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
-test "$(dpkg-query -W -f='${Version}' "$TOOLS_PACKAGE")" = "$EXPECTED_PRODUCT_VERSION"
 for name in node service_helper probe clock_wait rosbag_recorder; do
-  path="${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_${name}"
-  test -x "$path"
-  dpkg-query -S "$path" | grep -Fq "${TOOLS_PACKAGE}:"
+  path="${PREFIX}/lib/${TOOLS_ROS_PACKAGE}/${TOOLS_ROS_PACKAGE}_${name}"
+  test -x "${path}"
+  dpkg-query -S "${path}" | grep -Fq "${TOOLS_PACKAGE}:"
 done
-tools_libraries="$(ldd "${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node")"
-! grep -q 'not found' <<<"$tools_libraries"
-grep -q 'libxgc2_xrpc' <<<"$tools_libraries"
-! grep -q 'libxgc2_adapter_runtime_client' <<<"$tools_libraries"
-test ! -e /usr/share/xgc2/adapter-definitions/xgc2-ros1-tools-adapter.json
+tools_libraries="$(ldd "${PREFIX}/lib/${TOOLS_ROS_PACKAGE}/${TOOLS_ROS_PACKAGE}_node")"
+if grep -q 'not found' <<<"${tools_libraries}"; then
+  echo "the Tools process has unresolved libraries" >&2
+  exit 1
+fi
+grep -q 'libxgc2_xrpc' <<<"${tools_libraries}"
 python3 - <<'PYTOOLS'
 import json
 with open('/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json') as source:
-    definition=json.load(source)['definitions'][0]
-assert definition['id']=='xgc2-ros1-tools-adapter' and not definition.get('internal',False)
-assert definition['services'][0]['service']=='ros1.tools'
-assert definition['services'][0]['profile']=='http.v1'
-assert definition['parameters']['properties']['socketPath']['ownedEndpoint']=='unix-socket'
+    document = json.load(source)
+assert document['apiVersion'] == 'xgc.execution.process/v1'
+definition = document['definitions'][0]
+assert definition['id'] == 'xgc2-ros1-tools-adapter' and not definition.get('internal', False)
+assert definition['services'][0]['service'] == 'ros1.tools'
+assert definition['services'][0]['profile'] == 'http.v1'
+assert definition['parameters']['properties']['socketPath']['ownedEndpoint'] == 'unix-socket'
+assert definition['readiness']['kind'] == 'describe'
+assert definition['restart'] == {'mode': 'never'}
 PYTOOLS
+echo "Installed Tools package checks passed"

@@ -7,12 +7,14 @@ ROS_DISTRO="${ROS_DISTRO:-noetic}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+COMMON_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-adapter-common"
+COMMON_ROS_PACKAGE="xgc_ros1_adapter_common"
 PX4_PACKAGE="ros-${ROS_DISTRO}-xgc2-px4-multirotor-adapter"
 PX4_ROS_PACKAGE="xgc_px4_multirotor_ros1_adapter"
-SCOUT_PACKAGE="ros-${ROS_DISTRO}-xgc2-scout-mini-adapter"
-SCOUT_ROS_PACKAGE="xgc_scout_mini_ros1_adapter"
-MECANUM_PACKAGE="ros-${ROS_DISTRO}-xgc2-mecanum-ugv-adapter"
-MECANUM_ROS_PACKAGE="xgc_mecanum_ugv_ros1_adapter"
+UGV_PACKAGE="ros-${ROS_DISTRO}-xgc2-ugv-adapter"
+UGV_ROS_PACKAGE="xgc_ugv_ros1_adapter"
+TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
+TOOLS_ROS_PACKAGE="xgc_ros1_tools_adapter"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
 
 product_version() {
@@ -71,10 +73,10 @@ trap cleanup EXIT
 
 mkdir -p "${OUTPUT_DIR}"
 rm -f \
+  "${OUTPUT_DIR}/${COMMON_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${SCOUT_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${MECANUM_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter_"*.deb
+  "${OUTPUT_DIR}/${UGV_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${TOOLS_PACKAGE}_"*.deb
 
 mkdir -p "${BUILD_DIR}/debian"
 cat > "${BUILD_DIR}/debian/control" <<EOF
@@ -83,16 +85,16 @@ Section: misc
 Priority: optional
 Maintainer: XGC2 <apt@example.com>
 
+Package: ${COMMON_PACKAGE}
+Architecture: any
+
 Package: ${PX4_PACKAGE}
 Architecture: any
 
-Package: ${SCOUT_PACKAGE}
+Package: ${UGV_PACKAGE}
 Architecture: any
 
-Package: ${MECANUM_PACKAGE}
-Architecture: any
-
-Package: ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter
+Package: ${TOOLS_PACKAGE}
 Architecture: any
 
 EOF
@@ -106,13 +108,22 @@ binary_dependencies() {
   for binary in "${binaries[@]}"; do
     options+=("-e${binary}")
   done
+  # The libraries of the common package are not installed yet: look into its
+  # build tree, which carries the shlibs file that names the package.
+  if [[ -d "${BUILD_DIR}/${COMMON_PACKAGE}/DEBIAN" ]]; then
+    options+=("-S${BUILD_DIR}/${COMMON_PACKAGE}")
+  fi
+  # A package of libraries does not depend on itself.
+  if [[ -n "${EXCLUDE_PACKAGE:-}" ]]; then
+    options+=("-x${EXCLUDE_PACKAGE}")
+  fi
   output="$(cd "${BUILD_DIR}" && dpkg-shlibdeps -O "${options[@]}")"
   dependencies="${output#shlibs:Depends=}"
   if [[ "${dependencies}" == "${output}" || -z "${dependencies}" ]]; then
     echo "dpkg-shlibdeps did not produce executable dependencies" >&2
     exit 1
   fi
-  if grep -Eq '(^|, )(libxgc2-adapter-runtime-client-dev|xgc2-protobuf-dev)( |[(,]|$)' \
+  if grep -Eq '(^|, )(libxgc2-xrpc-dev|libxgc2-xrpc-grpc-dev|xgc2-protobuf-dev)( |[(,]|$)' \
       <<<"${dependencies}"; then
     echo "shlibs dependencies leaked a build-only XGC2 package" >&2
     exit 1
@@ -123,154 +134,180 @@ binary_dependencies() {
 copy_path() {
   local src="$1"
   local dst_root="$2"
-  if [[ -e "${src}" ]]; then
+  if [[ -e "${src}" || -L "${src}" ]]; then
     mkdir -p "${dst_root}$(dirname "${src#${INSTALL_ROOT}}")"
     cp -a "${src}" "${dst_root}${src#${INSTALL_ROOT}}"
   fi
 }
 
-package_adapter() {
-  local package="$1"
-  local ros_package="$2"
-  local extra_depends="$3"
+write_control() {
+  local pkg_root="$1"
+  local package="$2"
+  local depends="$3"
   local summary="$4"
   local detail="$5"
-  local profile_file="$6"
-  local definition_id="$7"
-  local profile_schema_file="$8"
-  local package_version="${VERSION}"
-  local package_source_digest="${XGC2_SOURCE_DIGEST}"
-  local pkg_root="${BUILD_DIR}/${package}"
-  local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
-
-  mkdir -p "${pkg_root}"
-  copy_path "${PREFIX_ROOT}/share/${ros_package}" "${pkg_root}"
-  copy_path "${PREFIX_ROOT}/lib/${ros_package}" "${pkg_root}"
-  if [[ "${package}" == "${PX4_PACKAGE}" ]]; then
-    copy_path "${PREFIX_ROOT}/include/${ros_package}" "${pkg_root}"
-    copy_path "${PREFIX_ROOT}/lib/lib${ros_package}_operations.a" "${pkg_root}"
-    copy_path "${PREFIX_ROOT}/lib/pkgconfig/${ros_package}.pc" "${pkg_root}"
-    test -f "${pkg_root}${PREFIX}/include/${ros_package}/px4_operations.hpp"
-    test -f "${pkg_root}${PREFIX}/lib/lib${ros_package}_operations.a"
-  fi
-  copy_path "${INSTALL_ROOT}/usr/share/xgc2/adapter-definitions/${definition_id}.json" "${pkg_root}"
-  copy_path "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/${definition_id}.json" "${pkg_root}"
-  copy_path "${INSTALL_ROOT}/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json" "${pkg_root}"
-
-  if [[ ! -x "${pkg_root}${executable}" ]]; then
-    echo "missing installed ${ros_package}_node executable" >&2
-    exit 1
-  fi
-  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/ros1/${profile_file}" ]]; then
-    echo "missing installed ${ros_package} native profile" >&2
-    exit 1
-  fi
-  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/${profile_schema_file}" ]]; then
-    echo "missing installed ${ros_package} profile schema" >&2
-    exit 1
-  fi
-  for manifest in \
-    "/usr/share/xgc2/adapter-definitions/${definition_id}.json" \
-    "/usr/share/xgc2/process-definitions/${definition_id}.json" \
-    "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"; do
-    if [[ ! -f "${pkg_root}${manifest}" ]]; then
-      echo "missing installed ${definition_id} manifest: ${manifest}" >&2
-      exit 1
-    fi
-  done
-
-  local -a runtime_binaries=("${pkg_root}${executable}")
-  local shlibs_depends
-  if [[ "${package}" == "${PX4_PACKAGE}" || "${package}" == "${SCOUT_PACKAGE}" || "${package}" == "${MECANUM_PACKAGE}" ]]; then
-    shlibs_depends="$(binary_dependencies "${runtime_binaries[@]}")"
-    if grep -Eq '(^|, )libxgc2-adapter-runtime-client[0-9]+( |[(])' <<<"${shlibs_depends}"; then
-      echo "robot server unexpectedly links the legacy Adapter Runtime client" >&2; exit 1
-    fi
-  fi
-
-  mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/share/doc/${package}"
+  mkdir -p "${pkg_root}/DEBIAN"
   cat > "${pkg_root}/DEBIAN/control" <<EOF
 Package: ${package}
-Version: ${package_version}
-Section: misc
-Priority: optional
-Architecture: ${ARCH}
-Maintainer: XGC2 <apt@example.com>
-Depends: ${shlibs_depends}, ${extra_depends}
-Description: ${summary}
- ${detail}
-EOF
-  append_source_digest "${pkg_root}/DEBIAN/control" "${package_source_digest}"
-  cp "${REPO_ROOT}/README.md" "${pkg_root}/usr/share/doc/${package}/README.md"
-
-  find "${pkg_root}" -type d -exec chmod 0755 {} +
-  find "${pkg_root}" -type f -exec chmod 0644 {} +
-  chmod 0755 "${pkg_root}/DEBIAN"
-  chmod 0755 "${pkg_root}${executable}"
-
-  fakeroot dpkg-deb --build "${pkg_root}" \
-    "${OUTPUT_DIR}/${package}_${package_version}_${ARCH}.deb" >/dev/null
-}
-
-
-package_adapter \
-  "${PX4_PACKAGE}" \
-  "${PX4_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
-  "XGC2 PX4 multirotor ROS1 semantic adapter" \
-  "Provides PX4 multirotor telemetry, diagnostics, and native command capabilities." \
-  "px4-multirotor-physical-vrpn.yaml" \
-  "xgc2-px4-multirotor-ros1-adapter" \
-  "robot-adapter-profile-v4.schema.json"
-
-package_adapter \
-  "${SCOUT_PACKAGE}" \
-  "${SCOUT_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs" \
-  "XGC2 Scout Mini ROS1 semantic adapter" \
-  "Provides Scout Mini VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "scout-mini-physical-vrpn.yaml" \
-  "xgc2-scout-mini-ros1-adapter" \
-  "robot-adapter-profile-v4.schema.json"
-
-package_adapter \
-  "${MECANUM_PACKAGE}" \
-  "${MECANUM_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
-  "XGC2 Mecanum UGV ROS1 semantic adapter" \
-  "Provides Mecanum UGV VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
-  "mecanum-ugv-physical-vrpn.yaml" \
-  "xgc2-mecanum-ugv-ros1-adapter" \
-  "robot-adapter-profile-v4.schema.json"
-
-
-TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
-tools_root="${BUILD_DIR}/${TOOLS_PACKAGE}"
-test -f "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json"
-copy_path "${PREFIX_ROOT}/share/xgc_ros1_tools_adapter" "${tools_root}"
-copy_path "${PREFIX_ROOT}/lib/xgc_ros1_tools_adapter" "${tools_root}"
-copy_path "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json" "${tools_root}"
-mkdir -p "${tools_root}/DEBIAN"
-tools_depends="$(binary_dependencies "${tools_root}${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node" "${tools_root}${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_service_helper" "${tools_root}${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_probe" "${tools_root}${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_clock_wait")"
-cat > "${tools_root}/DEBIAN/control" <<EOF
-Package: ${TOOLS_PACKAGE}
 Version: ${VERSION}
 Section: misc
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: XGC2 <apt@example.com>
-Depends: ${tools_depends}, python3, ros-${ROS_DISTRO}-rosbag, ros-${ROS_DISTRO}-rospy, ros-${ROS_DISTRO}-ros-babel-fish, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-roslib, ros-${ROS_DISTRO}-rosgraph-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-std-srvs
-Description: Typed ROS1 Tools XRPC service and native ROS helpers
+Depends: ${depends}
+Description: ${summary}
+ ${detail}
 EOF
-append_source_digest "${tools_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
-find "${tools_root}" -type d -exec chmod 0755 {} +
-find "${tools_root}" -type f -exec chmod 0644 {} +
-for name in node service_helper probe clock_wait rosbag_recorder; do
-  chmod 0755 "${tools_root}${PREFIX}/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_${name}"
-done
-fakeroot dpkg-deb --build "${tools_root}" "${OUTPUT_DIR}/${TOOLS_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
+  append_source_digest "${pkg_root}/DEBIAN/control" "${XGC2_SOURCE_DIGEST}"
+}
+
+build_deb() {
+  local pkg_root="$1"
+  local package="$2"
+  local doc_dir="${pkg_root}/usr/share/doc/${package}"
+  mkdir -p "${doc_dir}"
+  cp "${REPO_ROOT}/README.md" "${doc_dir}/README.md"
+  cp -r "${REPO_ROOT}/docs" "${doc_dir}/docs"
+  find "${pkg_root}" -type d -exec chmod 0755 {} +
+  find "${pkg_root}" -type f -exec chmod 0644 {} +
+  chmod 0755 "${pkg_root}/DEBIAN"
+}
+
+# The shared libraries of every type server. The executables are linked against
+# them, so this package is built first and names its libraries in a shlibs file:
+# the type server packages depend on exactly this version, through shlibs.
+package_common() {
+  local pkg_root="${BUILD_DIR}/${COMMON_PACKAGE}"
+  local library
+  local path
+  mkdir -p "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/share/${COMMON_ROS_PACKAGE}" "${pkg_root}"
+  for library in xgc2_robot_server xgc2_robot_server_ros1; do
+    # lib<name>.so is a development symlink and stays out of the package
+    for path in "${PREFIX_ROOT}/lib/lib${library}.so."*; do
+      copy_path "${path}" "${pkg_root}"
+    done
+    if [[ ! -e "${pkg_root}${PREFIX}/lib/lib${library}.so.0" ]]; then
+      echo "missing installed lib${library}.so.0" >&2
+      exit 1
+    fi
+  done
+  test -f "${pkg_root}${PREFIX}/share/${COMMON_ROS_PACKAGE}/package.xml"
+  mkdir -p "${pkg_root}/DEBIAN"
+  {
+    printf 'libxgc2_robot_server 0 %s (= %s)\n' "${COMMON_PACKAGE}" "${VERSION}"
+    printf 'libxgc2_robot_server_ros1 0 %s (= %s)\n' "${COMMON_PACKAGE}" "${VERSION}"
+  } > "${pkg_root}/DEBIAN/shlibs"
+  local shlibs_depends
+  shlibs_depends="$(EXCLUDE_PACKAGE="${COMMON_PACKAGE}" binary_dependencies \
+    "${pkg_root}${PREFIX}/lib/libxgc2_robot_server.so.0" \
+    "${pkg_root}${PREFIX}/lib/libxgc2_robot_server_ros1.so.0")"
+  write_control "${pkg_root}" "${COMMON_PACKAGE}" \
+    "${shlibs_depends}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
+    "XGC2 ROS1 robot type server libraries" \
+    "Shared server core and ROS1 binding of the XGC2 robot type servers."
+  build_deb "${pkg_root}" "${COMMON_PACKAGE}"
+  fakeroot dpkg-deb --build "${pkg_root}" \
+    "${OUTPUT_DIR}/${COMMON_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
+}
+
+# One robot type server package: its executable, its profiles and catalogs, and
+# the process definitions of every robot type it serves.
+package_type_server() {
+  local package="$1"
+  local ros_package="$2"
+  local extra_depends="$3"
+  local summary="$4"
+  local detail="$5"
+  shift 5
+  local pkg_root="${BUILD_DIR}/${package}"
+  local executable="${PREFIX}/lib/${ros_package}/${ros_package}_node"
+  local definition_id
+  local manifest
+
+  mkdir -p "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/share/${ros_package}" "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/lib/${ros_package}" "${pkg_root}"
+  if [[ ! -x "${pkg_root}${executable}" ]]; then
+    echo "missing installed ${ros_package}_node executable" >&2
+    exit 1
+  fi
+  if [[ ! -f "${pkg_root}${PREFIX}/share/${ros_package}/profiles/schema/robot-adapter-profile-v4.schema.json" ]]; then
+    echo "missing installed ${ros_package} profile schema" >&2
+    exit 1
+  fi
+  for definition_id in "$@"; do
+    copy_path "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/${definition_id}.json" "${pkg_root}"
+    copy_path "${INSTALL_ROOT}/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json" "${pkg_root}"
+    for manifest in \
+      "/usr/share/xgc2/process-definitions/${definition_id}.json" \
+      "/usr/share/xgc2/robot-adapter-profiles/${definition_id}.json"; do
+      if [[ ! -f "${pkg_root}${manifest}" ]]; then
+        echo "missing installed ${definition_id} file: ${manifest}" >&2
+        exit 1
+      fi
+    done
+  done
+
+  local shlibs_depends
+  shlibs_depends="$(binary_dependencies "${pkg_root}${executable}")"
+  write_control "${pkg_root}" "${package}" \
+    "${shlibs_depends}, ${extra_depends}" \
+    "${summary}" "${detail}"
+  build_deb "${pkg_root}" "${package}"
+  chmod 0755 "${pkg_root}${executable}"
+  fakeroot dpkg-deb --build "${pkg_root}" \
+    "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
+}
+
+package_tools() {
+  local tools_root="${BUILD_DIR}/${TOOLS_PACKAGE}"
+  local library_root="${PREFIX}/lib/${TOOLS_ROS_PACKAGE}"
+  local name
+  test -f "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json"
+  copy_path "${PREFIX_ROOT}/share/${TOOLS_ROS_PACKAGE}" "${tools_root}"
+  copy_path "${PREFIX_ROOT}/lib/${TOOLS_ROS_PACKAGE}" "${tools_root}"
+  copy_path "${INSTALL_ROOT}/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json" "${tools_root}"
+  local tools_depends
+  tools_depends="$(binary_dependencies \
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_node" \
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_service_helper" \
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_probe" \
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_clock_wait")"
+  write_control "${tools_root}" "${TOOLS_PACKAGE}" \
+    "${tools_depends}, python3, ros-${ROS_DISTRO}-rosbag, ros-${ROS_DISTRO}-rospy, ros-${ROS_DISTRO}-ros-babel-fish, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-roslib, ros-${ROS_DISTRO}-rosgraph-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-std-srvs" \
+    "Typed ROS1 Tools XRPC service and native ROS helpers" \
+    "Run-owned ROS1 Tools process: typed topic publishing and service calls over XRPC http.v1."
+  build_deb "${tools_root}" "${TOOLS_PACKAGE}"
+  for name in node service_helper probe clock_wait rosbag_recorder; do
+    chmod 0755 "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_${name}"
+  done
+  fakeroot dpkg-deb --build "${tools_root}" \
+    "${OUTPUT_DIR}/${TOOLS_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
+}
+
+package_common
+
+package_type_server \
+  "${PX4_PACKAGE}" \
+  "${PX4_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs" \
+  "XGC2 PX4 multirotor ROS1 type server" \
+  "Run-owned type server for PX4 multirotors: telemetry, diagnostics, and native command capabilities." \
+  "xgc2-px4-multirotor-ros1-adapter"
+
+package_type_server \
+  "${UGV_PACKAGE}" \
+  "${UGV_ROS_PACKAGE}" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs" \
+  "XGC2 Scout Mini and Mecanum UGV ROS1 type servers" \
+  "Run-owned type servers for Scout Mini and Mecanum UGVs: VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
+  "xgc2-scout-mini-ros1-adapter" \
+  "xgc2-mecanum-ugv-ros1-adapter"
+
+package_tools
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
-  \( -name "${PX4_PACKAGE}_*.deb" -o -name "${SCOUT_PACKAGE}_*.deb" \
-    -o -name "${MECANUM_PACKAGE}_*.deb" -o -name "${TOOLS_PACKAGE}_*.deb" \) \
+  \( -name "${COMMON_PACKAGE}_*.deb" -o -name "${PX4_PACKAGE}_*.deb" \
+    -o -name "${UGV_PACKAGE}_*.deb" -o -name "${TOOLS_PACKAGE}_*.deb" \) \
   -print | sort

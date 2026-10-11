@@ -1,14 +1,21 @@
 """Fixtures for the integration tests of the ROS1 type servers.
 
-The tests run the installed executables against a private roscore: one master
-on a port of its own, one runtime directory, one ROS home. They need
+The tests run the executables against a private roscore: one master on a port
+of its own, one runtime directory, one ROS home. They need
 
-  XGC_TEST_DEVEL   the catkin devel (or install) space holding lib/<package>/
-  XGC_TEST_BUILD   the catkin build space holding the generated profile
-                   catalogs (<package>/robot-adapter-profiles/*.json)
-  XGC_TEST_REGISTRY the protobuf message registry (registry.json)
+  XGC_TEST_DEVEL     the catkin devel space: lib/<package>/ holds the executables
+                     under test and the gRPC test client (robot_server_client)
+  XGC_TEST_BUILD     the catkin build space holding the generated profile
+                     catalogs (<package>/robot-adapter-profiles/*.json)
+  XGC_TEST_REGISTRY  the protobuf message registry (registry.json)
 
-and a sourced ROS environment (rospy, rosgraph, roscore, rosnode).
+or, to test the installed packages, XGC_TEST_INSTALL_ROOT (the root of the file
+system the packages are installed into: "/" in the release container, a DESTDIR
+elsewhere) in place of XGC_TEST_BUILD and for the executables, which are then
+<root>/opt/ros/noetic/lib/<package>/<executable>, and the catalogs
+<root>/usr/share/xgc2/robot-adapter-profiles/<provider>.json. The libraries of
+the packages have to be on LD_LIBRARY_PATH, as setup.bash makes them. A sourced
+ROS environment (rospy, rosgraph, roscore, rosnode) is required.
 """
 
 import http.client
@@ -63,7 +70,18 @@ def environment_path(name):
 
 
 def devel_file(relative):
-    path = environment_path("XGC_TEST_DEVEL") / "lib" / relative
+    """An executable under test: installed when XGC_TEST_INSTALL_ROOT is set."""
+    install = os.environ.get("XGC_TEST_INSTALL_ROOT")
+    path = (Path(install) / "opt/ros/noetic" if install else environment_path("XGC_TEST_DEVEL")) \
+        / "lib" / relative
+    if not path.exists():
+        raise unittest.SkipTest("{} is not built".format(path))
+    return path
+
+
+def client_binary():
+    """The gRPC client binary: always from the catkin workspace."""
+    path = environment_path("XGC_TEST_DEVEL") / "lib" / CLIENT
     if not path.exists():
         raise unittest.SkipTest("{} is not built".format(path))
     return path
@@ -231,7 +249,7 @@ class Client:
 
     def __init__(self, socket_path):
         self.socket_path = str(socket_path)
-        self.binary = devel_file(CLIENT)
+        self.binary = client_binary()
 
     def run(self, *arguments, stdin=None, timeout=60, deadline_ms=10000):
         out = subprocess.run(
@@ -523,8 +541,12 @@ def mode_payload(mode):
 
 
 def load_catalog(provider):
-    build = environment_path("XGC_TEST_BUILD")
-    path = build / CATALOG_DIRECTORY[provider] / "robot-adapter-profiles" / (provider + ".json")
+    if os.environ.get("XGC_TEST_INSTALL_ROOT"):
+        path = Path(os.environ["XGC_TEST_INSTALL_ROOT"]) / "usr/share/xgc2/robot-adapter-profiles" \
+            / (provider + ".json")
+    else:
+        build = environment_path("XGC_TEST_BUILD")
+        path = build / CATALOG_DIRECTORY[provider] / "robot-adapter-profiles" / (provider + ".json")
     if not path.exists():
         raise unittest.SkipTest("{} is not built".format(path))
     return {entry["profileId"]: entry for entry in json.loads(path.read_text())["profiles"]}
