@@ -28,11 +28,6 @@ struct Directory {
   }
   ~Directory() { std::error_code error; std::filesystem::remove_all(path, error); }
 };
-Json reference(const std::filesystem::path& path) {
-  return {{"target_id", "fixture"}, {"service", "xgc2.simulation"}, {"api_version", "v1"},
-          {"instance_id", "original-instance"}, {"profile", "http.v1"},
-          {"endpoint", {{"kind", "unix"}, {"address", path.string()}}}};
-}
 class World {
  public:
   World(const std::filesystem::path& path, const std::string& instance, xgc2::xrpc::HttpServer::Handler handler,
@@ -44,7 +39,8 @@ class World {
           ++describes;
           if (hold_discovery) handler(std::move(request), std::move(reply));
           else answer(reply, {{"service", "xgc2.simulation"}, {"api_version", "v1"},
-                              {"instance_id", instance}, {"ready", true}});
+                              {"instance_id", instance}, {"ready", true},
+                              {"service_ref", {{"target_id", "fixture"}}}});
         } else handler(std::move(request), std::move(reply));
       }, xgc2::xrpc::HttpLimits{}, xgc2::xrpc::HttpIdentity{instance, {"/v1/describe"}});
     thread_ = std::thread([this] { server_->run(); });
@@ -71,8 +67,8 @@ void completed(HttpRequest request, HttpReply reply) {
 }
 TEST(SimulationClient, LazyDiscoveryLateSocketRestartAndOneReplayPerRevision) {
   Directory root;
-  const auto path = root.path / "world.sock";
-  SimulationClient client(reference(path), "fixture", seconds(2));
+  const auto path = root.path / "0123456789abcdef0123456789abcdef.sock";
+  SimulationClient client(path.string(), "fixture", seconds(2));
   std::this_thread::sleep_for(milliseconds(20));
   EXPECT_FALSE(client.takeReport());
   client.update(Json::object(), "epoch", 1, {{"playing", false}});
@@ -126,7 +122,7 @@ TEST(SimulationClient, AcceptedOperationUsesOneWaitAndDistinctTransportIdentity)
       answer(reply, {{"id", operation}, {"state", "succeeded"}, {"result", {{"epoch", "epoch"}, {"revision", 6}}}});
     else completed(std::move(request), std::move(reply));
   });
-  SimulationClient client(reference(root.path / "world.sock"), "fixture", seconds(2));
+  SimulationClient client((root.path / "world.sock").string(), "fixture", seconds(2));
   client.update(Json::object(), "epoch", 6, {{"playing", false}});
   ASSERT_TRUE(report(client, true));
   client.close();
@@ -147,7 +143,7 @@ TEST(SimulationClient, RefusedAndMismatchedApplicationsNeverAuthorizeOrLoop) {
       else if (fault == 1) answer(reply, {{"id", "other"}, {"state", "succeeded"}});
       else answer(reply, {{"id", request.request_id}, {"state", "succeeded"}, {"result", {{"epoch", "stale"}, {"revision", 8}}}});
     });
-    SimulationClient client(reference(root.path / "world.sock"), "fixture", seconds(1));
+    SimulationClient client((root.path / "world.sock").string(), "fixture", seconds(1));
     client.update(Json::object(), "epoch", 7, {{"playing", false}});
     auto failed = report(client, false);
     ASSERT_TRUE(failed);
@@ -162,7 +158,7 @@ TEST(SimulationClient, HeldDiscoveryIsSingleFlightAndCloseCancelsIt) {
   std::promise<void> entered;
   auto waiting = entered.get_future();
   World world(root.path / "world.sock", "world", [&](HttpRequest, HttpReply) { entered.set_value(); }, true);
-  SimulationClient client(reference(root.path / "world.sock"), "fixture");
+  SimulationClient client((root.path / "world.sock").string(), "fixture");
   client.update(Json::object(), "epoch", 1, {{"playing", false}});
   ASSERT_EQ(waiting.wait_for(seconds(1)), std::future_status::ready);
   for (int i = 2; i < 20; ++i) client.update(Json::object(), "epoch", i, {{"playing", false}});
@@ -189,7 +185,7 @@ TEST(SimulationClient, HeldDiscoveryReplaysOnlyTheLatestDesiredState) {
       completed(std::move(request), std::move(reply));
     }
   }, true);
-  SimulationClient client(reference(root.path / "world.sock"), "fixture");
+  SimulationClient client((root.path / "world.sock").string(), "fixture");
   client.update({{"name", "first"}}, "epoch", 1, {{"playing", false}});
   ASSERT_EQ(discovery.wait_for(seconds(1)), std::future_status::ready);
   for (int i = 2; i < 20; ++i) client.update({{"name", "latest"}}, "epoch", i, {{"playing", true}});
@@ -203,17 +199,50 @@ TEST(SimulationClient, HeldDiscoveryReplaysOnlyTheLatestDesiredState) {
   EXPECT_EQ(applied.at("document").at("name"), "latest");
 }
 
-TEST(SimulationClient, ValidatesExplicitServiceAndLocalUnixTargetBeforeDialling) {
-  const auto ref = reference("/unused/world.sock");
-  for (const auto* field : {"service", "api_version", "instance_id", "target_id", "profile"}) {
-    auto invalid = ref; invalid[field] = "wrong/value";
-    EXPECT_THROW(SimulationClient(invalid, "fixture"), SceneError);
+TEST(SimulationClient, ValidatesEndpointAndLocalTargetBeforeDialling) {
+  for (const auto& endpoint : {std::string(""), std::string("relative/world.sock"), std::string("/world\0.sock", 12)}) {
+    EXPECT_THROW(SimulationClient(endpoint, "fixture"), SceneError);
   }
-  for (const auto& address : {Json("relative"), Json(1), Json("")}) {
-    auto invalid = ref; invalid["endpoint"]["address"] = address;
-    EXPECT_THROW(SimulationClient(invalid, "fixture"), SceneError);
+  for (const auto& target : {std::string(""), std::string("wrong/value"), std::string(129, 'x')}) {
+    EXPECT_THROW(SimulationClient("/unused/world.sock", target), SceneError);
   }
-  EXPECT_THROW(SimulationClient(ref, "fixture", milliseconds(0)), SceneError);
+  EXPECT_THROW(SimulationClient("/unused/world.sock", "fixture", milliseconds(0)), SceneError);
+}
+
+TEST(SimulationClient, RejectsMismatchedDiscoveredWorldIdentityBeforeApplying) {
+  for (const auto* field : {"service", "api_version", "target_id", "instance_id"}) {
+    Directory root;
+    std::atomic<int> operations{0};
+    const bool target_mismatch = std::string(field) == "target_id";
+    const bool instance_mismatch = std::string(field) == "instance_id";
+    const std::string message = target_mismatch ? "Discovered world target differs from the local target" :
+                                instance_mismatch ? "Invalid discovered world instance" : "World host is not ready";
+    World world(root.path / "world.sock", "world", [&](HttpRequest request, HttpReply reply) {
+      if (request.method != "GET") {
+        ++operations;
+        completed(std::move(request), std::move(reply));
+        return;
+      }
+      Json description{{"service", "xgc2.simulation"}, {"api_version", "v1"}, {"instance_id", "world"},
+                       {"ready", true}, {"service_ref", {{"target_id", "fixture"}}}};
+      if (target_mismatch) description["service_ref"]["target_id"] = "other-target";
+      else description[field] = "wrong/value";
+      answer(reply, description);
+    }, true);
+    SimulationClient client((root.path / "world.sock").string(), "fixture");
+    client.update(Json::object(), "epoch", 1, {{"playing", false}});
+    std::optional<Json> rejected;
+    const auto deadline = steady_clock::now() + seconds(2);
+    while (steady_clock::now() < deadline) {
+      auto value = client.takeReport();
+      if (value && value->at("message") == message) { rejected = std::move(value); break; }
+      std::this_thread::sleep_for(milliseconds(5));
+    }
+    ASSERT_TRUE(rejected) << field;
+    EXPECT_FALSE(rejected->at("applied"));
+    EXPECT_EQ(operations.load(), 0);
+    client.close();
+  }
 }
 }  // namespace
 }  // namespace xgc_scene

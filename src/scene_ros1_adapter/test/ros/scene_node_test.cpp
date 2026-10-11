@@ -401,8 +401,24 @@ TEST(SceneNode, ParsesPrivateParametersAndRequiresSimulationOnlyForGazebo) {
   EXPECT_EQ(parsed.generation_parameters.at("seed"), 3);
   parameters["profile"] = "gazebo";
   EXPECT_THROW(SceneParameters::parse(parameters), SceneError);
-  parameters["simulation_service_ref_json"] = "{}";
-  EXPECT_NO_THROW(SceneParameters::parse(parameters));
+  for (const auto& endpoint : {Json(""), Json("relative/world.sock"), Json(1), Json(std::string("/world\0.sock", 12))}) {
+    parameters["simulation_endpoint"] = endpoint;
+    try {
+      SceneParameters::parse(parameters);
+      FAIL() << "Accepted an invalid gazebo endpoint";
+    } catch (const SceneError& error) {
+      EXPECT_NE(std::string(error.what()).find("~simulation_endpoint"), std::string::npos);
+    }
+  }
+  parameters["simulation_endpoint"] = "/private/0123456789abcdef0123456789abcdef.sock";
+  EXPECT_EQ(SceneParameters::parse(parameters).simulation_endpoint, parameters["simulation_endpoint"]);
+  for (const auto* profile : {"physical", "xsim"}) {
+    parameters["profile"] = profile;
+    for (const auto& endpoint : {Json(""), Json("relative/world.sock"), Json(1)}) {
+      parameters["simulation_endpoint"] = endpoint;
+      EXPECT_TRUE(SceneParameters::parse(parameters).simulation_endpoint.empty());
+    }
+  }
   parameters["profile"] = "bad";
   EXPECT_THROW(SceneParameters::parse(parameters), SceneError);
   parameters["profile"] = "physical"; parameters["frozen"] = "false";

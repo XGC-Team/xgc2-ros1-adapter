@@ -102,8 +102,10 @@ class SimulationHandler(socketserver.StreamRequestHandler):
         body = json.loads(text) if text else None
         if method == 'GET':
             assert route == '/v1/describe?wait_ready_ms=30000'
+            assert 'x-xrpc-instance-id' not in headers
             payload = json.dumps({'service': 'xgc2.simulation', 'api_version': 'v1',
-                                  'instance_id': 'simulation-fixture', 'ready': True}).encode()
+                                  'instance_id': 'simulation-fixture', 'ready': True,
+                                  'service_ref': {'target_id': 'fixture'}}).encode()
             self.wfile.write(('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n'
                               'X-Xrpc-Instance-ID: simulation-fixture\r\nX-Request-ID: ' + headers['x-request-id'] + '\r\n' +
                               'Content-Length: {}\r\n\r\n'.format(len(payload))).encode() + payload)
@@ -153,14 +155,11 @@ def fleet_process(args, root, node_log, namespace, source):
         {'namespace': '/lf_process/B', 'binding': {'simulationSensors': {'simpleLidar': True}}}],
         'visualizationTopics': [[{'topic': '/xgc/scene/reference_cloud',
             'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]]}
-    simulation_ref = {'target_id': 'fixture', 'service': 'xgc2.simulation', 'api_version': 'v1',
-                      'instance_id': 'simulation-fixture', 'profile': 'http.v1',
-                      'endpoint': {'kind': 'unix', 'address': str(sim_path)}}
     command = [str(args.executable.resolve()), '--socket-path', str(scene_socket), '--target-id', 'fixture',
                '--run-id', 'fleet-smoke', '--node-name', 'scene_fleet_smoke',
                '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
                '_scene_file:=' + str(source), '_profile:=gazebo', '__ns:=' + namespace,
-               '_simulation_service_ref_json:=' + json.dumps(simulation_ref),
+               '_simulation_endpoint:=' + str(sim_path),
                '_lidar_xrpc_socket:=' + str(path), '--session-stdin',
                '_lidar_defaults_json:={"worker_threads":2}', '_lidar_enabled:=false']
     try:
@@ -248,6 +247,13 @@ def fleet_process(args, root, node_log, namespace, source):
         stop(node, signal.SIGTERM)
         assert node.returncode == 0
         assert not path.exists() and not scene_socket.exists()
+        for endpoint, message in [('', 'is required'), ('relative/world.sock', 'must be an absolute Unix socket path')]:
+            invalid = [arg for arg in command if not arg.startswith('_simulation_endpoint:=')]
+            invalid.append('_simulation_endpoint:=' + endpoint)
+            result = subprocess.run(invalid, input=json.dumps(session), text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
+            assert result.returncode == 2 and 'Scene parameter ~simulation_endpoint ' + message in result.stdout, result.stdout
+            assert not path.exists() and not scene_socket.exists()
         invalid = [arg for arg in command if not arg.startswith('_lidar_defaults_json:=')]
         invalid.append('_lidar_defaults_json:={"typo":1}')
         result = subprocess.run(invalid, input=json.dumps(session), text=True, stdout=subprocess.PIPE,
@@ -277,7 +283,7 @@ def fleet_process(args, root, node_log, namespace, source):
                                         stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
                 assert result.returncode == 2 and '--session-stdin' in result.stdout, result.stdout
                 assert not path.exists() and not scene_socket.exists()
-        print('PASS: two sockets ready during held native apply, sampled/default roster, beams/reference, enable control, stdin/refusal errors, SIGTERM')
+        print('PASS: two sockets ready during held native apply, sampled/default roster, beams/reference, enable control, endpoint/stdin/refusal errors, SIGTERM')
     finally:
         native.release.set()
         stop(node, signal.SIGTERM)
@@ -346,7 +352,7 @@ def main():
                             '--run-id', run_id, '--node-name', 'scene_' + run_id,
                             '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
                             '_scene_file:=' + str(source), '_profile:=physical', '__ns:=' + namespace,
-                            '_lidar_xrpc_socket:=' + str(lidar_socket)]
+                            '_lidar_xrpc_socket:=' + str(lidar_socket), '_simulation_endpoint:=ignored/relative.sock']
             with node_log.open('w') as output:
                 node = subprocess.Popen(command_line, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             # With no --session-stdin flag, even invalid input is not read.

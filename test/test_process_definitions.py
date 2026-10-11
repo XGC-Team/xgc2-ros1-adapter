@@ -146,7 +146,7 @@ class ProcessDefinitionTest(unittest.TestCase):
                         "_xrpc_socket": "${socketPath}",
                         "_frozen": "${frozen}",
                         "_profile": "${profile}",
-                        "_simulation_service_ref_json": "${simulationServiceRefJson}",
+                        "_simulation_endpoint": "${simulationEndpoint}",
                         "_lidar_xrpc_socket": "${lidarSocketPath}",
                         "_lidar_enabled": "${lidarEnabled}",
                         "_lidar_defaults_json": "${lidarDefaultsJson}",
@@ -167,8 +167,13 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertEqual(set(declared), {
                         "socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
                         "sceneFile", "workingFile", "generationParametersJson", "saveDirectory", "frozen",
-                        "profile", "simulationServiceRefJson", "sessionJson", "lidarEnabled", "lidarDefaultsJson",
+                        "profile", "simulationEndpoint", "sessionJson", "lidarEnabled", "lidarDefaultsJson",
                     })
+                    self.assertEqual(declared["simulationEndpoint"]["type"], "string")
+                    self.assertTrue(declared["simulationEndpoint"]["fixedOnly"])
+                    self.assertEqual(declared["simulationEndpoint"]["default"], "")
+                    self.assertIn("$session.endpoints.world", declared["simulationEndpoint"]["description"])
+                    self.assertIn("discovers the instance itself", declared["simulationEndpoint"]["description"])
                     self.assertEqual(declared["sessionJson"]["default"], "")
                     self.assertIn("unchanged", declared["sessionJson"]["description"])
                     self.assertEqual(declared["lidarEnabled"], {"type": "boolean", "default": True})

@@ -94,7 +94,8 @@ class Handler(socketserver.StreamRequestHandler):
             assert route == '/v1/describe?wait_ready_ms=30000'
             assert 'x-xrpc-instance-id' not in headers
             world.describes += 1
-            value = {'service': 'xgc2.simulation', 'api_version': 'v1', 'ready': True, 'instance_id': world.instance}
+            value = {'service': 'xgc2.simulation', 'api_version': 'v1', 'ready': True, 'instance_id': world.instance,
+                     'service_ref': {'target_id': 'fixture'}}
         else:
             if headers['x-xrpc-instance-id'] != world.instance:
                 value = {'error': {'code': 'conflict', 'message': 'service instance identity mismatch'}}
@@ -132,7 +133,8 @@ def main():
                 except OSError:
                     pass
         env = dict(os.environ, ROS_MASTER_URI='http://127.0.0.1:' + str(port), ROS_HOME=str(root / 'ros-home'), ROS_IP='127.0.0.1')
-        scene_socket, lidar_socket, world_socket = [root / name for name in ['scene.sock', 'lidar.sock', 'world.sock']]
+        scene_socket, lidar_socket, world_socket = [root / name for name in [
+            'scene.sock', 'lidar.sock', '0123456789abcdef0123456789abcdef.sock']]
         source = root / 'scene.yaml'
         source.write_text(json.dumps({'schema': 'xgc2.scene.v1', 'id': 'start-order', 'frame': 'world', 'obstacles': [
             {'id': 'wall', 'name': 'Wall', 'pose': {'position': [4, 0, 0]},
@@ -150,9 +152,7 @@ def main():
                 '--run-id', 'start-order', '--node-name', 'lf_start_order', '--ros-master-uri', env['ROS_MASTER_URI'],
                 '--ros-ip', '127.0.0.1', '_scene_file:=' + str(source), '_lidar_xrpc_socket:=' + str(lidar_socket), '_profile:=' + profile]
             if profile == 'gazebo':
-                ref = {'target_id': 'fixture', 'service': 'xgc2.simulation', 'api_version': 'v1', 'instance_id': 'original-instance',
-                       'profile': 'http.v1', 'endpoint': {'kind': 'unix', 'address': str(world_socket)}}
-                command += ['_simulation_service_ref_json:=' + json.dumps(ref), '--session-stdin']
+                command += ['_simulation_endpoint:=' + str(world_socket), '--session-stdin']
             with log.open('a') as output:
                 process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             if profile == 'gazebo':
@@ -198,6 +198,7 @@ def main():
                 print('PASS: pre-master readiness, held describe, late master, replacement exit 3 and SIGTERM while waiting', flush=True)
             else:
                 master = start_master()
+                assert not world_socket.exists()
                 if args.long:
                     # A stopped listener can leave its socket inode behind.
                     # Exercise transport backoff as well as the appearance watch.
@@ -208,6 +209,8 @@ def main():
                 lidar = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'lidar-ready')
                 assert scene['ready'] and lidar['ready'] and lidar['facts']['sensors'] == 1
                 assert not lidar['facts']['scene_ready']
+                if not args.long:
+                    assert not world_socket.exists(), 'Readiness required the world socket'
                 instance = scene['instance_id']
                 def envelope():
                     return http_call(scene_socket, 'GET', '/v1/scene', 'scene', instance)
@@ -235,6 +238,9 @@ def main():
                 until(lambda: envelope()['synchronized'])
                 assert len(world.applies) == 1 and world.applies[0]['document'] == current['document']
                 assert world.applies[0]['epoch'] == current['epoch'] and world.applies[0]['revision'] == current['revision']
+                assert envelope()['consumers'][0]['instance_id'] == 'world-first'
+                time.sleep(0.15)
+                assert len(world.applies) == 1 and world.describes == 1
                 import rospy
                 from geometry_msgs.msg import PoseStamped
                 from sensor_msgs.msg import PointCloud2
@@ -263,11 +269,12 @@ def main():
                 world = World(world_socket, 'world-second')
                 until(lambda: envelope()['synchronized'])
                 assert len(world.applies) == 1 and world.applies[0]['document'] == current['document']
+                assert world.applies[0]['epoch'] == current['epoch'] and world.applies[0]['revision'] == current['revision']
                 assert envelope()['consumers'][0]['instance_id'] == 'world-second'
                 time.sleep(0.3)
                 assert len(world.applies) == 1 and world.describes == 1
                 # No socket event: a mismatch on the old pinned instance must
-                # rediscover through the endpoint of the original ServiceRef.
+                # rediscover through the same world rendezvous path.
                 world.instance = 'world-rebound'
                 current = envelope()
                 receipt = http_call(scene_socket, 'POST', '/v1/commands', 'rebind', instance,

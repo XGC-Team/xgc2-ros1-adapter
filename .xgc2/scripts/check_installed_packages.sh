@@ -259,6 +259,13 @@ for parameter in definition['parameters']['properties'].values():
     assert set(parameter) <= {'type', 'description', 'default', 'enum', 'minimum', 'maximum', 'sensitive', 'output', 'fixedOnly'}
 assert definition['parameters']['properties']['socketPath'] == {'type': 'string', 'fixedOnly': True}
 assert definition['parameters']['properties']['lidarSocketPath'] == {'type': 'string', 'fixedOnly': True}
+assert definition['parameters']['properties']['targetId'] == {'type': 'string', 'default': 'local', 'fixedOnly': True}
+endpoint = definition['parameters']['properties']['simulationEndpoint']
+assert endpoint['type'] == 'string' and endpoint['fixedOnly'] and endpoint['default'] == ''
+assert '$session.endpoints.world' in endpoint['description']
+assert 'simulationServiceRefJson' not in definition['parameters']['properties']
+assert '_simulation_endpoint:=${simulationEndpoint}' in definition['command']['args']
+assert not any(arg.startswith('_simulation_service_ref_json:=') for arg in definition['command']['args'])
 # The frozen session facts arrive on standard input (the lidar fleet follows the roster).
 assert definition['command']['stdinParameter'] == 'sessionJson'
 assert definition['parameters']['properties']['sessionJson']['type'] == 'string'
