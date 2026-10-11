@@ -80,51 +80,72 @@ The service admits four calls in flight, limits bodies to 8 MiB and responses to
 
 The same process hosts `xgc2.sensor.lidar` v1 (`http.v1`) on a second Unix socket
 in every profile. Core waits for unbound Describe on both sockets. Lidar Describe
-facts include `target_id`, `profile`, `sensors` and `backend`. The `gazebo` profile
-uses the CPU fleet when the manifest contains sensors or a reference cloud and
-declares `backend: "cpu"`. An empty manifest creates no engine. In `xsim` and
-`physical` there is no engine, the sensor count is zero, `backend` is `"none"`,
-and the enable control changes no sensor behavior. GPU requests are refused;
-there is no fallback backend.
+facts include `target_id`, `profile`, `sensors` and `backend`. In `gazebo` the
+adapter builds the CPU sampled fleet from the frozen session robot roster.
+Default simulator-model lidars remain with the simulator and are excluded from
+this fleet. An empty selection creates no engine. Gazebo declares `backend:
+"cpu"`; `xsim` and `physical` have no engine, zero sensors and `backend: "none"`.
+Their enable control changes no sensor behavior. Sampled selections require
+explicit CPU acceleration; GPU requests are refused without fallback.
 
-| Private ROS parameter | Process parameter | Meaning |
+| Input | Process parameter | Meaning |
 |---|---|---|
 | `~lidar_xrpc_socket` | `lidarSocketPath` | Required absolute Unix socket path, distinct from `socketPath`; `fixedOnly`. |
-| `~lidar_fleet_json` | `lidarFleetJson` | Fleet manifest text, schemaVersion 1, at most 1 MiB. Default empty creates no fleet. |
+| Standard input with `--session-stdin` | `sessionJson` | One frozen session JSON document, at most 8 MiB. Default empty means no fleet. |
 | `~lidar_enabled` | `lidarEnabled` | Initial enable state, default true. Launch configuration owns initial state. |
 | `~lidar_defaults_json` | `lidarDefaultsJson` | Defaults object, default `{}`. Unknown keys are refused by name. |
 
-The exact defaults keys consumed by the manifest parser are `range`, `min_range`,
+Core computes no fleet manifest. The scene workflow copies `$session.runMode`,
+`$session.robots` and `$session.visualizationTopics` unchanged into this string
+expression, interpolating the JSON arrays inline:
+
+```text
+{"runMode":"{{ $session.runMode }}","robots":{{ $session.robots }},"visualizationTopics":{{ $session.visualizationTopics }}}
+```
+
+`command.stdinParameter` names `sessionJson`; the command includes
+`--session-stdin`. The executable reads stdin only with that flag, before ROS,
+threads or sockets start. The supervisor supplies `/dev/null` for absent input,
+so the read ends. A present document is validated in every profile. Read errors,
+oversized input, invalid JSON or run modes are usage failures naming
+`--session-stdin`. The document requires `runMode` (`simulation`, `hybrid` or
+`physical`), `robots` (an array of frozen RobotFact objects) and
+`visualizationTopics` (the unchanged layer arrays). The contract is in
+[roster.hpp](../src/scene_ros1_adapter/include/xgc_scene/lidar/roster.hpp) and its
+[legacy golden tests](../src/scene_ros1_adapter/test/lidar/roster_test.cpp).
+
+The adapter invokes `buildFleet` only in `gazebo`. It follows
+`binding.simulationSensors.simpleLidar` and, for hybrid runs,
+`binding.hybridSource`. Physical runs select no fleet. A sampled sensor is
+selected by penetrating/depth mode, requested beams, or the legacy frozen
+preset selection; a boolean/default-model lidar does not become a fleet sensor.
+The builder keeps the legacy numeric overrides and selection refusals. It
+normalizes namespaces and requires explicit `acceleration: "cpu"`; penetrating
+with beams is refused. The input roster is limited to 512 members before
+filtering. A visible semantic PointCloud2 declaration for
+`/xgc/scene/reference_cloud` adds the reference publisher, including for a
+reference-only fleet. The internal manifest is schemaVersion 1, at most 1 MiB;
+it is built inside the adapter and is not a process input.
+
+Node defaults passed to the builder/parser are `range`, `min_range`,
 `h_fov_deg`, `v_fov_deg`, `h_res`, `v_res`, `surface_spacing`, `vertical_slab_tan`,
 `fx`, `fy`, `cx`, `cy`, `noise_std` and `seed`. Engine defaults are `yaw_only`,
 `pose_timeout`, `worker_threads`, `vehicle_bodies` and `vehicle_body_radius`.
-The manifest owns `mode`, `keepBuried`, `headingCrop`, `headingCosMin`, rates and
-beam publication; camera width/height are derived from `hRes`/`vRes`.
-Those manifest-owned choices are not accepted as ineffective node defaults.
+Values emitted from the roster take precedence. The internal manifest owns
+mode/crop choices, rates and beams; camera width/height derive from hRes/vRes.
+Ineffective node defaults for those choices are not accepted.
 
-The schema is defined by [parseManifest](../src/scene_ros1_adapter/include/xgc_scene/lidar/manifest.hpp)
-and exercised by [manifest tests](../src/scene_ros1_adapter/test/lidar/manifest_test.cpp).
-For example:
-
-```json
-{"schemaVersion":1,"robots":[{"namespace":"/A","poseTopic":"/A/pose",
- "mode":"raycast","rateHz":10,"hRes":90,"vRes":8,"publishBeams":true}],
- "referenceCloud":{"surfaceSpacing":0.1}}
-```
-
-`robots` contains 0 to 512 sensors, with an absolute namespace and an optional
-pose topic. Without an explicit topic it uses `/vrpn_client_node<namespace>/pose`.
-An optional `bodies` roster supplies stable IDs, namespaces, truth pose topics and
-sphere geometry (`radiusMeters`); nonpenetrating sensors use their body's truth
-topic by default, exclude their own body, and retain unsensed bodies. Penetrating
-sensors retain their original pose source unless overridden. A reference-only
-manifest has an empty `robots` array and creates no robot sensor topics.
+Sensor pose topics default to `/vrpn_client_node<namespace>/pose`. At the fleet
+seam, a body roster selects body truth for nonpenetrating sensors; penetrating
+sensors retain the default source, and explicit `poseTopic` wins in either case.
+These are the legacy fleet resolution rules. The session builder derives no
+body roster or sensor settings from asset/profile facts.
 
 | Topic | Contract |
 |---|---|
-| Manifest sensor and body pose topics | `geometry_msgs/PoseStamped`, frame `world`; Math validates poses and observation age. Invalid truth suppresses scans. |
+| Resolved sensor and body pose topics | `geometry_msgs/PoseStamped`, frame `world`; Math validates poses and observation age. Invalid truth suppresses scans. |
 | `<namespace>/simple_lidar/points` | `sensor_msgs/PointCloud2`, float32 `x y z`, point_step 12. |
-| `<namespace>/simple_lidar/beams` | When requested for raycast/depth sensors: float32 `x y z dx dy dz range hit`, point_step 32. |
+| `<namespace>/simple_lidar/beams` | Advertised only when requested for raycast/depth sensors: float32 `x y z dx dy dz range hit`, point_step 32. |
 | `/xgc/scene/reference_cloud` | Full scene exterior XYZ reference; queue 1, latched. Engine Publish/Clear actions replace the latch. |
 
 Sensor clouds have frame `world`, height 1, width equal to the record count,
@@ -153,12 +174,13 @@ on lane 0. While disabled, the fleet scans and publishes nothing; pending
 reference clears wait for re-enable. Control stops before the timer and worker
 pool, and ROS handles remain alive until workers finish.
 
-Presets under `config/presets` are retired here: Core resolves presets to values.
-The manifest replaces `pose_topic_pattern`, `output_topic_pattern`,
-`beams_topic_pattern`, `vehicle_ids`, `enabled_vehicles` and `num_vehicles`.
-The file variant of the fleet parameter is dropped; Core passes text. The
-manifest producer, formerly `prepare_fleet.py` run by the retired provisioning
-script, is Core's workflow concern and is not part of this repository.
+The old node's preset YAML files and node-level preset parameters are not
+carried over. The fleet follows the frozen roster through the adapter's legacy
+selection builder. Topic patterns (`pose_topic_pattern`, `output_topic_pattern`,
+`beams_topic_pattern`, `vehicle_ids`, `enabled_vehicles`, `num_vehicles`) and file
+manifest provisioning are not carried over. Core passes session facts unchanged;
+the adapter constructs the fleet, including the legacy selection behavior that
+formerly lived in `prepare_fleet.py`.
 
 ## Finite CLI usage
 

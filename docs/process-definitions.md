@@ -20,7 +20,7 @@ in `/usr/share/xgc2/robot-adapter-profiles/<provider>.json` (see
 ## Shape
 
 The schema id is `xgc.execution.process/v1`. A definition is a direct executable with typed
-parameters; there is no wrapper script, probe command or environment preparation.
+parameters and optional stdin; there is no wrapper script, probe command or environment preparation.
 
 ```json
 {
@@ -98,18 +98,28 @@ The Scene definition starts `xgc2_scene_adapter` directly with ROS remappings:
 `__ns`, `__master` and `__ip` select the namespace and ROS environment, and `_scene_file`,
 `_working_file`, `_generation_parameters_json`, `_save_directory`, `_target_id`,
 `_xrpc_socket`, `_frozen`, `_profile` and `_simulation_service_ref_json` set the private
-parameters. The lidar remappings are `_lidar_xrpc_socket`, `_lidar_fleet_json`,
-`_lidar_enabled` and `_lidar_defaults_json`, rendered from `lidarSocketPath`,
-`lidarFleetJson`, `lidarEnabled` and `lidarDefaultsJson`. Their defaults are empty
-manifest text, true and `{}`; the socket has no default. `sceneFile` is required;
+parameters. The lidar remappings are `_lidar_xrpc_socket`, `_lidar_enabled`
+and `_lidar_defaults_json`, rendered from `lidarSocketPath`, `lidarEnabled`
+and `lidarDefaultsJson`. The enabled/defaults values default to true and `{}`;
+the socket has no default. `sessionJson` is a string defaulting to empty, named
+by `command.stdinParameter`; `command.args` contains `--session-stdin`. It
+carries the frozen Run session facts as one JSON document on stdin. Empty input
+means no fleet; the executable reads only with the flag and validates a present
+document before starting ROS or either socket. `sceneFile` is required;
 the `gazebo` profile also requires a valid
 `simulationServiceRefJson` at startup. The namespace defaults to `/xgc_scene` and the
 node name is `xgc2_scene_adapter`. See [Scene adapter](scene-adapter.md) for the profiles,
 topics, TF and CLI contract. Scene readiness holds the unbound
 `GET /v1/describe?wait_ready_ms=N` on both sockets until ready or the wait ends,
 for at most 30000 ms. With two services Scene uses SIGTERM and no `stop.rpc`.
-Core owns manifest production and preset resolution; the former `prepare_fleet.py`
-provisioning producer is not part of this repository.
+Core computes no fleet manifest. The scene workflow binds `sessionJson` using
+`{"runMode":"{{ $session.runMode }}","robots":{{ $session.robots }},"visualizationTopics":{{ $session.visualizationTopics }}}`.
+These frozen values are copied unchanged. The adapter constructs the Gazebo
+sampled fleet from the roster; xsim/physical retain the empty fleet. Legacy
+node-level presets, topic patterns and file provisioning are not carried over.
+The sensor topics are `<namespace>/simple_lidar/points` and, when requested,
+`<namespace>/simple_lidar/beams`; the reference remains
+`/xgc/scene/reference_cloud`.
 
 ## Checks
 

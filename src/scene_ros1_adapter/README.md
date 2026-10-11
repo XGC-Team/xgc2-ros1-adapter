@@ -23,10 +23,13 @@ and persistence. It uses nlohmann-json, yaml-cpp, OpenSSL and `xgc2_math::scene`
 subscriptions, subscriber demand, reused PointCloud2 messages and one ROS timer.
 It taps simulator-applied scene truth inside the authoring node and preserves
 the source enable control. See [Lidar fleet](../../docs/scene-adapter.md#lidar-fleet)
-for the manifest schema, defaults and topics. Core resolves retired presets and
-produces the manifest; the former `prepare_fleet.py` provisioning producer is
-Core's workflow concern and is not part of this repository. Topic patterns and
-the fleet file parameter are retired.
+for the stdin session contract, defaults and topics. Core copies frozen session
+facts unchanged and computes no fleet manifest. With `--session-stdin`, the
+adapter reads the `sessionJson` document (at most 8 MiB) before startup and builds
+the fleet from the robot roster. Sensor clouds use `<namespace>/simple_lidar/points`
+and requested beams use `<namespace>/simple_lidar/beams`; the reference cloud
+remains latched on `/xgc/scene/reference_cloud`. Old node-level preset YAML,
+topic patterns and file provisioning are not carried over.
 
 Core sources (`src/core/*.cpp`) and tests (`test/core/*_test.cpp`) are globbed.
 The golden corpus (`test/scene_golden` at the repository root) is the reference.
