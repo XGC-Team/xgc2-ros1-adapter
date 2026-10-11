@@ -174,7 +174,7 @@ def fleet_process(args, root, node_log, namespace, source):
         for robot in fleet['robots']:
             name = robot['namespace']
             for suffix in ['points', 'beams']:
-                topic = name + '/world_lidar/' + suffix
+                topic = name + '/simple_lidar/' + suffix
                 subscribers.append(rospy.Subscriber(topic, PointCloud2, lambda msg, topic=topic: receive(topic, msg)))
             poses.append(rospy.Publisher(robot['poseTopic'], PoseStamped, queue_size=1))
         subscribers.append(rospy.Subscriber('/xgc/scene/reference_cloud', PointCloud2, lambda msg: receive('reference', msg)))
@@ -215,7 +215,7 @@ def fleet_process(args, root, node_log, namespace, source):
         receipt = http_call(path, 'POST', '/v1/configure', 'reenable', instance,
                             {'expected_revision': 3, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
         assert receipt['state'] == 'succeeded'
-        assert send(3, lambda: counts['/lf_process/A/world_lidar/points'] > before['/lf_process/A/world_lidar/points'])
+        assert send(3, lambda: counts['/lf_process/A/simple_lidar/points'] > before['/lf_process/A/simple_lidar/points'])
         current = http_call(scene_socket, 'GET', '/v1/scene', 'current', described['instance_id'])
         native.release.clear()
         native.applying.clear()
@@ -369,7 +369,7 @@ def main():
             wait_socket(str(lidar_socket), node, unix=True)
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'xsim-fleet')
             assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}
-            assert not any(topic.startswith('/lf_absent/world_lidar/') for topic, _ in rospy.get_published_topics())
+            assert not any(topic.startswith('/lf_absent/simple_lidar/') for topic, _ in rospy.get_published_topics())
             stop(node, signal.SIGTERM)
             assert node.returncode == 0 and not lidar_socket.exists()
             if args.edge_test:

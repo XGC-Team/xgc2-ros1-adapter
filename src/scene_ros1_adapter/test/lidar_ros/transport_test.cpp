@@ -125,9 +125,9 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   std::vector<ros::Subscriber> subscriptions;
   for (int i = 0; i < 2; ++i) {
     const auto ns = robots[i]["namespace"].get<std::string>();
-    subscriptions.push_back(handle.subscribe<sensor_msgs::PointCloud2>(ns + "/world_lidar/points", 1,
+    subscriptions.push_back(handle.subscribe<sensor_msgs::PointCloud2>(ns + "/simple_lidar/points", 1,
         [&, i](const sensor_msgs::PointCloud2::ConstPtr& cloud) { points[i] = cloud; ++received[i]; }));
-    subscriptions.push_back(handle.subscribe<sensor_msgs::PointCloud2>(ns + "/world_lidar/beams", 1,
+    subscriptions.push_back(handle.subscribe<sensor_msgs::PointCloud2>(ns + "/simple_lidar/beams", 1,
         [&, i](const sensor_msgs::PointCloud2::ConstPtr& cloud) { beams[i] = cloud; ++beam_received[i]; }));
   }
   sensor_msgs::PointCloud2::ConstPtr reference;
@@ -140,7 +140,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   ros::master::V_TopicInfo topics;
   ASSERT_TRUE(ros::master::getTopics(topics));
   EXPECT_FALSE(std::any_of(topics.begin(), topics.end(), [&](const auto& topic) {
-    return topic.name.find(prefix + "/body2/world_lidar/") == 0;
+    return topic.name.find(prefix + "/body2/simple_lidar/") == 0;
   }));
   EXPECT_EQ(points[0]->header.frame_id, "world");
   EXPECT_EQ(points[0]->header.stamp.toNSec(), now - 12345);
@@ -263,7 +263,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   Edge clock_edge(handle, clock_config);
   clock_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
   unsigned clock_deliveries = 0;
-  auto clock_sub = handle.subscribe<sensor_msgs::PointCloud2>(clock_ns + "/world_lidar/points", 1,
+  auto clock_sub = handle.subscribe<sensor_msgs::PointCloud2>(clock_ns + "/simple_lidar/points", 1,
       [&](const sensor_msgs::PointCloud2::ConstPtr& cloud) {
         ++clock_deliveries;
         EXPECT_EQ(cloud->header.stamp, ros::Time(100));
@@ -306,7 +306,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   }));
   ASSERT_TRUE(ros::master::getTopics(topics));
   EXPECT_FALSE(std::any_of(topics.begin(), topics.end(), [&](const auto& topic) {
-    return topic.name.find(prefix + "/") == 0 && topic.name.find("/world_lidar/") != std::string::npos;
+    return topic.name.find(prefix + "/") == 0 && topic.name.find("/simple_lidar/") != std::string::npos;
   }));
   EXPECT_EQ(reference->point_step, 12u);
   EXPECT_EQ(reference->fields.size(), 3u);

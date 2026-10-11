@@ -123,8 +123,8 @@ manifest has an empty `robots` array and creates no robot sensor topics.
 | Topic | Contract |
 |---|---|
 | Manifest sensor and body pose topics | `geometry_msgs/PoseStamped`, frame `world`; Math validates poses and observation age. Invalid truth suppresses scans. |
-| `<namespace>/world_lidar/points` | `sensor_msgs/PointCloud2`, float32 `x y z`, point_step 12. |
-| `<namespace>/world_lidar/beams` | When requested for raycast/depth sensors: float32 `x y z dx dy dz range hit`, point_step 32. |
+| `<namespace>/simple_lidar/points` | `sensor_msgs/PointCloud2`, float32 `x y z`, point_step 12. |
+| `<namespace>/simple_lidar/beams` | When requested for raycast/depth sensors: float32 `x y z dx dy dz range hit`, point_step 32. |
 | `/xgc/scene/reference_cloud` | Full scene exterior XYZ reference; queue 1, latched. Engine Publish/Clear actions replace the latch. |
 
 Sensor clouds have frame `world`, height 1, width equal to the record count,

@@ -17,7 +17,7 @@ Edge::Edge(ros::NodeHandle& handle, const Parameters& parameters) {
     auto& sensor = sensors_[i];
     const auto advertise = [&](bool beams) {
       auto options = ros::AdvertiseOptions::create<sensor_msgs::PointCloud2>(
-          spec.name_space + (beams ? "/world_lidar/beams" : "/world_lidar/points"), 1,
+          spec.name_space + (beams ? "/simple_lidar/beams" : "/simple_lidar/points"), 1,
           [this, i, beams](const ros::SingleSubscriberPublisher&) {
             engine_->setDemand(i, sensors_[i].demand.change(beams, true));
           },
