@@ -242,3 +242,52 @@ TEST(Allocation, IdleDisabledWaitingAndDeferredReferenceDelivery) {
     EXPECT_EQ(0u, scans);
   EXPECT_EQ(3u, sink.references); // first clear, publication, deferred clear
 }
+
+TEST(Allocation, SceneRevisionsPrepareOnlyDemandedSensorsLazily) {
+  for (const auto mode : {"raycast", "penetrating", "depth_frustum"})
+    for (const bool beams : {false, true}) {
+      auto many_manifest = fleet(mode, beams, false);
+      many_manifest.reference.reset();
+      auto one_manifest = many_manifest;
+      one_manifest.robots.resize(1);
+      CountingSink one_sink(1), many_sink(6);
+      EngineOptions options;
+      options.worker_threads = 1;
+      Engine one(one_manifest, one_sink, options);
+      Engine many(many_manifest, many_sink, options);
+      std::vector<Obstacle> obstacles{Obstacle::box({4, 0, 1}, {1, 4, 3})};
+      for (std::uint64_t revision = 1; revision <= 3; ++revision) {
+        obstacles.push_back(Obstacle::sphere({-2, 0, 1}, revision));
+        const auto one_allocations =
+            allocations([&] { one.setScene(obstacles, revision); });
+        const auto many_allocations =
+            allocations([&] { many.setScene(obstacles, revision); });
+        // Compiling the same shared geometry must cost the same allocations,
+        // regardless of the number of sensor output/scratch buffers.
+        EXPECT_EQ(one_allocations, many_allocations)
+            << mode << " beams=" << beams << " revision=" << revision;
+        EXPECT_EQ(one.sensorScene(0)->sampleCount(),
+                  many.sensorScene(5)->sampleCount());
+        const auto now = static_cast<std::int64_t>(revision) * second;
+        poses(one, now, 0);
+        poses(many, now, 0);
+        EXPECT_EQ(0u, allocations([&] { EXPECT_EQ(0u, many.tick(now)); }));
+        one.setDemand(0, true);
+        many.setDemand(0, true);
+        const auto one_scan = allocations([&] { one.tick(now); });
+        const auto many_scan = allocations([&] { many.tick(now); });
+        EXPECT_GT(one_scan, 0u); // preparation happens when the scan needs it
+        EXPECT_EQ(one_scan, many_scan);
+        EXPECT_EQ(0u, allocations([&] {
+                    one.tick(now + second / 10);
+                    many.tick(now + second / 10);
+                  }));
+        EXPECT_EQ(2 * revision, one_sink.points[0]);
+        EXPECT_EQ(one_sink.points[0], many_sink.points[0]);
+        for (std::size_t i = 1; i < 6; ++i)
+          EXPECT_EQ(0u, many_sink.points[i]);
+        one.setDemand(0, false);
+        many.setDemand(0, false);
+      }
+    }
+}

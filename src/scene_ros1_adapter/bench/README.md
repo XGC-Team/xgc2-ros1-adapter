@@ -44,7 +44,9 @@ guarantee for arbitrary body motion, and is recorded in the package report.
 The arguments are repetitions and scan threads; both default to one. A scan
 thread count of zero selects the original hardware-based default for both
 paths. The single-thread command above follows the foreman's emergency load
-limits. Further parallel or repeated evidence collection is deferred to CI.
+limits. Further parallel evidence collection is deferred to CI.
+The authorized revision comparison uses `bench_lidar_fleet 5 1`: five
+repetitions in one single-thread process, with old/engine order alternating.
 Each repetition alternates the order of the old and engine paths. Output is
 CSV with column descriptions. Wall mean is measured around `tick`; process CPU
 time includes all workers. Last-delivery p50/p99/max measure the interval from
@@ -57,6 +59,10 @@ and joined before the next path is constructed.
 After each fleet run, 40 revisions move five obstacles by 0.05 m each. The old
 policy-map installation and the engine's flat policy cache both use Math's
 incremental scene constructor and install into the same number of sensors.
-Revision timings include installation and engine buffer preparation. Host load
+Revision timings include installation; engine sensor preparation happens
+lazily on its next demanded scan. Individual `revision_sample` rows allow
+pooling all 200 samples per path/mode/fleet size to report median and p99. The
+acceptance is engine median wall time less than or equal to the old median in
+each of the four cases, without a tolerance or discarded samples. Host load
 averages are printed before and after each repetition. On a shared host, retain
 all repetitions and report medians and their load context.

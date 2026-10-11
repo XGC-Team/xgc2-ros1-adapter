@@ -332,17 +332,24 @@ void revisions(Fleet &fleet, const std::vector<Obstacle> &initial, int run,
                const char *path, const char *mode, std::size_t n) {
   std::vector<Obstacle> moved = initial;
   std::vector<double> wall, cpu;
+  std::vector<std::size_t> allocations;
   wall.reserve(40);
   cpu.reserve(40);
+  allocations.reserve(40);
   for (std::uint64_t revision = 2; revision < 42; ++revision) {
     for (std::size_t i = 0; i < 5; ++i)
       moved[i].position.x() += 0.05;
+    allocation_counter::start();
     const auto start = Clock::now();
     const auto cpu_start = cpuMs();
     fleet.setScene(moved, revision);
     cpu.push_back(cpuMs() - cpu_start);
     wall.push_back(elapsed(start));
+    allocations.push_back(allocation_counter::stop());
   }
+  for (std::size_t i = 0; i < wall.size(); ++i)
+    std::printf("revision_sample,%d,%s,%s,%zu,%zu,%.6f,%.6f,%zu\n", run, path,
+                mode, n, i + 2, wall[i], cpu[i], allocations[i]);
   std::printf("revision,%d,%s,%s,%zu,40,%.6f,%.6f,%.6f,%.6f\n", run, path, mode,
               n, std::accumulate(wall.begin(), wall.end(), 0.0) / 40,
               std::accumulate(cpu.begin(), cpu.end(), 0.0) / 40,
@@ -413,6 +420,8 @@ int main(int argc, char **argv) {
     std::puts("revision columns: "
               "kind,run,path,mode,sensors,revisions,wall_mean_ms,cpu_mean_ms,"
               "wall_p50_ms,wall_p99_ms");
+    std::puts("revision_sample columns: "
+              "kind,run,path,mode,sensors,revision,wall_ms,cpu_ms,allocations");
     for (int run = 0; run < repeats; ++run) {
       load("start", run);
       for (const bool raycast : {false, true})

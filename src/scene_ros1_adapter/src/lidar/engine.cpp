@@ -42,15 +42,16 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
     : manifest_(std::move(manifest)), sink_(sink), options_(options),
       scenes_(policiesOf(manifest_)), lidars_(manifest_.robots.size()),
       policies_(lidars_.size()), body_point_bounds_(lidars_.size()),
-      points_(lidars_.size()), beams_(lidars_.size()),
-      beam_scans_(lidars_.size()), others_(lidars_.size()),
-      next_due_(lidars_.size(), -1), schedule_epoch_(lidars_.size()),
-      stamps_(lidars_.size()), schedule_index_(lidars_.size()),
-      periods_(lidars_.size()), sensor_enabled_(lidars_.size(), 1),
-      demand_(lidars_.size()), pose_valid_(lidars_.size()),
-      with_bodies_(lidars_.size()), poses_(lidars_.size()),
-      active_(lidars_.size()), body_poses_(manifest_.bodies.size()),
-      body_stamps_(body_poses_.size()), body_valid_(body_poses_.size()),
+      prepared_generation_(lidars_.size()), points_(lidars_.size()),
+      beams_(lidars_.size()), beam_scans_(lidars_.size()),
+      others_(lidars_.size()), next_due_(lidars_.size(), -1),
+      schedule_epoch_(lidars_.size()), stamps_(lidars_.size()),
+      schedule_index_(lidars_.size()), periods_(lidars_.size()),
+      sensor_enabled_(lidars_.size(), 1), demand_(lidars_.size()),
+      pose_valid_(lidars_.size()), with_bodies_(lidars_.size()),
+      poses_(lidars_.size()), active_(lidars_.size()),
+      body_poses_(manifest_.bodies.size()), body_stamps_(body_poses_.size()),
+      body_valid_(body_poses_.size()),
       pool_(threadsFor(lidars_.size(), options.worker_threads)) {
   if (!std::isfinite(options.pose_timeout) || options.pose_timeout <= 0.0)
     throw std::invalid_argument(
@@ -111,6 +112,8 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
   if (!invalidateScene(revision))
     return false;
   scenes_.setScene(obstacles, revision);
+  ++preparation_generation_;
+  pending_sensors_ = lidars_.size();
   if (manifest_.reference) {
     const auto &reference = scenes_.scene(
         scenes_.policyIndex({manifest_.reference->surface_spacing, false}));
@@ -118,16 +121,6 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
     for (std::size_t i = 0; i < reference->sampleCount(); ++i)
       packPoint(reference->samples()[i], reference_bytes_.data() + 12 * i);
     reference_dirty_ = true;
-  }
-  for (std::size_t i = 0; i < lidars_.size(); ++i) {
-    const auto &scene = scenes_.scene(policies_[i]);
-    lidars_[i]->setScene(scene);
-    const auto bound = lidars_[i]->config().mode == SensorConfig::kPenetrating
-                           ? scene->sampleCount() + body_point_bounds_[i]
-                           : lidars_[i]->beamCount();
-    points_[i].reserve(12 * bound);
-    if (manifest_.robots[i].publish_beams)
-      beams_[i].reserve(32 * lidars_[i]->beamCount());
   }
   return true;
 }
@@ -138,16 +131,14 @@ bool Engine::invalidateScene(std::uint64_t revision) {
   reference_dirty_ = false;
   reference_clear_pending_ = bool(manifest_.reference);
   reference_bytes_.clear();
-  for (auto &data : points_)
-    data.clear();
-  for (auto &data : beams_)
-    data.clear();
+  // Sink views expire with their callbacks and unready truth suppresses scans.
+  // The next scan overwrites reused outputs; walking their headers is needless.
   return true;
 }
 
 const std::shared_ptr<const LidarScene> &
 Engine::sensorScene(std::size_t sensor) const {
-  return lidars_.at(sensor)->scene();
+  return scenes_.scene(policies_.at(sensor));
 }
 const std::shared_ptr<const BeamPattern> &
 Engine::beamPattern(std::size_t sensor) const {
@@ -211,6 +202,25 @@ void Engine::advance(std::size_t sensor, std::int64_t now) {
                           : static_cast<std::int64_t>(next);
 }
 
+void Engine::prepareSensors(std::size_t count) {
+  for (std::size_t job = 0; job < count; ++job) {
+    const auto sensor = active_[job];
+    if (prepared_generation_[sensor] == preparation_generation_)
+      continue;
+    const auto &scene = scenes_.scene(policies_[sensor]);
+    lidars_[sensor]->setScene(scene);
+    const auto bound =
+        lidars_[sensor]->config().mode == SensorConfig::kPenetrating
+            ? scene->sampleCount() + body_point_bounds_[sensor]
+            : lidars_[sensor]->beamCount();
+    points_[sensor].reserve(12 * bound);
+    if (manifest_.robots[sensor].publish_beams)
+      beams_[sensor].reserve(32 * lidars_[sensor]->beamCount());
+    prepared_generation_[sensor] = preparation_generation_;
+    --pending_sensors_;
+  }
+}
+
 std::size_t Engine::tick(std::int64_t now) {
   if (last_tick_ >= 0 && now < last_tick_)
     std::fill(next_due_.begin(), next_due_.end(), -1);
@@ -247,6 +257,8 @@ std::size_t Engine::tick(std::int64_t now) {
     active_[count++] = i;
     advance(i, now);
   }
+  if (pending_sensors_ != 0)
+    prepareSensors(count);
   pool_.run(count, this, [](void *context, std::size_t job) {
     auto &engine = *static_cast<Engine *>(context);
     engine.scan(engine.active_[job]);

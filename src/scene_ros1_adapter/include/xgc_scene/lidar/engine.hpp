@@ -63,6 +63,8 @@ public:
   const FleetManifest &manifest() const { return manifest_; }
   std::size_t threads() const { return pool_.threads(); }
   bool sceneReady() const { return scenes_.ready(); }
+  // Compiles shared geometry immediately. Sensor scratch and output buffers
+  // are prepared only when that sensor next has a due, demanded scan.
   bool setScene(const std::vector<xgc2_math::scene::Obstacle> &obstacles,
                 std::uint64_t revision);
   // Waiting for truth or a refused/removed source invalidates observations.
@@ -88,6 +90,7 @@ public:
   std::size_t tick(std::int64_t sim_now_ns);
 
 private:
+  void prepareSensors(std::size_t count);
   void scan(std::size_t sensor);
   void advance(std::size_t sensor, std::int64_t now);
   bool fresh(std::int64_t stamp, std::int64_t now) const;
@@ -101,6 +104,9 @@ private:
   // optional permits in-place construction with heterogeneous configurations.
   std::vector<std::optional<xgc2_math::scene::WorldLidar>> lidars_;
   std::vector<std::size_t> policies_, body_point_bounds_;
+  std::vector<std::uint64_t> prepared_generation_;
+  std::uint64_t preparation_generation_ = 0;
+  std::size_t pending_sensors_ = 0;
   std::vector<std::vector<std::uint8_t>> points_, beams_;
   // Math updates four vector end pointers for every beam. Adjacent sensors
   // must not write those headers on the same cache line from different workers.
