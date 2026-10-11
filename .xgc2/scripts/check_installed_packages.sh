@@ -250,11 +250,19 @@ assert document['apiVersion'] == 'xgc.execution.process/v1'
 assert set(definition) <= {'id', 'version', 'label', 'description', 'parameters', 'setupFiles', 'command', 'services', 'readiness', 'stop', 'logs'}
 assert definition['id'] == 'xgc2-ros1-scene-adapter'
 assert definition['command']['executable'] == executable
-assert definition['services'] == [{'service': 'xgc2.scene.authoring', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'socketPath'}]
+assert definition['services'] == [
+    {'service': 'xgc2.scene.authoring', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'socketPath'},
+    {'service': 'xgc2.sensor.lidar', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'lidarSocketPath'},
+]
 assert set(definition['parameters']) <= {'properties', 'required', 'groups'}
 for parameter in definition['parameters']['properties'].values():
-    assert set(parameter) <= {'type', 'default', 'enum', 'minimum', 'maximum', 'sensitive', 'output', 'fixedOnly'}
+    assert set(parameter) <= {'type', 'description', 'default', 'enum', 'minimum', 'maximum', 'sensitive', 'output', 'fixedOnly'}
 assert definition['parameters']['properties']['socketPath'] == {'type': 'string', 'fixedOnly': True}
+assert definition['parameters']['properties']['lidarSocketPath'] == {'type': 'string', 'fixedOnly': True}
+# The frozen session facts arrive on standard input (the lidar fleet follows the roster).
+assert definition['command']['stdinParameter'] == 'sessionJson'
+assert definition['parameters']['properties']['sessionJson']['type'] == 'string'
+assert '--session-stdin' in definition['command']['args']
 assert definition['parameters']['properties']['profile']['enum'] == ['gazebo', 'xsim', 'physical']
 assert definition['readiness'] == {'kind': 'describe', 'startGraceMs': 15000, 'timeoutMs': 30000}
 assert definition['stop'] == {'graceMs': 5000}
