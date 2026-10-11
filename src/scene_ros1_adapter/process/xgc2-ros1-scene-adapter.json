@@ -5,7 +5,7 @@
       "id": "xgc2-ros1-scene-adapter",
       "version": "0.7.0",
       "label": "ROS1 Scene",
-      "description": "Scene authoring and visualization for one Run on one ROS master, with explicit Gazebo, xsim and physical profiles. Started by the Run, ended with it.",
+      "description": "Scene authoring, visualization and a CPU sampled lidar fleet built from the unchanged frozen session robot roster for one Run, with explicit Gazebo, xsim and physical profiles. Started by the Run, ended with it.",
       "parameters": {
         "properties": {
           "socketPath": {
@@ -65,10 +65,6 @@
             "type": "string",
             "fixedOnly": true
           },
-          "lidarFleetJson": {
-            "type": "string",
-            "default": ""
-          },
           "lidarEnabled": {
             "type": "boolean",
             "default": true
@@ -76,6 +72,11 @@
           "lidarDefaultsJson": {
             "type": "string",
             "default": "{}"
+          },
+          "sessionJson": {
+            "type": "string",
+            "default": "",
+            "description": "The frozen session facts of the Run as one JSON document, passed unchanged from $session by the scene workflow; empty means no fleet."
           }
         },
         "required": [
@@ -103,10 +104,11 @@
           "_profile:=${profile}",
           "_simulation_service_ref_json:=${simulationServiceRefJson}",
           "_lidar_xrpc_socket:=${lidarSocketPath}",
-          "_lidar_fleet_json:=${lidarFleetJson}",
           "_lidar_enabled:=${lidarEnabled}",
-          "_lidar_defaults_json:=${lidarDefaultsJson}"
-        ]
+          "_lidar_defaults_json:=${lidarDefaultsJson}",
+          "--session-stdin"
+        ],
+        "stdinParameter": "sessionJson"
       },
       "services": [
         {

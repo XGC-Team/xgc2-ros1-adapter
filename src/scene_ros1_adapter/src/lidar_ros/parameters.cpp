@@ -4,6 +4,8 @@
 #include <ros/node_handle.h>
 
 #include <cmath>
+#include <array>
+#include <istream>
 #include <limits>
 
 namespace xgc_scene::lidar_ros {
@@ -19,7 +21,31 @@ std::string text(const Json& values, const char* key, const char* fallback) {
 }
 }  // namespace
 
-Parameters Parameters::parse(const Json& values, const std::string& profile) {
+std::optional<lidar::SessionInput> readSessionInput(std::istream& input) {
+  std::string text;
+  std::array<char, 8192> buffer;
+  try {
+    for (;;) {
+      try { input.read(buffer.data(), buffer.size()); }
+      catch (const std::ios_base::failure&) {
+        if (!input.eof() || input.bad()) throw SceneError("read failed");
+      }
+      if (input.bad() || (input.fail() && !input.eof())) throw SceneError("read failed");
+      const auto count = static_cast<std::size_t>(input.gcount());
+      if (text.size() + count > kMaxDocumentBytes)
+        throw SceneError("frozen Experiment input exceeds 8 MiB");
+      text.append(buffer.data(), count);
+      if (input.eof()) break;
+    }
+    if (text.empty()) return std::nullopt;
+    return lidar::parseSessionInput(text);
+  } catch (const std::exception& error) {
+    throw SceneError(std::string("Session input --session-stdin: ") + error.what());
+  }
+}
+
+Parameters Parameters::parse(const Json& values, const std::string& profile,
+                             const std::optional<lidar::SessionInput>& session) {
   Parameters result;
   result.socket = text(values, "lidar_xrpc_socket", "");
   if (result.socket.empty() || result.socket.front() != '/' || result.socket.find('\0') != std::string::npos)
@@ -79,19 +105,20 @@ Parameters Parameters::parse(const Json& values, const std::string& profile) {
     if (result.options.vehicle_bodies && !(result.options.vehicle_body_radius > 0))
       throw SceneError("vehicle_body_radius must be > 0");
   } catch (const std::exception& e) { error("lidar_defaults_json", e.what()); }
-  const auto manifest = text(values, "lidar_fleet_json", "");
-  if (!manifest.empty()) {
-    try { result.manifest = lidar::parseManifest(manifest, defaults); }
-    catch (const std::exception& e) { error("lidar_fleet_json", e.what()); }
+  if (profile == "gazebo" && session) {
+    try { result.manifest = lidar::buildFleet(*session, defaults); }
+    catch (const std::exception& e) {
+      throw SceneError(std::string("Session input --session-stdin: ") + e.what());
+    }
   }
-  result.have_fleet = profile == "gazebo" && !manifest.empty();
-  if (!result.have_fleet) result.manifest = {};
+  result.have_fleet = !result.manifest.robots.empty() || bool(result.manifest.reference);
   return result;
 }
 
-Parameters Parameters::read(ros::NodeHandle& private_node, const std::string& profile) {
+Parameters Parameters::read(ros::NodeHandle& private_node, const std::string& profile,
+                            const std::optional<lidar::SessionInput>& session) {
   Json values = Json::object();
-  for (const auto* key : {"lidar_xrpc_socket", "lidar_fleet_json", "lidar_defaults_json"}) {
+  for (const auto* key : {"lidar_xrpc_socket", "lidar_defaults_json"}) {
     std::string value;
     if (private_node.getParam(key, value)) values[key] = value;
     else if (private_node.hasParam(key)) error(key, "must be a string");
@@ -99,7 +126,7 @@ Parameters Parameters::read(ros::NodeHandle& private_node, const std::string& pr
   bool enabled;
   if (private_node.getParam("lidar_enabled", enabled)) values["lidar_enabled"] = enabled;
   else if (private_node.hasParam("lidar_enabled")) error("lidar_enabled", "must be a boolean");
-  return parse(values, profile);
+  return parse(values, profile, session);
 }
 
 Json Parameters::facts(const std::string& profile) const {

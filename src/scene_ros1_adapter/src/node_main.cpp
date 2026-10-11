@@ -91,6 +91,8 @@ int main(int argc, char** argv) {
   adapter::ServerOptions options;
   ros::M_string remappings;
   std::string hostname, profile = "gazebo";
+  bool session_stdin = false;
+  std::optional<xgc_scene::lidar::SessionInput> session;
   try {
     // Core supplies the same Run/master flags as the other adapters. ROS
     // private parameter and namespace remappings remain native ROS arguments.
@@ -99,7 +101,7 @@ int main(int argc, char** argv) {
       const std::string argument = argv[i];
       if (argument == "--help") {
         std::cout << "usage: xgc2_scene_adapter --socket-path PATH --target-id ID --run-id ID "
-                     "--node-name NAME --ros-master-uri URI [--ros-ip IP] [--ros-hostname HOST] "
+                     "--node-name NAME --ros-master-uri URI [--ros-ip IP] [--ros-hostname HOST] [--session-stdin] "
                      "_scene_file:=PATH _lidar_xrpc_socket:=PATH _profile:=gazebo|xsim|physical [ROS private parameters]\n";
         return adapter::kExitOk;
       }
@@ -108,6 +110,9 @@ int main(int argc, char** argv) {
         const auto key = argument.substr(0, separator), value = argument.substr(separator + 2);
         if (!remappings.emplace(key, value).second) throw std::invalid_argument("duplicate ROS remapping");
         if (key == "_profile") profile = value;
+      } else if (argument == "--session-stdin") {
+        if (session_stdin) throw std::invalid_argument("--session-stdin was specified twice");
+        session_stdin = true;
       } else if (argument == "--ros-hostname") {
         if (++i == argc) throw std::invalid_argument("--ros-hostname requires a value");
         hostname = argv[i];
@@ -119,6 +124,7 @@ int main(int argc, char** argv) {
     options = adapter::ParseServerOptions(static_cast<int>(native.size()), native.data(), {"xgc2-scene-adapter"});
     if (profile != "gazebo" && profile != "xsim" && profile != "physical")
       throw xgc_scene::SceneError("Scene profile must be gazebo, xsim or physical");
+    if (session_stdin) session = xgc_scene::lidar_ros::readSessionInput(std::cin);
   } catch (const std::exception& error) {
     std::cerr << "scene adapter: " << error.what() << '\n';
     return adapter::kExitUsage;
@@ -161,7 +167,7 @@ int main(int argc, char** argv) {
       binding.Connect();
       ros::NodeHandle private_node("~");
       private_node.param<std::string>("profile", profile, profile);
-      lidar_parameters = xgc_scene::lidar_ros::Parameters::read(private_node, profile);
+      lidar_parameters = xgc_scene::lidar_ros::Parameters::read(private_node, profile, session);
       if (lidar_parameters.socket == options.socket_path)
         throw xgc_scene::SceneError("Lidar parameter ~lidar_xrpc_socket must differ from ~xrpc_socket");
       if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply lidar parameters");
