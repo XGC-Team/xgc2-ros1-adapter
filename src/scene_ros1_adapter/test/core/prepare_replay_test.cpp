@@ -111,8 +111,9 @@ ProcessResult cli(const fs::path& capture, const std::vector<std::string>& argum
 
 std::vector<std::string> scenarios() {
   std::vector<std::string> result;
-  for (const auto& file : fs::directory_iterator(fs::path(XGC_SCENE_GOLDEN_DIR) / "corpus" / "prepare"))
-    if (file.path().extension() == ".json") result.push_back(file.path().stem().string());
+  for (const auto* origin : {"corpus", "authored"})
+    for (const auto& file : fs::directory_iterator(fs::path(XGC_SCENE_GOLDEN_DIR) / origin / "prepare"))
+      if (file.path().extension() == ".json") result.push_back(file.path().stem().string());
   std::sort(result.begin(), result.end());
   return result;
 }
@@ -123,7 +124,39 @@ struct Fixture {
   Json scenario;
   std::map<std::string, std::string> bindings;
   explicit Fixture(const std::string& name, bool use_cli = false) {
-    scenario = parseJson(bytes(fs::path(XGC_SCENE_GOLDEN_DIR) / "corpus" / "prepare" / (name + ".json")));
+    auto path = fs::path(XGC_SCENE_GOLDEN_DIR) / "corpus" / "prepare" / (name + ".json");
+    const bool recorded = fs::exists(path);
+    if (!recorded) path = fs::path(XGC_SCENE_GOLDEN_DIR) / "authored" / "prepare" / (name + ".json");
+    scenario = parseJson(bytes(path));
+    if (recorded) {
+      // Apply only the preparation divergence documented in scene_golden/README.md.
+      const std::string world = "$work/run/prepared-world.world";
+      Json prepared = nullptr;
+      for (auto& step : scenario.at("steps")) {
+        if (step.at("operation") == "gazebo.prepare") {
+          const auto authored = step.at("request").value("parameters", Json::object());
+          if (authored.contains("chassis_robot_ids")) {
+            step["response"] = Json{{"error", {{"type", "SceneError"},
+                {"message", "scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic"}}}};
+          } else if (step.at("response").contains("value")) {
+            auto& parameters = step.at("response").at("value").at("parameters");
+            parameters.erase("chassis_robot_ids");
+            prepared = step.at("effects").at("files").at(world);
+            if (!authored.contains("required_components")) {
+              parameters["required_components"] = Json::array({"vrpn"});
+              auto contents = prepared.at("contents").get<std::string>();
+              replace(contents, "<clock_rate_hz>", "<required_component>vrpn</required_component><clock_rate_hz>");
+              prepared["contents"] = contents;
+            }
+          }
+        }
+        auto& files = step.at("effects").at("files");
+        if (files.contains(world)) {
+          if (prepared.is_null()) files.erase(world);
+          else files[world] = prepared;
+        }
+      }
+    }
     fs::create_directories(work); fs::create_directories(fixtures);
     bindings = {{"$work", work.string()}, {"$fixtures", fixtures.string()}};
     if (use_cli) bindings["$work/asset"] = (work / "Shared" / "Scenes" / "Fixture").string();
@@ -239,8 +272,9 @@ TEST_P(PrepareReplay, CliSelectionAndMaterialization) {
     const auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
     const bool document = manifest.at("simulators").at("gazebo").at("geometry") == "document";
     const bool random = manifest.value("obstacleInput", Json::object()).value("mode", Json()) == "random";
-    Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}, {"parameters", request.value("parameters", Json::object())}}},
+    Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}}},
                  {"experimentResourceId", "experiment1"}, {"openingRunId", "run1"}};
+    if (request.contains("parameters")) context["scene"]["parameters"] = request.at("parameters");
     std::vector<std::string> arguments{"--context-json", context.dump(), "--resource-root", fixture.work.string(),
                                        "--workspace-root", fixture.workspace().string(), "--socket-path", request.at("socket_path").get<std::string>(),
                                        "--target-id", request.at("target_id").get<std::string>(), "--configuration-revision", dumpJson(request.at("configuration_revision"))};
@@ -320,7 +354,8 @@ TEST(Prepare, WorldXmlMatchesElementTreeTextAttributesAndEmptyElements) {
   const std::string expected = "<?xml version='1.0' encoding='utf-8'?>\n<sdf version=\"1.6\">\n<world name=\"a&amp;b\"> text<model a=\"x&#09;y &amp;&quot;\" z=\"last\">&lt;&amp;&gt;<link /></model> tail\n"
       "<plugin name=\"xgc2_simulation\" filename=\"libxgc2_simulation_world.so\"><socket_path>" + (fixture.work / "run/world.sock").string() +
       "</socket_path><target_id>fixture</target_id><resource_root>" + fixture.work.string() +
-      "</resource_root><configuration_revision>4</configuration_revision><clock_rate_hz>0</clock_rate_hz></plugin></world></sdf>";
+      "</resource_root><configuration_revision>4</configuration_revision><required_component>vrpn</required_component>"
+      "<clock_rate_hz>0</clock_rate_hz></plugin></world></sdf>";
   EXPECT_EQ(bytes(receipt.at("worldFile").get<std::string>()), expected);
   EXPECT_EQ(receipt.at("preparedWorldSha256"), digest(expected));
 }
@@ -376,6 +411,23 @@ TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
     const auto message = raw.size() > 65536 ? "Scene context exceeds 64 KiB" : raw.find("NaN") != std::string::npos ? "Nonfinite JSON" : "Duplicate scene field scene";
     EXPECT_EQ(failed.err, std::string("scene_prepare: ") + message + "\n");
   }
+}
+
+TEST(Prepare, LegacyChassisParameterIsRejectedForXsimSelection) {
+  Fixture fixture("document-and-media", true);
+  auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
+  manifest["simulators"]["xsim"] = Json{{"geometry", "document"}};
+  write(fixture.asset() / "manifest.json", manifest.dump());
+  Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "xsim"}, {"parameters", {{"chassis_robot_ids", Json::array()}}}}},
+               {"experimentResourceId", "experiment1"}};
+  const std::string message = "scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic";
+  try { inputs(context, fixture.work, fixture.workspace()); FAIL() << "Legacy scene parameter was accepted"; }
+  catch (const SceneError& error) { EXPECT_EQ(error.what(), message); }
+  const auto result = cli(fixture.temporary.root, {"--context-json", context.dump(), "--prepare-world",
+                          "--resource-root", fixture.work.string(), "--workspace-root", fixture.workspace().string()});
+  EXPECT_EQ(result.code, 1); EXPECT_TRUE(result.out.empty());
+  EXPECT_EQ(result.err, "scene_prepare: " + message + "\n");
+  EXPECT_TRUE(fs::is_empty(fixture.workspace()));
 }
 
 TEST(Prepare, RandomArtifactsAreStagedAndExistingResultsAreReused) {

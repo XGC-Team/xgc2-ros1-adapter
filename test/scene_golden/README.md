@@ -29,6 +29,36 @@ is compact UTF-8 JSON, sorted by object key, with stable list order, finite JSON
 numbers and one terminal newline. The recorder enforces a total below
 3,000,000 bytes. It does not write bytecode into either source checkout.
 
+## Intentional preparation divergence
+
+The coordinator decision of 2026-10-11 intentionally changes preparation from
+the pinned Python behavior. Files under `corpus/`, including their inputs,
+outputs and coverage matrix, remain the actual Python recordings. `record.py`
+records and compares only `corpus/`; `--check` still verifies those recordings
+without applying the divergence or claiming that Python implements it.
+
+For recorded preparation scenarios, the C++ replay harness applies one explicit
+expectation rule, leaving requests unchanged:
+
+- A request containing `chassis_robot_ids` expects `SceneError` with the message
+  `scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic`.
+  It produces no prepared world. Later failed requests retain the last successfully
+  prepared world, or its absence. In `explicit-rosters`, the first request now fails,
+  so its recorded prepared world is absent throughout the scenario.
+- A successful request omitting `required_components` expects `["vrpn"]` in the
+  receipt and one `<required_component>vrpn</required_component>` immediately before
+  `<clock_rate_hz>` in the native plugin. Explicit lists remain unchanged. Successful
+  receipts omit `parameters.chassis_robot_ids`. The existing `$preparedSha256`
+  binding hashes the adjusted expected bytes after path substitution.
+
+`authored/prepare/` contains four hand-written scenarios in the same JSON format:
+`default-vrpn`, `empty-components`, `other-component` and `legacy-chassis-parameter`.
+Their provenance explicitly identifies the coordinator decision, not a Python
+test recording. They reuse the native-geometry asset fixture and replay literal
+expectations without adjustment through both the library and the real CLI.
+The legacy scenario also covers empty/null values and precedence over an unknown
+key. Full receipts, file bytes, file modes and exact CLI error lines are checked.
+
 ## Replay format
 
 Each `corpus/<category>/<scenario>.json` is independently replayable. Its
