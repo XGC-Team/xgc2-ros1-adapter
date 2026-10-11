@@ -45,8 +45,57 @@ endif()
 # ---- ROS-bound parts: they need catkin and build only inside a catkin workspace; plain CMake builds skip them ----
 if(catkin_FOUND)
   # --- service and process (package sa-service) ---
+  find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS http)
+  find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS json_http)
+  file(GLOB SERVICE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/service/*.cpp)
+  add_library(xgc_scene_service STATIC ${SERVICE_SOURCES})
+  target_link_libraries(xgc_scene_service PUBLIC xgc_scene_core XgcXrpc::http XgcXrpc::json_http Threads::Threads)
+
+  # Tests below are ordinary gtests. Generated ROS messages need catkin at
+  # build time, but neither the service nor the fake outputs need a master.
+  include(CTest)
+  if(BUILD_TESTING)
+    find_package(GTest REQUIRED)
+    set(XGC_SCENE_GOLDEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../test/scene_golden" CACHE PATH "golden corpus directory")
+    file(GLOB SERVICE_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/service/*_test.cpp)
+    foreach(test_source ${SERVICE_TESTS})
+      get_filename_component(test_name ${test_source} NAME_WE)
+      add_executable(${test_name} ${test_source})
+      target_link_libraries(${test_name} PRIVATE xgc_scene_service GTest::gtest_main)
+      target_compile_definitions(${test_name} PRIVATE XGC_SCENE_GOLDEN_DIR="${XGC_SCENE_GOLDEN_DIR}")
+      add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+  endif()
 
   # --- ROS outputs and the simulation client (package sa-ros) ---
+  find_package(catkin REQUIRED COMPONENTS roscpp tf2_ros geometry_msgs visualization_msgs std_msgs
+                                         xgc2_geometry_msgs xgc_ros1_adapter_common)
+  file(GLOB SIM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/sim/*.cpp)
+  add_library(xgc_scene_sim STATIC ${SIM_SOURCES})
+  target_link_libraries(xgc_scene_sim PUBLIC xgc_scene_core XgcXrpc::http XgcXrpc::json_http)
+  file(GLOB ROS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/ros/*.cpp)
+  add_library(xgc_scene_ros STATIC ${ROS_SOURCES})
+  target_include_directories(xgc_scene_ros PUBLIC ${catkin_INCLUDE_DIRS})
+  target_link_libraries(xgc_scene_ros PUBLIC xgc_scene_core xgc_scene_sim ${catkin_LIBRARIES})
+  add_dependencies(xgc_scene_ros ${catkin_EXPORTED_TARGETS})
+  add_executable(xgc2_scene_adapter src/node_main.cpp)
+  target_link_libraries(xgc2_scene_adapter PRIVATE xgc_scene_service xgc_scene_ros)
+  install(TARGETS xgc2_scene_adapter RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+  if(BUILD_TESTING)
+    file(GLOB ROS_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/ros/*_test.cpp)
+    file(GLOB SIM_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/sim/*_test.cpp)
+    foreach(test_source ${ROS_TESTS} ${SIM_TESTS})
+      get_filename_component(test_name ${test_source} NAME_WE)
+      add_executable(${test_name} ${test_source})
+      if(test_source IN_LIST ROS_TESTS)
+        target_link_libraries(${test_name} PRIVATE xgc_scene_ros xgc_scene_service GTest::gtest_main)
+      else()
+        target_link_libraries(${test_name} PRIVATE xgc_scene_sim GTest::gtest_main)
+      endif()
+      add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+  endif()
 
 endif()
 
