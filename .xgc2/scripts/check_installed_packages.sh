@@ -13,13 +13,15 @@ UGV_PACKAGE="ros-${ROS_DISTRO}-xgc2-ugv-adapter"
 UGV_ROS_PACKAGE="xgc_ugv_ros1_adapter"
 TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
 TOOLS_ROS_PACKAGE="xgc_ros1_tools_adapter"
+SCENE_PACKAGE="ros-${ROS_DISTRO}-xgc2-scene-adapter"
+SCENE_ROS_PACKAGE="xgc_scene_ros1_adapter"
 EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-$(
   awk -F': *' '/^version:[[:space:]]*/ {print $2; exit}' \
     "${REPO_ROOT}/.xgc2/product.yml"
 )}"
 PROTOBUF_REGISTRY="/usr/share/xgc2-protobuf/registry/registry.json"
 
-for package in "${COMMON_PACKAGE}" "${PX4_PACKAGE}" "${UGV_PACKAGE}" "${TOOLS_PACKAGE}"; do
+for package in "${COMMON_PACKAGE}" "${PX4_PACKAGE}" "${UGV_PACKAGE}" "${TOOLS_PACKAGE}" "${SCENE_PACKAGE}"; do
   dpkg -s "${package}" >/dev/null
   test "$(dpkg-query -W -f='${Version}' "${package}")" = "${EXPECTED_PRODUCT_VERSION}"
 done
@@ -202,3 +204,59 @@ assert definition['readiness']['kind'] == 'describe'
 assert definition['stop'] == {'graceMs': 5000}
 PYTOOLS
 echo "Installed Tools package checks passed"
+
+scene_depends="$(dpkg-query -W -f='${Depends}' "${SCENE_PACKAGE}")"
+grep -Fq 'libxgc2-xrpc2 (>= 0.2.0-1~focal)' <<<"${scene_depends}"
+grep -Fq 'libxgc2-math-dev (>= 0.6.0-1~focal)' <<<"${scene_depends}"
+for dependency in python3 roscpp tf2-ros geometry-msgs visualization-msgs std-msgs xgc2-geometry-msgs; do
+  if [[ "${dependency}" == "python3" ]]; then
+    grep -Eq '(^|, )python3( |[(,]|$)' <<<"${scene_depends}"
+  else
+    grep -Fq "ros-${ROS_DISTRO}-${dependency}" <<<"${scene_depends}"
+  fi
+done
+if grep -Eq 'xgc2-protobuf-dev|libxgc2-xrpc-(grpc-)?dev' <<<"${scene_depends}"; then
+  echo "scene adapter package depends on a build-only XRPC or protobuf package" >&2
+  exit 1
+fi
+rospack find "${SCENE_ROS_PACKAGE}" >/dev/null
+test -f "${PREFIX}/share/${SCENE_ROS_PACKAGE}/package.xml"
+for name in xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare; do
+  path="${PREFIX}/lib/${SCENE_ROS_PACKAGE}/${name}"
+  test -x "${path}"
+  dpkg-query -S "${path}" | grep -Fq "${SCENE_PACKAGE}:"
+  libraries="$(ldd "${path}")"
+  if grep -q 'not found' <<<"${libraries}"; then
+    echo "${path} has unresolved libraries" >&2
+    exit 1
+  fi
+  if [[ "${name}" == "xgc2_scene_adapter" ]]; then
+    grep -q 'libxgc2_xrpc' <<<"${libraries}"
+  fi
+done
+"${PREFIX}/lib/${SCENE_ROS_PACKAGE}/xgc2-scene-prepare" --help >/dev/null
+scene_definition="/usr/share/xgc2/process-definitions/xgc2-ros1-scene-adapter.json"
+dpkg-query -S "${scene_definition}" | grep -Fq "${SCENE_PACKAGE}:"
+cmp "${scene_definition}" "${REPO_ROOT}/src/scene_ros1_adapter/process/xgc2-ros1-scene-adapter.json"
+python3 - "${scene_definition}" "${PREFIX}/lib/${SCENE_ROS_PACKAGE}/xgc2_scene_adapter" <<'PYSCENE'
+import json
+import sys
+
+path, executable = sys.argv[1:]
+with open(path) as source:
+    document = json.load(source)
+assert document['apiVersion'] == 'xgc.execution.process/v1'
+(definition,) = document['definitions']
+assert set(definition) <= {'id', 'version', 'label', 'description', 'parameters', 'setupFiles', 'command', 'services', 'readiness', 'stop', 'logs'}
+assert definition['id'] == 'xgc2-ros1-scene-adapter'
+assert definition['command']['executable'] == executable
+assert definition['services'] == [{'service': 'xgc2.scene.authoring', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'socketPath'}]
+assert set(definition['parameters']) <= {'properties', 'required', 'groups'}
+for parameter in definition['parameters']['properties'].values():
+    assert set(parameter) <= {'type', 'default', 'enum', 'minimum', 'maximum', 'sensitive', 'output', 'fixedOnly'}
+assert definition['parameters']['properties']['socketPath'] == {'type': 'string', 'fixedOnly': True}
+assert definition['parameters']['properties']['profile']['enum'] == ['gazebo', 'xsim', 'physical']
+assert definition['readiness'] == {'kind': 'describe', 'startGraceMs': 15000, 'timeoutMs': 30000}
+assert definition['stop'] == {'graceMs': 5000}
+PYSCENE
+echo "Installed Scene package checks passed"

@@ -10,11 +10,12 @@ DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
 COPY_OUTPUT="${COPY_OUTPUT:-true}"
-BUILD_JOBS="${BUILD_JOBS:-}"
+BUILD_JOBS="${BUILD_JOBS:-2}"
 EXPECTED_PROTOBUF_PRODUCT_VERSION="0.7.0-1"
 EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
 XGC2_XRPC_DEB_VERSION="0.2.0-1~focal"
+XGC2_MATH_DEB_VERSION="0.6.0-1~focal"
 XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
@@ -106,7 +107,8 @@ if [[ "${COPY_OUTPUT}" == "true" ]]; then
     "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-adapter-common_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-px4-multirotor-adapter_"*.deb \
     "${OUTPUT_DIR}/ros-noetic-xgc2-ugv-adapter_"*.deb \
-    "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-tools-adapter_"*.deb
+    "${OUTPUT_DIR}/ros-noetic-xgc2-ros1-tools-adapter_"*.deb \
+    "${OUTPUT_DIR}/ros-noetic-xgc2-scene-adapter_"*.deb
 fi
 
 docker_network_args=()
@@ -131,6 +133,7 @@ docker_env_args=(
   -e "INSTALL_CHECK=${INSTALL_CHECK}"
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_XRPC_DEB_VERSION=${XGC2_XRPC_DEB_VERSION}"
+  -e "XGC2_MATH_DEB_VERSION=${XGC2_MATH_DEB_VERSION}"
   -e "EXPECTED_PROTOBUF_PRODUCT_VERSION=${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
 )
 
@@ -202,7 +205,8 @@ docker exec "${container_name}" bash -lc '
     missing_image_packages=()
     for package in clang-10 nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
         protobuf-compiler-grpc python3-grpcio python3-protobuf \
-        ros-noetic-ros-babel-fish libjsoncpp-dev; do
+        ros-noetic-ros-babel-fish libjsoncpp-dev libyaml-cpp-dev libssl-dev libgtest-dev \
+        ros-noetic-tf2-ros ros-noetic-visualization-msgs; do
       dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
         | grep -Fxq "install ok installed" \
         || missing_image_packages+=("${package}")
@@ -229,15 +233,20 @@ docker exec "${container_name}" bash -lc '
     planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
-      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}")"
+      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
+      "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      ros-noetic-xgc2-geometry-msgs)"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
-      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}"
+      "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
+      "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      ros-noetic-xgc2-geometry-msgs
     for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
       test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"
     done
+    test "$(dpkg-query -W -f="\${Version}" libxgc2-math-dev)" = "${XGC2_MATH_DEB_VERSION}"
     # Package selection is build metadata, not an SDK runtime setting.
     unset XGC2_XRPC_DEB_VERSION
 
@@ -257,7 +266,7 @@ docker exec "${container_name}" bash -lc '
     set +u
     source /opt/ros/noetic/setup.bash
     set -u
-    parallel_jobs="${BUILD_JOBS:-$(nproc)}"
+    parallel_jobs="${BUILD_JOBS:-2}"
     DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
       -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
       -DCMAKE_PREFIX_PATH="/opt/ros/noetic" \
@@ -268,6 +277,9 @@ docker exec "${container_name}" bash -lc '
     python3 -m unittest discover -s /tmp/ros1-adapter/src/ros1_tools_adapter/test -p "test_*.py"
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
+    cmake --build build --target xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare \
+      -- -j"${parallel_jobs}"
+    (cd build/scene_ros1_adapter && ctest --output-on-failure -j"${parallel_jobs}")
 
     /tmp/ros1-adapter/.xgc2/scripts/package_debs.sh \
       --install-root /tmp/work/install-root \
@@ -284,13 +296,15 @@ docker exec "${container_name}" bash -lc '
         /tmp/out/ros-noetic-xgc2-ros1-adapter-common_*.deb \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ugv-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb)"
+        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-scene-adapter_*.deb)"
       verify_firstparty_transaction <<<"${planned_transaction}"
       apt-get install -y --no-install-recommends \
         /tmp/out/ros-noetic-xgc2-ros1-adapter-common_*.deb \
         /tmp/out/ros-noetic-xgc2-px4-multirotor-adapter_*.deb \
         /tmp/out/ros-noetic-xgc2-ugv-adapter_*.deb \
-        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb
+        /tmp/out/ros-noetic-xgc2-ros1-tools-adapter_*.deb \
+        /tmp/out/ros-noetic-xgc2-scene-adapter_*.deb
       if ! /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh; then
         echo "Installed-package gate failed; replaying it with command tracing" >&2
         bash -x /tmp/ros1-adapter/.xgc2/scripts/check_installed_packages.sh

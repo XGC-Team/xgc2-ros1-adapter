@@ -15,6 +15,8 @@ UGV_PACKAGE="ros-${ROS_DISTRO}-xgc2-ugv-adapter"
 UGV_ROS_PACKAGE="xgc_ugv_ros1_adapter"
 TOOLS_PACKAGE="ros-${ROS_DISTRO}-xgc2-ros1-tools-adapter"
 TOOLS_ROS_PACKAGE="xgc_ros1_tools_adapter"
+SCENE_PACKAGE="ros-${ROS_DISTRO}-xgc2-scene-adapter"
+SCENE_ROS_PACKAGE="xgc_scene_ros1_adapter"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
 
 product_version() {
@@ -76,7 +78,8 @@ rm -f \
   "${OUTPUT_DIR}/${COMMON_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${PX4_PACKAGE}_"*.deb \
   "${OUTPUT_DIR}/${UGV_PACKAGE}_"*.deb \
-  "${OUTPUT_DIR}/${TOOLS_PACKAGE}_"*.deb
+  "${OUTPUT_DIR}/${TOOLS_PACKAGE}_"*.deb \
+  "${OUTPUT_DIR}/${SCENE_PACKAGE}_"*.deb
 
 mkdir -p "${BUILD_DIR}/debian"
 cat > "${BUILD_DIR}/debian/control" <<EOF
@@ -95,6 +98,9 @@ Package: ${UGV_PACKAGE}
 Architecture: any
 
 Package: ${TOOLS_PACKAGE}
+Architecture: any
+
+Package: ${SCENE_PACKAGE}
 Architecture: any
 
 EOF
@@ -286,6 +292,35 @@ package_tools() {
     "${OUTPUT_DIR}/${TOOLS_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 
+package_scene() {
+  local scene_root="${BUILD_DIR}/${SCENE_PACKAGE}"
+  local library_root="${PREFIX}/lib/${SCENE_ROS_PACKAGE}"
+  local definition="/usr/share/xgc2/process-definitions/xgc2-ros1-scene-adapter.json"
+  local name
+  local -a binaries=()
+  test -f "${PREFIX_ROOT}/share/${SCENE_ROS_PACKAGE}/package.xml"
+  test -f "${INSTALL_ROOT}${definition}"
+  copy_path "${PREFIX_ROOT}/share/${SCENE_ROS_PACKAGE}" "${scene_root}"
+  copy_path "${PREFIX_ROOT}/lib/${SCENE_ROS_PACKAGE}" "${scene_root}"
+  copy_path "${INSTALL_ROOT}${definition}" "${scene_root}"
+  for name in xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare; do
+    test -x "${scene_root}${library_root}/${name}"
+    binaries+=("${scene_root}${library_root}/${name}")
+  done
+  local scene_depends
+  scene_depends="$(binary_dependencies "${binaries[@]}")"
+  write_control "${scene_root}" "${SCENE_PACKAGE}" \
+    "${scene_depends}, libxgc2-xrpc2 (>= 0.2.0-1~focal), libxgc2-math-dev (>= 0.6.0-1~focal), python3, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-visualization-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-geometry-msgs" \
+    "XGC2 ROS1 scene authoring service and finite scene tools" \
+    "Run-owned scene authoring, visualization and simulator application over XRPC http.v1."
+  build_deb "${scene_root}" "${SCENE_PACKAGE}"
+  for name in xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare; do
+    chmod 0755 "${scene_root}${library_root}/${name}"
+  done
+  fakeroot dpkg-deb --build "${scene_root}" \
+    "${OUTPUT_DIR}/${SCENE_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
+}
+
 package_common
 
 package_type_server \
@@ -306,8 +341,10 @@ package_type_server \
   "xgc2-mecanum-ugv-ros1-adapter"
 
 package_tools
+package_scene
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${COMMON_PACKAGE}_*.deb" -o -name "${PX4_PACKAGE}_*.deb" \
-    -o -name "${UGV_PACKAGE}_*.deb" -o -name "${TOOLS_PACKAGE}_*.deb" \) \
+    -o -name "${UGV_PACKAGE}_*.deb" -o -name "${TOOLS_PACKAGE}_*.deb" \
+    -o -name "${SCENE_PACKAGE}_*.deb" \) \
   -print | sort
