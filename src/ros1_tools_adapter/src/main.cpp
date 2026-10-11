@@ -1,14 +1,13 @@
 // ROS1 Tools: typed topic publishing and service calls over XRPC http.v1.
 //
 // A Run starts this process for its ROS master and ends it with the Run. It
-// binds to that one master at start, reports readiness through GET /v1/describe
+// waits for that one master, reports readiness through GET /v1/describe
 // and exits, with a status that names the reason, when the master is replaced
 // or stays unreachable.
-#include <ros/master.h>
-#include <ros/param.h>
 #include <ros/ros.h>
 #include <xgc2/xrpc/http.hpp>
 #include <xgc2/xrpc/unix.hpp>
+#include <xgc2_ros1_robot_adapter/ros1_binding.hpp>
 #include "xgc_ros1_tools_adapter/error.hpp"
 #include "xgc_ros1_tools_adapter/tools.hpp"
 #include <atomic>
@@ -18,6 +17,7 @@
 #include <deque>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -26,6 +26,7 @@
 namespace {
 using namespace xgc2::xrpc;
 using namespace xgc_ros1_tools_adapter;
+namespace adapter = xgc2_ros1_robot_adapter;
 
 // Process exit status, shared with the ROS1 type servers.
 constexpr int kExitOk = 0;
@@ -35,8 +36,7 @@ constexpr int kExitMasterChanged = 3;
 constexpr int kExitMasterUnreachable = 4;
 constexpr int kExitRosShutdown = 5;
 
-// The master is probed once per second; unreachable for this long ends the
-// process.
+// After binding, an unreachable master ends the process after this budget.
 constexpr std::chrono::milliseconds kProbeInterval{1000};
 constexpr std::chrono::milliseconds kUnreachableAfter{5000};
 constexpr std::uint32_t kMaximumReadyWaitMs = 30000;
@@ -218,6 +218,10 @@ private:
     facts["ros_node"] = "/" + node_;
     facts["run_id"] = run_id_;
     facts["target_id"] = target_;
+    facts["state"] = stopping.load() ? "stopped" : ready ? "ready" : "starting";
+    facts["reason"] = !ready && !stopping.load()
+                          ? "waiting for ROS master binding"
+                          : "";
     reply.complete({200, {{"Content-Type", "application/json"}}, json(body)});
   }
 
@@ -318,39 +322,87 @@ private:
   std::vector<std::thread> threads_;
 };
 
-// Watches the identity of the ROS master (getPid, once per second). The first
-// answer binds the process to that master; readiness follows.
+// Waits for the master before starting ROS work, then watches its identity.
+// The socket thread remains available throughout startup.
 class MasterWatch {
 public:
-  MasterWatch(Tools &tools, Describe &describe)
-      : tools_(tools), describe_(describe), thread_([this] { run(); }) {}
+  MasterWatch(adapter::Ros1Binding &binding, const NativeContext &context,
+              Describe &describe)
+      : binding_(binding), context_(context), describe_(describe),
+        thread_([this] { run(); }) {}
   ~MasterWatch() {
     stopping.store(true);
     stop_changed.notify_all();
     if (thread_.joinable())
       thread_.join();
+    auto budget = binding_.BoundMasterCalls(std::chrono::milliseconds(3000));
+    workers_.reset();
+    tools_.reset();
+  }
+  void push(HttpRequest request, HttpReply reply) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!workers_) {
+      reply.complete(http_error(503, "not_ready", "waiting for ROS master binding"));
+      return;
+    }
+    workers_->push(std::move(request), std::move(reply));
   }
 
 private:
   void run() {
+    try {
+      adapter::MasterIdentity master;
+      for (;;) {
+        if (stopping.load())
+          return;
+        {
+          auto budget = binding_.BoundMasterCalls(std::chrono::milliseconds(3000));
+          if (binding_.ProbeMaster(&master)) {
+            binding_.Connect();
+            if (!budget->failed() && binding_.ProbeMaster(&master) &&
+                !budget->failed())
+              break;
+          }
+        }
+        std::unique_lock<std::mutex> lock(stop_mutex);
+        stop_changed.wait_for(lock, kProbeInterval, [] { return stopping.load(); });
+      }
+      if (stopping.load())
+        return;
+      ros::NodeHandle node;
+      ros::AsyncSpinner spinner(4);
+      spinner.start();
+      tools_.reset(new Tools(node, context_, master.pid));
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        workers_.reset(new Workers(*tools_));
+      }
+      describe_.ready(master.pid, master.run_id);
+      watch(master);
+    } catch (const std::exception &error) {
+      requestStop(kExitFailure, error.what());
+    }
+  }
+  void watch(adapter::MasterIdentity master) {
     bool unreachable = false;
     Clock::time_point since;
-    bool bound = false;
     while (!stopping.load() && ros::ok()) {
-      std::int64_t pid = 0;
-      const auto state = tools_.ProbeMasterBinding(&pid);
-      if (state == MasterBindingState::Changed) {
-        requestStop(kExitMasterChanged,
-                    "the ROS master was replaced (pid " + std::to_string(pid) + ")");
-        return;
+      adapter::MasterIdentity current;
+      bool answered;
+      {
+        auto budget = binding_.BoundMasterCalls(std::chrono::milliseconds(3000));
+        answered = binding_.ProbeMaster(&current) && !budget->failed();
       }
-      if (state == MasterBindingState::Bound) {
+      if (answered) {
         unreachable = false;
-        if (!bound) {
-          bound = true;
-          std::string master_run_id;
-          ros::param::get("/run_id", master_run_id);
-          describe_.ready(static_cast<long>(pid), master_run_id);
+        if (!master.sameMaster(current)) {
+          requestStop(kExitMasterChanged, "the ROS master was replaced (pid " +
+                          std::to_string(current.pid) + ")");
+          return;
+        }
+        if (master.run_id.empty() && !current.run_id.empty()) {
+          master.run_id = current.run_id;
+          describe_.ready(master.pid, master.run_id);
         }
       } else {
         if (!unreachable)
@@ -370,8 +422,12 @@ private:
     if (!stopping.load() && !ros::ok())
       requestStop(kExitRosShutdown, "ROS shut this node down");
   }
-  Tools &tools_;
+  adapter::Ros1Binding &binding_;
+  const NativeContext context_;
   Describe &describe_;
+  std::mutex mutex_;
+  std::unique_ptr<Tools> tools_;
+  std::unique_ptr<Workers> workers_;
   std::thread thread_;
 };
 
@@ -423,6 +479,8 @@ int main(int argc, char **argv) {
     config["rosHostname"] = args.at("--ros-hostname");
     const auto context = NativeContext::FromJson(json(config));
     context.ApplyEnvironment();
+    std::signal(SIGINT, signalStop);
+    std::signal(SIGTERM, signalStop);
     const auto node_name = rosNodeName(args.at("--node-name"));
     HttpLimits limits;
     limits.connections = 32;
@@ -436,19 +494,15 @@ int main(int argc, char **argv) {
     ros::M_string remappings;
     ros::init(remappings, node_name,
               ros::init_options::NoSigintHandler | ros::init_options::NoRosout);
-    // roscpp reads /use_sim_time from the master while it starts and retries
-    // until the master answers. Give up after the unreachable budget: the
-    // watch below then reports the master as unreachable and ends the process.
-    ros::master::setRetryTimeout(
-        ros::WallDuration(kUnreachableAfter.count() / 1000.0));
-    ros::NodeHandle node;
-    ros::AsyncSpinner spinner(4);
-    spinner.start();
-    Tools tools(node, context);
+    adapter::ServerOptions options;
+    options.ros_master_uri = context.ros_master_uri;
+    options.ros_ip = context.ros_ip;
+    adapter::Ros1Binding binding;
+    binding.Init(options, node_name);
     const auto instance = new_instance_id();
     Describe describe(instance, args.at("--target-id"), args.at("--run-id"),
                       node_name, context);
-    Workers workers(tools);
+    std::unique_ptr<MasterWatch> watch;
     HttpServer server(
         UnixOptions{args.at("--socket-path")},
         [&](HttpRequest request, HttpReply reply) {
@@ -464,33 +518,36 @@ int main(int argc, char **argv) {
                 http_error(404, "not_found", "unknown ROS1 Tools operation"));
             return;
           }
-          workers.push(std::move(request), std::move(reply));
+          if (stopping.load()) {
+            reply.complete(http_error(503, "not_ready", "ROS1 Tools is stopping"));
+            return;
+          }
+          watch->push(std::move(request), std::move(reply));
         },
         limits, HttpIdentity{instance, {"/v1/describe"}});
-    std::signal(SIGINT, signalStop);
-    std::signal(SIGTERM, signalStop);
-    {
-      MasterWatch watch(tools, describe);
-      while (!stopping.load() && ros::ok()) {
-        server.poll(std::chrono::milliseconds(100));
-        describe.expire();
-      }
-      if (!ros::ok())
-        requestStop(kExitRosShutdown, "ROS shut this node down");
-      stopping.store(true);
+    watch.reset(new MasterWatch(binding, context, describe));
+    while (!stopping.load()) {
+      server.poll(std::chrono::milliseconds(100));
+      describe.expire();
     }
+    stopping.store(true);
+    stop_changed.notify_all();
+    watch.reset();
     describe.release();
-    server.request_stop();
-    workers.stop();
-    spinner.stop();
-    ros::shutdown();
+    server.drain_until(Clock::now() + std::chrono::seconds(2));
+    {
+      auto budget = binding.BoundMasterCalls(std::chrono::milliseconds(3000));
+      binding.Shutdown();
+    }
     std::cerr << "ros1.tools: exit " << exit_status.load() << " ("
               << stop_reason << ")" << std::endl;
     return exit_status.load();
   } catch (const std::exception &error) {
     std::cerr << "ros1.tools: " << error.what() << '\n';
-    if (ros::isInitialized())
+    if (ros::isInitialized()) {
+      adapter::RosMasterDeadline budget(std::chrono::milliseconds(3000));
       ros::shutdown();
+    }
     return kExitFailure;
   }
 }

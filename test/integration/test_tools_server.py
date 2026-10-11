@@ -61,10 +61,11 @@ class ToolsServerTest(MasterCase):
         self.assertEqual(facts["run_id"], server.run_id)
         self.assertEqual(facts["target_id"], "local")
         self.assertIn(server.node, self.roscore.nodes())
-        # Anything else about the query is refused, a wrong instance is a conflict.
+        # Invalid readiness budgets are refused; operations remain instance-bound.
         status, _, body = server.http.describe(wait_ms=30001)
         self.assertEqual(status, 400, body)
-        status, _, body = server.http.describe(instance="another-instance", wait_ms=0)
+        status, _, body = server.http.request("POST", "/api/v1/publish",
+                                             instance="another-instance", body={})
         self.assertEqual(status, 409, body)
         server.signal(signal.SIGTERM)
         self.assert_gone(server)
@@ -169,10 +170,26 @@ class ToolsMasterLossTest(unittest.TestCase):
         self.assertEqual(server.wait(60), EXIT_MASTER_UNREACHABLE, server.output())
         self.assertGreater(time.monotonic() - started, 4)
 
-    def test_a_master_that_is_never_there_ends_the_process(self):
-        self.roscore.kill()
-        server = ToolsServer(self.workspace, self.roscore, new_run_id()).start()
-        self.assertEqual(server.wait(60), EXIT_MASTER_UNREACHABLE, server.output())
+    def test_a_brief_silent_master_outage_keeps_the_same_process(self):
+        server = self.started()
+        self.roscore.stop_responding()
+        time.sleep(2.5)
+        self.roscore.resume()
+        time.sleep(2)
+        self.assertFalse(server.exited(), server.output())
+        self.assertTrue(server.http.describe()[2]["ready"])
+        server.signal(signal.SIGTERM)
+        self.assertEqual(server.wait(10), EXIT_OK, server.output())
+
+    def test_a_silent_bound_master_does_not_block_describe_or_the_exit(self):
+        server = self.started()
+        started = time.monotonic()
+        self.roscore.stop_responding()
+        status, _, body = server.http.describe()
+        self.assertEqual(status, 200, body)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(server.wait(20), EXIT_MASTER_UNREACHABLE, server.output())
+        self.assertGreater(time.monotonic() - started, 4)
 
     def test_ros_shutting_the_node_down_ends_the_process(self):
         server = self.started()

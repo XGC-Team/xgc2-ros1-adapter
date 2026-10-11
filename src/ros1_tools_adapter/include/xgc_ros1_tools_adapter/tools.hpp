@@ -22,10 +22,10 @@ struct CallContext {
 };
 class Tools {
  public:
-  Tools(ros::NodeHandle node_handle, NativeContext context);
+  Tools(ros::NodeHandle node_handle, NativeContext context,
+        std::int64_t bound_master_pid);
   Json::Value Publish(const std::string& input, const CallContext& call);
   Json::Value CallService(const std::string& input, const CallContext& call);
-  MasterBindingState ProbeMasterBinding(std::int64_t* current = nullptr);
  private:
   Json::Value success(const Json::Value& value) const;
   NativeContext native_context_;

@@ -61,6 +61,9 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   of two Runs on one ROS master never share a node name, and every robot registered with the
   process must carry the same Run id. `rosMasterUri` is the Run's ROS master, `rosIp` the
   address of this host in the ROS network.
+  The type servers and Tools can start before that master exists. They bind their own
+  socket immediately, wait for the master without a startup deadline, and connect to robot
+  topics, subscribers and service providers at run time. Data peers never gate readiness.
 - **Services.** The type servers expose `xgc2.robot-adapter` with `grpc.v1`; Tools
   exposes `ros1.tools` with `http.v1`. Scene exposes `xgc2.scene.authoring` v1 on
   `socketPath` and `xgc2.sensor.lidar` v1 on `lidarSocketPath`, both with `http.v1`
@@ -70,10 +73,13 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   (gRPC `Describe`, HTTP `GET /v1/describe?wait_ready_ms=N`). The service answers once its
   ROS node is registered with the master; Scene also loads its document, opens its store
   and constructs its fleet resources. A world host, poses, scene truth and subscribers
-  do not gate Scene readiness. Both sockets answer `ready:false` with
-  `facts.ros_master: "waiting"` while the adapter waits for a missing master without
-  a startup deadline. Every declared service must answer Describe before the process
-  is ready, including Scene's empty lidar service in `xsim` and `physical`.
+  do not gate Scene readiness. While a missing master is awaited without a startup deadline
+  every adapter answers `ready:false` with the reason in its facts (`facts.reason`, or
+  `facts_json.reason` for the gRPC type servers; Scene reports `facts.ros_master: "waiting"` on
+  both sockets) and honors the readiness hold; a readiness request's budget does not end the
+  process's startup wait. The HTTP describe paths stay unbound with or without `wait_ready_ms`.
+  Every declared service must answer Describe before the process is ready, including Scene's
+  empty lidar service in `xsim` and `physical`.
   `startGraceMs` is the time the process may take
   before a failed connection counts; `timeoutMs` ends the wait.
 - **Stop.** `rpc: Shutdown` asks Core to call the service's `Shutdown` first (drain, final zero
@@ -83,7 +89,8 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   drain and 5 s. Scene stops through SIGTERM with a 5 s grace.
 - **Run ownership.** A Run-owned process that ends fails its Run; there is no restart field.
   The exit status says why
-  (type-servers.md): a changed or unreachable ROS master is 3 or 4.
+  (type-servers.md): a replaced bound ROS master (pid or known run id) is 3; a bound master
+  that stays unreachable for 5 s is 4. SIGTERM while waiting for the first master exits 0.
 
 The definition fields are `id`, `version`, `label`, `description`, `parameters`, `setupFiles`,
 `command`, `services`, `readiness`, `stop` and `logs`. Readiness uses `kind: describe` with

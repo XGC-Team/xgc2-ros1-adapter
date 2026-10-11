@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   roslib
   rosgraph_msgs
+  xgc_ros1_adapter_common
 )
 find_package(PkgConfig REQUIRED)
 find_package(PythonInterp 3 REQUIRED)
@@ -14,7 +15,7 @@ find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS http)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 catkin_package(
-  CATKIN_DEPENDS ros_babel_fish roscpp roslib rosgraph_msgs
+  CATKIN_DEPENDS ros_babel_fish roscpp roslib rosgraph_msgs xgc_ros1_adapter_common
 )
 
 add_library(${PROJECT_NAME}_core STATIC
@@ -46,7 +47,8 @@ target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
 target_compile_options(${PROJECT_NAME}_node PRIVATE
   -Wall -Wextra -Wpedantic -Werror
 )
-target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_core XgcXrpc::http)
+target_link_libraries(${PROJECT_NAME}_node
+  xgc2_robot_server_ros1 ${PROJECT_NAME}_core XgcXrpc::http)
 
 add_executable(${PROJECT_NAME}_service_helper src/service_helper_main.cpp)
 target_compile_features(${PROJECT_NAME}_service_helper PUBLIC cxx_std_17)

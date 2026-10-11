@@ -104,6 +104,8 @@ public:
   explicit FakeBinding(World &world) : world_(world) {}
   // ---- script
   std::atomic<long> master_pid{4242};
+  std::atomic<bool> master_run_known{true};
+  std::atomic<bool> master_run_changed{false};
   std::atomic<bool> master_answers{true};
   std::atomic<bool> master_calls_fail{false}; // BoundMasterCalls reports failure
   std::atomic<bool> running{true};
@@ -135,7 +137,9 @@ public:
       return false;
     identity->uri = "http://devbox:11311/";
     identity->pid = master_pid;
-    identity->run_id = "master-run-1";
+    identity->run_id = !master_run_known ? "" : master_run_changed
+                                                   ? "master-run-2"
+                                                   : "master-run-1";
     return true;
   }
   void Shutdown() override { world_.record("ros-shutdown"); }
@@ -869,6 +873,30 @@ TEST_F(ServerMasterWatch, ExitsWhenTheMasterStaysUnreachable) {
   EXPECT_GE(Clock::now() - started, milliseconds(250));
 }
 
+TEST_F(ServerMasterWatch, ExitsWhenTheMasterRunIdChangesWithTheSamePid) {
+  startReady();
+  binding_->master_run_changed = true;
+  EXPECT_EQ(kExitMasterChanged, join());
+}
+
+TEST_F(ServerMasterWatch, LearnsALateRunIdBeforeDetectingItsReplacement) {
+  binding_->master_run_known = false;
+  startReady();
+  EXPECT_EQ("", facts(client_->describe().response)["ros_master_run_id"]);
+  binding_->master_run_known = true;
+  nlohmann::json described;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    described = facts(client_->describe().response);
+    if (described["ros_master_run_id"] == "master-run-1")
+      break;
+    std::this_thread::sleep_for(milliseconds(5));
+  }
+  EXPECT_EQ("master-run-1", described["ros_master_run_id"]);
+  EXPECT_TRUE(client_->health().response.serving());
+  binding_->master_run_changed = true;
+  EXPECT_EQ(kExitMasterChanged, join());
+}
+
 TEST_F(ServerMasterWatch, ABriefOutageIsNotAFailure) {
   startReady();
   binding_->master_answers = false;
@@ -886,17 +914,44 @@ TEST_F(ServerMasterWatch, ExitsWhenRosShutsTheNodeDown) {
   EXPECT_EQ(kExitRosShutdown, join());
 }
 
-TEST_F(ServerMasterWatch, AMasterThatDoesNotAcceptTheNodeFailsTheStartup) {
+TEST_F(ServerMasterWatch, WaitsUntilTheMasterAcceptsTheNode) {
   binding_->master_calls_fail = true;
   start();
-  EXPECT_EQ(kExitMasterUnreachable, join());
+  const auto waiting = client_->describe(600);
+  ASSERT_TRUE(waiting.status.ok());
+  EXPECT_FALSE(waiting.response.ready());
+  EXPECT_FALSE(finished_);
+  binding_->master_calls_fail = false;
+  EXPECT_TRUE(client_->describe(10000).response.ready());
+  server_->RequestStop();
+  EXPECT_EQ(kExitOk, join());
 }
 
-TEST_F(ServerMasterWatch, AMasterThatNeverAnswersFailsTheStartup) {
+TEST_F(ServerMasterWatch, WaitsForALateMasterWithoutAStartupDeadline) {
   binding_->master_answers = false;
   start();
-  EXPECT_EQ(kExitMasterUnreachable, join());
+  const auto started = Clock::now();
+  const auto waiting = client_->describe(600);
+  ASSERT_TRUE(waiting.status.ok());
+  EXPECT_FALSE(waiting.response.ready());
+  EXPECT_GE(Clock::now() - started, milliseconds(550));
+  EXPECT_EQ("waiting for ROS master binding", facts(waiting.response)["reason"]);
+  EXPECT_FALSE(finished_);
+  EXPECT_FALSE(world_.contains("connect"));
   EXPECT_FALSE(world_.contains("create:r1"));
+  binding_->master_answers = true;
+  EXPECT_TRUE(client_->describe(10000).response.ready());
+  server_->RequestStop();
+  EXPECT_EQ(kExitOk, join());
+}
+
+TEST_F(ServerMasterWatch, StopsCleanlyWhileWaitingForTheMaster) {
+  binding_->master_answers = false;
+  start();
+  EXPECT_FALSE(client_->describe(0).response.ready());
+  server_->RequestStop();
+  EXPECT_EQ(kExitOk, join());
+  EXPECT_TRUE(world_.contains("ros-shutdown"));
 }
 
 } // namespace

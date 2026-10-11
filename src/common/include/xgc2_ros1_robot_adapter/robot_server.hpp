@@ -59,9 +59,10 @@ enum ExitCode : int {
 struct MasterIdentity {
   std::string uri; // getUri
   long pid = 0;    // getPid
-  std::string run_id; // parameter /run_id when the master has one (facts only)
+  std::string run_id; // parameter /run_id when the master has one
   bool sameMaster(const MasterIdentity &other) const {
-    return uri == other.uri && pid == other.pid;
+    return uri == other.uri && pid == other.pid &&
+           (run_id.empty() || other.run_id.empty() || run_id == other.run_id);
   }
 };
 

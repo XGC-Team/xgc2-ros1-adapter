@@ -11,13 +11,16 @@ ROS registrations.
 
 1. The Run starts the executable from its process definition (see
    [process-definitions.md](process-definitions.md)). The process creates the socket in the
-   private runtime directory of the Run, initializes roscpp, registers its node with the
-   Run's ROS master and starts its workers.
+   private runtime directory of the Run, initializes roscpp and starts its workers. It may
+   start before the Run's ROS master exists and waits for that master without a startup
+   deadline, then registers its node.
 2. **Ready** is reported by `Describe`. Until the node is registered with the master and the
    workers run, `Describe` with `wait_ready_ms` is held (see below) and every other
    operation is refused with `FAILED_PRECONDITION`.
 3. The workflow sends **one `ApplyMembers` with all robots of this type** in the Run.
    Registering a robot creates its ROS subscriptions and publishers under its namespace.
+   Robot topics need not exist yet: registration is accepted and health reports missing
+   telemetry until publishers appear. Subscriptions reconnect when publishers restart.
    Failures are reported per robot; the other robots are unaffected.
 4. During the Run the workflow reads telemetry with one `SubscribeStatus` stream and sends
    robot operations with `Execute`.
@@ -25,10 +28,12 @@ ROS registrations.
    then SIGKILL after the grace of the process definition. `Shutdown` and SIGTERM do the same
    drain (below) and the process exits 0.
 
-The server binds to the ROS master it was started with, once, at process start
-(`--ros-master-uri`, `--ros-ip`). It never re-binds. It watches the identity of that master
-once per second (`getPid` and `getUri`); if the master is replaced (another pid, even on the
-same URI) or stays unreachable for 5 s, the server stops its robots like a drain would, and
+The server uses the ROS master URI supplied at process start (`--ros-master-uri`, `--ros-ip`)
+and waits for its first binding. While waiting it serves `Describe` with `ready:false` and
+`facts_json.reason: "waiting for ROS master binding"`; SIGTERM/SIGINT exits 0. It never
+re-binds after startup. It watches the identity of the bound master once per second
+(`getPid`, `getUri` and `/run_id`); if the master is replaced (another pid or a changed known
+run id, even on the same URI) or stays unreachable for 5 s, it stops its robots like a drain would, and
 exits with a status that names the reason. The Run that owns it fails or restarts it
 explicitly.
 
@@ -58,7 +63,7 @@ compared with the same replacement. A name without the Run id is an invalid comm
 | 1 | startup or internal failure (the log names it) |
 | 2 | invalid command line |
 | 3 | the ROS master was replaced |
-| 4 | the ROS master stayed unreachable, also when it never answered at start |
+| 4 | the bound ROS master stayed unreachable for 5 s |
 | 5 | ROS shut the node down (`rosnode kill`) |
 
 On 3, 4 and 5 the server stops its robots first, with the drain below.
@@ -79,7 +84,7 @@ the socket over after a restart.
 - `provider_definition_id`, and the limits `maximum_robots` (256), `maximum_members` (256),
   `maximum_batch_members` (256) and `maximum_commands_per_robot` (32).
 - `ready`: true once the node is registered with the master and the server accepts work; false
-  while starting, draining or stopped.
+  while starting, draining or stopped. Robot topics and telemetry never gate readiness.
 - `facts_json`: the domain dependencies that make the service valid:
 
   | Fact | Value |
@@ -91,6 +96,7 @@ the socket over after a restart.
   | `run_id`, `provider` | as started |
   | `members` | robots registered |
   | `state` | `starting`, `ready`, `draining` or `stopped` |
+  | `reason` | `waiting for ROS master binding` while waiting for startup binding, otherwise `""` |
 
 `wait_ready_ms` (0 to 30000; more is `INVALID_ARGUMENT`) holds the call without polling until
 `ready` or the wait ends, and answers 250 ms before the caller's own deadline at the latest so
@@ -176,8 +182,8 @@ and every topic and service it held.
 roscpp waits for a master that accepts connections but never answers. The server replaces
 `ros::master::execute` (in `libxgc2_robot_server_ros1`, ahead of libroscpp in the link order) with a
 bounded one: 3 s per call, and one budget per lifecycle step (registration of a robot, removal,
-drain). A silent master therefore fails a registration within its budget (3 s), the master
-watch reports it unreachable after 5 s of failed probes, and the server stops its robots and
+drain). After binding, a silent master fails a member registration within its budget (3 s).
+The master watch reports it unreachable after 5 s of failed probes, and the server stops its robots and
 exits 4. In the integration test a master that stops answering ends the server in 15 s.
 
 ## Threads

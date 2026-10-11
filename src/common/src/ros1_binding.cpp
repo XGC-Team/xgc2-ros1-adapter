@@ -56,15 +56,10 @@ bool Ros1Binding::ProbeMaster(MasterIdentity *identity) {
     return false;
   identity->pid = pid;
   identity->uri = static_cast<std::string>(payload);
-  // roscore/roslaunch publish the id of the master run as /run_id; a bare
-  // rosmaster has none. It is read once, with the first successful probe.
-  if (!master_run_id_read_) {
-    std::string run_id;
-    if (ros::param::get("/run_id", run_id))
-      master_run_id_ = run_id;
-    master_run_id_read_ = true;
-  }
-  identity->run_id = master_run_id_;
+  // Read the run id on every probe so a new run is detected even if a pid
+  // is reused. A bare rosmaster has no run id.
+  identity->run_id.clear();
+  ros::param::get("/run_id", identity->run_id);
   return true;
 }
 

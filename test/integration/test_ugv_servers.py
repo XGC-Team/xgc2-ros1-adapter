@@ -441,13 +441,6 @@ class MasterLossTest(unittest.TestCase):
         print("silent master: apply failed after {:.1f} s, server exited with {} after {:.1f} s".format(
             elapsed, EXIT_MASTER_UNREACHABLE, time.monotonic() - silent_since))
 
-    def test_a_server_whose_master_is_never_there_exits(self):
-        self.roscore.kill()
-        server = Server(self.workspace, self.roscore, SCOUT, new_run_id()).start()
-        started = time.monotonic()
-        self.assertEqual(server.wait(90), EXIT_MASTER_UNREACHABLE, server.output())
-        self.assertLess(time.monotonic() - started, 60)
-
     def test_a_node_of_the_same_name_displaces_the_first(self):
         # The master lets the newest node of a name win and tells the older one
         # to shut down: ROS ends the node, the server exits with that status. A

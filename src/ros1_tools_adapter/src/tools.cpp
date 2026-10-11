@@ -309,11 +309,11 @@ bool NativeContext::operator==(const NativeContext& other) const noexcept {
 }
 
 Tools::Tools(ros::NodeHandle node_handle,
-                           NativeContext native_context)
+             NativeContext native_context, std::int64_t bound_master_pid)
     : native_context_(std::move(native_context)),
       codec_(),
       types_(),
-      publishers_(node_handle, types_, codec_),
+      publishers_(node_handle, types_, codec_, bound_master_pid),
       services_(types_, codec_) {}
 
 Json::Value Tools::Publish(const std::string& raw, const CallContext& call) {
@@ -381,10 +381,6 @@ Json::Value Tools::Publish(const std::string& raw, const CallContext& call) {
   } catch (const std::exception& exception) {
     throw;
   }
-}
-
-MasterBindingState Tools::ProbeMasterBinding(std::int64_t* current) {
-  return publishers_.probeMasterBinding(current);
 }
 
 Json::Value Tools::CallService(const std::string& raw, const CallContext& call) {

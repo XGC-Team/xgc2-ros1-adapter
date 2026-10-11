@@ -78,7 +78,7 @@ void waitUntil(const PublishRequest &request,
 
 PublisherRegistry::PublisherRegistry(
     ros::NodeHandle node_handle, TypeRegistry &types, const JsonCodec &codec,
-    std::size_t maximum_publishers,
+    std::int64_t bound_master_pid, std::size_t maximum_publishers,
     MasterGenerationProvider master_generation_provider)
     : node_handle_(std::move(node_handle)),
       types_(types),
@@ -86,10 +86,14 @@ PublisherRegistry::PublisherRegistry(
       maximum_publishers_(maximum_publishers),
       master_generation_provider_(master_generation_provider
                                       ? std::move(master_generation_provider)
-                                      : currentMasterGeneration) {
+                                      : currentMasterGeneration),
+      master_generation_(bound_master_pid) {
   if (maximum_publishers_ == 0) {
     permanentError("invalid_configuration",
                    "maximum cached ROS1 publishers must be greater than zero");
+  }
+  if (master_generation_ <= 0) {
+    permanentError("invalid_configuration", "bound ROS1 master PID must be positive");
   }
 }
 
@@ -241,38 +245,6 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
   }
 }
 
-MasterBindingState PublisherRegistry::probeMasterBinding(
-    std::int64_t *current_out) {
-  std::int64_t current = 0;
-  try {
-    current = master_generation_provider_();
-  } catch (...) {
-    if (current_out != nullptr) {
-      *current_out = 0;
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    return master_generation_ == 0 ? MasterBindingState::Unbound
-                                   : MasterBindingState::Unavailable;
-  }
-  if (current_out != nullptr) {
-    *current_out = current;
-  }
-  if (current <= 0) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return master_generation_ == 0 ? MasterBindingState::Unbound
-                                   : MasterBindingState::Unavailable;
-  }
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (master_generation_ == 0) {
-    master_generation_ = current;
-    return MasterBindingState::Bound;
-  }
-  if (master_generation_ != current) {
-    return MasterBindingState::Changed;
-  }
-  return MasterBindingState::Bound;
-}
-
 void PublisherRegistry::refreshMasterGeneration() {
   const std::int64_t current = master_generation_provider_();
   if (current <= 0) {
@@ -283,10 +255,6 @@ void PublisherRegistry::refreshMasterGeneration() {
   bool changed = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (master_generation_ == 0) {
-      master_generation_ = current;
-      return;
-    }
     if (master_generation_ != current) {
       // roscpp binds ROS_MASTER_URI during ros::init. Recreating publishers on
       // this NodeHandle cannot re-register the node with a new master at the

@@ -61,8 +61,6 @@ private:
   std::array<ros::CallbackQueue, 2> queues_;
   std::unique_ptr<ros::NodeHandle> node_;
   std::string node_name_;
-  std::string master_run_id_;
-  bool master_run_id_read_ = false;
 };
 
 // A robot type served by one ROS1 executable.

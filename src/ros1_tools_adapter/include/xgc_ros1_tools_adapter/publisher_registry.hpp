@@ -37,24 +37,16 @@ struct PublishResult {
   std::uint32_t subscriber_count{0};
 };
 
-enum class MasterBindingState : std::uint8_t {
-  Unbound,
-  Bound,
-  Changed,
-  Unavailable,
-};
-
 class PublisherRegistry {
  public:
   using MasterGenerationProvider = std::function<std::int64_t()>;
 
   PublisherRegistry(ros::NodeHandle node_handle, TypeRegistry &types,
-                    const JsonCodec &codec,
+                    const JsonCodec &codec, std::int64_t bound_master_pid,
                     std::size_t maximum_publishers = 128,
                     MasterGenerationProvider master_generation_provider = {});
 
   PublishResult publish(const PublishRequest &request);
-  MasterBindingState probeMasterBinding(std::int64_t *current = nullptr);
   void clear();
   std::size_t size() const;
 
@@ -77,7 +69,7 @@ class PublisherRegistry {
   const JsonCodec &codec_;
   const std::size_t maximum_publishers_;
   MasterGenerationProvider master_generation_provider_;
-  std::int64_t master_generation_{0};
+  const std::int64_t master_generation_;
   mutable std::mutex mutex_;
   std::map<std::string, std::shared_ptr<Entry>> entries_;
 };

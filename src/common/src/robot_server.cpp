@@ -564,7 +564,11 @@ private:
         return;
       }
       MasterIdentity now;
-      const bool known = binding_.ProbeMaster(&now);
+      bool known;
+      {
+        auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
+        known = binding_.ProbeMaster(&now) && !budget->failed();
+      }
       lock.lock();
       if (watch_stop_)
         break;
@@ -577,6 +581,11 @@ private:
           log(failure_detail());
           requestStop(StopReason::MasterChanged);
           return;
+        }
+        // roscore may publish /run_id after its master socket opens.
+        if (pinned_.run_id.empty() && !now.run_id.empty()) {
+          std::lock_guard<std::mutex> startup_lock(startup_mutex_);
+          pinned_.run_id = now.run_id;
         }
       } else {
         if (!unreachable)
@@ -750,6 +759,9 @@ private:
                      : current == Phase::Ready    ? "ready"
                      : current == Phase::Draining ? "draining"
                                                   : "stopped";
+    facts["reason"] = current == Phase::Starting && !pinned
+                          ? "waiting for ROS master binding"
+                          : "";
     return facts.dump();
   }
 
@@ -819,23 +831,25 @@ private:
   // ---- registration thread --------------------------------------------------------
   void registrationLoop() {
     pthread_setname_np(pthread_self(), "ros-library");
-    {
-      auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
-      binding_.Connect();
-      if (budget->failed()) {
-        setDetail(options_.ros_master_uri +
-                  " did not accept the registration of the node");
-        log(failure_detail());
-        requestStop(StopReason::MasterUnreachable);
-        return;
-      }
-    }
     MasterIdentity identity;
-    if (!binding_.ProbeMaster(&identity)) {
-      setDetail(options_.ros_master_uri + " is not reachable");
-      log(failure_detail());
-      requestStop(StopReason::MasterUnreachable);
-      return;
+    for (;;) {
+      if (shutdown_ || stop_reason_.load() != StopReason::None)
+        return;
+      {
+        auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
+        // Do not start roscpp until its master exists. Each attempt is
+        // bounded, but waiting for the first binding has no deadline.
+        if (binding_.ProbeMaster(&identity)) {
+          binding_.Connect();
+          if (!budget->failed() && binding_.ProbeMaster(&identity) &&
+              !budget->failed())
+            break;
+        }
+      }
+      std::unique_lock<std::mutex> lock(jobs_mutex_);
+      jobs_ready_.wait_for(lock, timings_.master_probe_interval, [this] {
+        return shutdown_ || stop_reason_.load() != StopReason::None;
+      });
     }
     {
       std::lock_guard<std::mutex> lock(startup_mutex_);

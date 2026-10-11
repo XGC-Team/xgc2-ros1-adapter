@@ -236,7 +236,9 @@ class Roscore:
     def alive(self):
         try:
             self.call("getPid")
-            return True
+            # roslaunch publishes this after the master opens its port. Tests
+            # of a replaced run need that initial identity before proceeding.
+            return bool(self.run_id())
         except Exception:
             return False
 
