@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <ros/callback_queue.h>
+#include <ros/master.h>
 #include <xgc2/xrpc/http.hpp>
 #include <filesystem>
 #include <future>
@@ -135,6 +136,11 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   ASSERT_TRUE(pump([&] {
     edge.engine()->tick(now);
     return points[0] && points[1] && beams[0] && beams[1] && reference && reference->width;
+  }));
+  ros::master::V_TopicInfo topics;
+  ASSERT_TRUE(ros::master::getTopics(topics));
+  EXPECT_FALSE(std::any_of(topics.begin(), topics.end(), [&](const auto& topic) {
+    return topic.name.find(prefix + "/body2/world_lidar/") == 0;
   }));
   EXPECT_EQ(points[0]->header.frame_id, "world");
   EXPECT_EQ(points[0]->header.stamp.toNSec(), now - 12345);
@@ -279,8 +285,32 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   ros::Time::setNow(ros::Time(100, 200000000));
   ASSERT_TRUE(pump([&] { return clock_deliveries == 2; }));
   clock_edge.stopTimer();
+  clock_edge.shutdown();
   edge.shutdown();
   EXPECT_EQ(edge.engine(), nullptr);
+  reference_sub.shutdown();
+  late_sub.shutdown();
+  reference.reset();
+  const auto reference_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-reference.sock"},
+      {"lidar_fleet_json", Json{{"schemaVersion", 1}, {"robots", Json::array()},
+          {"referenceCloud", {{"surfaceSpacing", 0.5}}}}.dump()}}, "gazebo");
+  Edge reference_edge(handle, reference_config);
+  reference_edge.stopTimer();
+  ASSERT_TRUE(reference_edge.engine()->manifest().robots.empty());
+  reference_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
+  reference_sub = handle.subscribe<sensor_msgs::PointCloud2>("/xgc/scene/reference_cloud", 1,
+      [&](const sensor_msgs::PointCloud2::ConstPtr& cloud) { reference = cloud; });
+  ASSERT_TRUE(pump([&] {
+    reference_edge.engine()->tick(ros::Time::now().toNSec());
+    return reference && reference->width;
+  }));
+  ASSERT_TRUE(ros::master::getTopics(topics));
+  EXPECT_FALSE(std::any_of(topics.begin(), topics.end(), [&](const auto& topic) {
+    return topic.name.find(prefix + "/") == 0 && topic.name.find("/world_lidar/") != std::string::npos;
+  }));
+  EXPECT_EQ(reference->point_step, 12u);
+  EXPECT_EQ(reference->fields.size(), 3u);
+  reference_edge.shutdown();
 }
 }  // namespace
 }  // namespace xgc_scene::lidar_ros
