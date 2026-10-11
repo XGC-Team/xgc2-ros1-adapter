@@ -149,7 +149,6 @@ void RemoteControlPublisher::Stop() noexcept {
     publishLocked(nullptr);
   active_ = false;
   stopped_ = true;
-  publish_ = {};
 }
 
 } // namespace xgc_px4_multirotor_ros1_adapter

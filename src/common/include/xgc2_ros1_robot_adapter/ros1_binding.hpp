@@ -55,6 +55,7 @@ public:
   std::unique_ptr<CommandIo> CreateCommandIo() override;
   std::unique_ptr<MasterBudget>
   BoundMasterCalls(std::chrono::milliseconds budget) override;
+  void FlushPublications(std::chrono::milliseconds budget) override;
 
 private:
   std::array<ros::CallbackQueue, 2> queues_;

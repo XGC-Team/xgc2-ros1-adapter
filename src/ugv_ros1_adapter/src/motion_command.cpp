@@ -179,7 +179,6 @@ void MotionCommandPublisher::Stop() noexcept {
     publishLocked(command_, nullptr);
   active_ = false;
   stopped_ = true;
-  publish_ = {};
 }
 
 } // namespace xgc_ugv_ros1_adapter

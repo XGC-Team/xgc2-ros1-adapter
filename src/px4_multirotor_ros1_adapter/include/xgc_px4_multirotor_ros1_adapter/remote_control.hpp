@@ -11,6 +11,9 @@
 
 namespace xgc_px4_multirotor_ros1_adapter {
 
+// Publishes the setpoint stream of a motion intent. Stop() publishes a final
+// zero velocity while the stream is active; the ROS publisher lives until the
+// destructor so the owner can flush publications before destroying it.
 class RemoteControlPublisher {
 public:
   using PublishFunction =

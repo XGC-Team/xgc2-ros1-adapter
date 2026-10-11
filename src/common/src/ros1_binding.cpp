@@ -1,7 +1,10 @@
 #include "xgc2_ros1_robot_adapter/ros1_binding.hpp"
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
 #include <ros/master.h>
 #include <ros/param.h>
+#include <ros/poll_manager.h>
 #include <stdexcept>
 #include <xmlrpcpp/XmlRpcValue.h>
 
@@ -90,5 +93,32 @@ std::unique_ptr<CommandIo> Ros1Binding::CreateCommandIo() {
 std::unique_ptr<MasterBudget>
 Ros1Binding::BoundMasterCalls(std::chrono::milliseconds budget) {
   return std::unique_ptr<MasterBudget>(new RosMasterDeadline(budget));
+}
+
+// roscpp queues a published message for its transport thread, and a publisher
+// destroyed before that thread has sent the message drops it. The thread runs
+// its listeners at the start of each pass and sends what is ready during the
+// pass. A message published before this call is therefore on its socket once
+// the thread has started a second pass after the call.
+void Ros1Binding::FlushPublications(std::chrono::milliseconds budget) {
+  struct Passes {
+    std::mutex mutex;
+    std::condition_variable started;
+    int count = 0;
+  } passes;
+  const ros::PollManagerPtr &transport = ros::PollManager::instance();
+  const auto listener = transport->addPollThreadListener([&passes] {
+    std::lock_guard<std::mutex> lock(passes.mutex);
+    ++passes.count;
+    passes.started.notify_all();
+  });
+  transport->getPollSet().signal();
+  {
+    std::unique_lock<std::mutex> lock(passes.mutex);
+    passes.started.wait_for(lock, budget,
+                            [&passes] { return passes.count >= 2; });
+  }
+  // Waits for a listener call in progress, so none runs after this returns.
+  transport->removePollThreadListener(listener);
 }
 } // namespace xgc2_ros1_robot_adapter

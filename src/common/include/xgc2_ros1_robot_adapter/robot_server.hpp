@@ -119,6 +119,13 @@ public:
   virtual std::unique_ptr<CommandIo> CreateCommandIo() = 0;
   virtual std::unique_ptr<MasterBudget>
   BoundMasterCalls(std::chrono::milliseconds budget) = 0;
+
+  // Returns once everything the robots published so far has left the process,
+  // or after the budget. Middleware hands a published message to a transport
+  // thread; a publisher destroyed before that thread has sent the message
+  // drops it. The core calls this between the final commands of stopped
+  // robots and the destruction of the robots.
+  virtual void FlushPublications(std::chrono::milliseconds budget) = 0;
 };
 
 using CommandCompletion = std::function<void(xgc::adapter::v1::OperationEvent)>;
@@ -130,8 +137,9 @@ using TelemetryEmitter = std::function<void(xgc::robot::v1::RobotMessage)>;
 class NativeRobot {
 public:
   virtual ~NativeRobot() = default;
-  // Final zero command if a motion intent is active, then release every ROS
-  // handle; no callback runs after it returns.
+  // Final zero command if a motion intent is active, and no callback after it
+  // returns. The publishers that carried that command stay registered until
+  // the robot is destroyed, which the core does after FlushPublications.
   virtual void Stop() = 0;
   virtual void Periodic() = 0;
   virtual std::uint64_t Execute(const xgc::adapter::v1::OperationRequest &,
@@ -149,6 +157,7 @@ struct ServerTimings {
   std::chrono::milliseconds command_drain{2000};
   std::chrono::milliseconds member_drain{15000};
   std::chrono::milliseconds status_flush{500};
+  std::chrono::milliseconds publication_flush{500};
   std::chrono::milliseconds rpc_drain{5000};
 };
 

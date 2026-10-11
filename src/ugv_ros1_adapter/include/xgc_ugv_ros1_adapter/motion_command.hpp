@@ -25,6 +25,9 @@ bool motionIntentCommand(const MotionLimits &limits, std::uint32_t gear,
 // Release() publishes one last zero and ends the stream so close / leaving the
 // Experiment does not keep /cmd_vel alive. Stop() while the stream is still
 // active serializes a final zero; after Release() it does not publish again.
+// The ROS publisher lives until the destructor: roscpp sends a message from
+// its transport thread, so the owner flushes publications before it destroys
+// the publisher that carried the final zero.
 class MotionCommandPublisher {
 public:
   using PublishFunction =

@@ -669,6 +669,10 @@ private:
         workerFailed("native stop", std::current_exception());
       }
     }
+    // The final commands must leave the process before the robots, and with
+    // them their publishers, are destroyed.
+    if (!members.empty())
+      binding_.FlushPublications(timings_.publication_flush);
   }
   void awaitReady(const xgc2::xrpc::GrpcCallScope &scope, Milliseconds wait) {
     const auto until =
@@ -1390,6 +1394,7 @@ private:
                                      const xgc2::xrpc::GrpcWorkPermit &work) {
     auto budget = binding_.BoundMasterCalls(timings_.member_removal);
     wire::RemoveMembersResponse result;
+    std::vector<std::shared_ptr<Member>> stopped;
     for (const auto &identity : request.members()) {
       auto *item = result.add_members();
       *item->mutable_identity() = identity;
@@ -1423,7 +1428,11 @@ private:
       // effect.
       fenceCommands(released);
       released->native->Stop();
+      stopped.push_back(std::move(released));
     }
+    // Once for the whole batch, before the stopped robots are destroyed.
+    if (!stopped.empty())
+      binding_.FlushPublications(timings_.publication_flush);
     return result;
   }
   // Cancels the member's native call and fails its queued commands; returns

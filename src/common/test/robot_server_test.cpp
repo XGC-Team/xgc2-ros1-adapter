@@ -163,6 +163,9 @@ public:
     };
     return std::unique_ptr<MasterBudget>(new Budget());
   }
+  void FlushPublications(std::chrono::milliseconds) override {
+    world_.record("flush");
+  }
 
 private:
   World &world_;
@@ -181,6 +184,7 @@ public:
       : world_(world), config_(std::move(config)), emit_(std::move(emit)) {
     publish();
   }
+  ~FakeRobot() override { world_.record("destroy:" + config_.robot_id); }
   void Stop() override {
     world_.record("stop:" + config_.robot_id);
     std::lock_guard<std::mutex> lock(world_.mutex);
@@ -657,6 +661,10 @@ TEST_F(ServerMembers, TheStatusStreamShowsMembersAndTheirRemoval) {
   }));
   EXPECT_TRUE(world_.contains("stop:r1"));
   EXPECT_FALSE(world_.contains("stop:r2"));
+  // The final command of a stopped robot leaves the process before the robot
+  // (and its publishers) is destroyed.
+  EXPECT_LT(world_.position("stop:r1"), world_.position("flush"));
+  EXPECT_LT(world_.position("flush"), world_.position("destroy:r1"));
 
   // Removing again, or removing what was never there, is not an error.
   EXPECT_TRUE(client_->remove(removal).response.members(0).error().code().empty());
@@ -740,6 +748,15 @@ TEST_F(ServerShutdown, DrainsInOrderThenAnswersAndExitsCleanly) {
   EXPECT_EQ(0, join());
   EXPECT_TRUE(world_.contains("ros-shutdown"));
   EXPECT_LT(world_.position("stop:r2"), world_.position("ros-shutdown"));
+  // One flush for all robots, after the last final command and before any
+  // robot is destroyed.
+  const auto lines = world_.snapshot();
+  EXPECT_EQ(1, std::count(lines.begin(), lines.end(), "flush"));
+  EXPECT_LT(world_.position("stop:r1"), world_.position("flush"));
+  EXPECT_LT(world_.position("stop:r2"), world_.position("flush"));
+  EXPECT_LT(world_.position("flush"), world_.position("destroy:r1"));
+  EXPECT_LT(world_.position("flush"), world_.position("destroy:r2"));
+  EXPECT_LT(world_.position("destroy:r2"), world_.position("ros-shutdown"));
   // The subscribers saw the members removed.
   EXPECT_TRUE(watch.waitFinished());
 }
