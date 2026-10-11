@@ -24,10 +24,10 @@ jobs:
       - uses: actions/checkout@v4
 
 
-      - name: Build and install-check deb package in Docker
+      - name: Build, test and install-check ROS1 packages including Scene in Docker
         run: |
           .xgc2/scripts/build_debs_in_docker.sh \
-            --output-dir "$GITHUB_WORKSPACE/debs"
+            --output-dir "$GITHUB_WORKSPACE/debs" --jobs 2
 
       - name: Create trusted build manifest
         run: |

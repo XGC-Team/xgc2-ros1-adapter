@@ -15,6 +15,7 @@ Four layers, from the cheapest to the one closest to a Run.
 | `xgc_ugv_ros1_adapter_test` | The UGV runtime for both variants: every behavior the two chassis share is run for each, and what differs (limits, lateral motion, health source, battery filter, stream-rate window) is checked per variant. |
 | `xgc_px4_multirotor_ros1_adapter_test`, `..._operations_test` | The PX4 runtime and its arm, mode, reboot and force-disarm interpretation. |
 | `xgc_ros1_tools_adapter_unit_tests` | The Tools codec, registry and invoker. |
+| Scene core tests and `*_replay_test` | Document and YAML validation, motion, generation, assembly, preparation and store behavior against `test/scene_golden`. CI runs them with CTest in `build/scene_ros1_adapter` after the catkin test targets. |
 
 ## 2. Generator and definition tests (Python)
 
@@ -77,3 +78,8 @@ by topics and services of the right types; their behavior is the one the profile
 release compiler, installs the packages and runs `check_installed_packages.sh` (files,
 dependencies, library resolution, process definitions and catalogs against the profiles) and
 then `test_robot_servers.sh` (the transport test and layer 3 against the installed packages).
+The build also checks the `xgc2_scene_adapter`, `xgc2-scene-assemble` and
+`xgc2-scene-prepare` targets and runs the Scene package's CTest suite. Its installed
+package gate checks all three executables, the process definition, dependency floors
+and `xgc2-scene-prepare --help`. Third-party build dependencies come from the managed
+build image; published Math and scene messages are first-party inputs.

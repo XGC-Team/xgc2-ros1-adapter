@@ -50,6 +50,7 @@ class ProcessDefinitionTest(unittest.TestCase):
                 "xgc2-scout-mini-ros1-adapter",
                 "xgc2-mecanum-ugv-ros1-adapter",
                 "xgc2-ros1-tools-adapter",
+                "xgc2-ros1-scene-adapter",
             },
         )
         for path in DEFINITION_FILES:
@@ -103,9 +104,14 @@ class ProcessDefinitionTest(unittest.TestCase):
                     if "<name>{}</name>".format(package) in candidate.read_text(encoding="utf-8")
                 ]
                 self.assertEqual(len(package_xml), 1, package)
-                self.assertEqual(binary, package + "_node")
                 cmake = (package_xml[0].parent / "CMakeLists.txt").read_text(encoding="utf-8")
-                self.assertIn("add_executable(${PROJECT_NAME}_node", cmake)
+                if path.stem == "xgc2-ros1-scene-adapter":
+                    self.assertEqual(package, "xgc_scene_ros1_adapter")
+                    self.assertEqual(binary, "xgc2_scene_adapter")
+                    self.assertIn("install(TARGETS xgc2_scene_adapter", cmake)
+                else:
+                    self.assertEqual(binary, package + "_node")
+                    self.assertIn("add_executable(${PROJECT_NAME}_node", cmake)
                 # No wrapper: no interpreter, no shell, no rosrun/roslaunch.
                 self.assertNotIn("-c", command["args"])
                 self.assertNotIn("env", command)
@@ -122,6 +128,33 @@ class ProcessDefinitionTest(unittest.TestCase):
             with self.subTest(definition=path.stem):
                 definition = load(path)
                 args = definition["command"]["args"]
+                if path.stem == "xgc2-ros1-scene-adapter":
+                    remappings = dict(argument.split(":=", 1) for argument in args)
+                    self.assertEqual(len(remappings), len(args))
+                    self.assertEqual(remappings, {
+                        "__name": "xgc2_scene_adapter",
+                        "__ns": "${namespace}",
+                        "__master": "${rosMasterUri}",
+                        "__ip": "${rosIp}",
+                        "_scene_file": "${sceneFile}",
+                        "_working_file": "${workingFile}",
+                        "_generation_parameters_json": "${generationParametersJson}",
+                        "_save_directory": "${saveDirectory}",
+                        "_target_id": "${targetId}",
+                        "_xrpc_socket": "${socketPath}",
+                        "_frozen": "${frozen}",
+                        "_profile": "${profile}",
+                        "_simulation_service_ref_json": "${simulationServiceRefJson}",
+                    })
+                    declared = definition["parameters"]["properties"]
+                    used = set(re.findall(r"\$\{([A-Za-z0-9]+)\}", " ".join(args)))
+                    self.assertEqual(used, set(declared))
+                    self.assertEqual(
+                        set(definition["parameters"]["required"]),
+                        {"socketPath", "targetId", "rosMasterUri", "sceneFile"},
+                    )
+                    self.assertEqual(declared["profile"]["enum"], ["gazebo", "xsim", "physical"])
+                    continue
                 flags = args[0::2]
                 values = args[1::2]
                 self.assertEqual(len(args) % 2, 0)
@@ -166,15 +199,18 @@ class ProcessDefinitionTest(unittest.TestCase):
                 self.assertEqual(socket, {"type": "string", "fixedOnly": True})
                 self.assertEqual(
                     service["profile"],
-                    "http.v1" if path.stem == "xgc2-ros1-tools-adapter" else "grpc.v1",
+                    "http.v1" if path.stem in {"xgc2-ros1-tools-adapter", "xgc2-ros1-scene-adapter"} else "grpc.v1",
                 )
+                if path.stem == "xgc2-ros1-scene-adapter":
+                    self.assertEqual(service["service"], "xgc2.scene.authoring")
+                    self.assertEqual(service["api_version"], "1")
 
     def test_stopping_asks_the_server_to_drain_before_the_signal(self):
         for path in DEFINITION_FILES:
             with self.subTest(definition=path.stem):
                 stop = load(path)["stop"]
                 self.assertGreater(stop["graceMs"], 0)
-                if path.stem == "xgc2-ros1-tools-adapter":
+                if path.stem in {"xgc2-ros1-tools-adapter", "xgc2-ros1-scene-adapter"}:
                     self.assertNotIn("rpc", stop)
                 else:
                     self.assertEqual(stop["rpc"], "Shutdown")

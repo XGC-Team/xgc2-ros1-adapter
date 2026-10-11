@@ -51,6 +51,21 @@ if(catkin_FOUND)
 endif()
 
 include(cmake/lidar_control.cmake)
+
+if(catkin_FOUND)
+  if(TARGET xgc2_scene_adapter)
+    install(TARGETS xgc2_scene_adapter
+      RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+  endif()
+  foreach(cli_source ${CLI_SOURCES})
+    get_filename_component(cli_name ${cli_source} NAME_WE)
+    install(TARGETS ${cli_name}
+      RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+  endforeach()
+  install(FILES process/xgc2-ros1-scene-adapter.json
+    DESTINATION "/usr/share/xgc2/process-definitions")
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)

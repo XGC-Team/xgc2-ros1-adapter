@@ -2,18 +2,29 @@
 <package format="2">
   <name>xgc_scene_ros1_adapter</name>
   <version>0.1.0</version>
-  <description>Scene adapter: the scene authoring service, its Gazebo application and the Gazebo lidar fleet, run-owned.</description>
+  <description>Run-owned scene authoring, visualization and simulator application over XRPC.</description>
   <maintainer email="apt@example.com">XGC2</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <depend>roscpp</depend>
+  <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>xgc2_geometry_msgs</depend>
+
+  <build_depend version_gte="0.2.0">libxgc2-xrpc-dev</build_depend>
+  <exec_depend version_gte="0.2.0">libxgc2-xrpc2</exec_depend>
   <depend>nlohmann-json3-dev</depend>
   <depend>libyaml-cpp-dev</depend>
   <depend>libssl-dev</depend>
   <depend version_gte="0.6.0">libxgc2-math-dev</depend>
   <depend version_gte="0.2.0">libxgc2-xrpc-dev</depend>
   <depend>libjsoncpp-dev</depend>
+  <exec_depend>python3</exec_depend>
 
-  <test_depend>libgtest-dev</test_depend>
+  <test_depend>rostest</test_depend>
+  <test_depend>gtest</test_depend>
 </package>

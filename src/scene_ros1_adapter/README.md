@@ -1,17 +1,25 @@
 # xgc_scene_ros1_adapter
 
-The scene adapter of the ROS1 services: the scene authoring service (`xgc2.scene.authoring`, http.v1), its Gazebo application and the
-Gazebo lidar fleet (`xgc2.sensor.lidar`), started and ended by the Run. Design record: specs/scene-interfaces.md section 1.
+The Run-owned scene authoring adapter exposes `xgc2.scene.authoring` v1 over
+XRPC `http.v1` on a Unix socket. `xgc2_scene_adapter` publishes scene snapshots,
+state, envelope JSON, markers and TF. Profiles are `gazebo`, `xsim` and `physical`.
+The finite tools are `xgc2-scene-assemble` and `xgc2-scene-prepare`.
 
-| Library | Content | Needs |
-| --- | --- | --- |
-| `xgc_scene_core` (`src/core`, `include/xgc_scene`) | document model and validation, YAML/JSON primitives, motion, assembly, generation, Gazebo preparation, the store | nlohmann-json, yaml-cpp, OpenSSL, `xgc2_math::scene` |
-| `xgc_scene_lidar` (`src/lidar`, `include/xgc_scene/lidar`) | the Gazebo lidar fleet engine: manifest, scene cache, scheduler, bounded pool, reused buffers | nlohmann-json, `xgc2_math::scene` |
+[Scene adapter](../../docs/scene-adapter.md) documents the profiles, private ROS
+parameters, topics, TF and CLI usage. The Debian package is
+`ros-noetic-xgc2-scene-adapter`; its process definition is
+`process/xgc2-ros1-scene-adapter.json`.
 
-Both libraries are ROS-free. ROS-bound code (service shell, publishers, subscriptions) is added next to them. Sources (`src/core/*.cpp`,
-`src/lidar/*.cpp`) and tests (`test/core/*_test.cpp`, `test/lidar/*_test.cpp`) are globbed. The golden corpus of the Python scene service
-(`test/scene_golden` at the repository root) is the reference of the core tests.
+`xgc_scene_core` (`src/core`, `include/xgc_scene`) is the ROS-free static authoring
+library: document validation, YAML/JSON, motion, assembly, generation, preparation
+and persistence. It uses nlohmann-json, yaml-cpp, OpenSSL and `xgc2_math::scene`
+(Math 0.6.0 or newer). Simulators own their sensor implementations.
+
+Core sources (`src/core/*.cpp`) and tests (`test/core/*_test.cpp`) are globbed.
+The golden corpus (`test/scene_golden` at the repository root) is the reference.
 
 ```sh
-cmake -S src/scene_ros1_adapter -B build -DCMAKE_PREFIX_PATH=<prefix with xgc2_math 0.6.0> && cmake --build build -j2 && ctest --test-dir build
+cmake -S src/scene_ros1_adapter -B build -DCMAKE_PREFIX_PATH=/path/to/math-prefix
+cmake --build build -j2
+(cd build && ctest --output-on-failure -j2)
 ```

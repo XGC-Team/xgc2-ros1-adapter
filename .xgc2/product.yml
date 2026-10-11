@@ -1,9 +1,9 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.6.0-1
+version: 0.7.0-1
 kind: ros1-apt
-summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum and typed ROS1 Tools.
+summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and scene authoring.
 groups:
 - ros1
 - communication
@@ -16,17 +16,20 @@ ros:
   - xgc_px4_multirotor_ros1_adapter
   - xgc_ugv_ros1_adapter
   - xgc_ros1_tools_adapter
+  - xgc_scene_ros1_adapter
 apt:
   distribution: focal
   install:
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
+  - ros-noetic-xgc2-scene-adapter
   packages:
   - ros-noetic-xgc2-ros1-adapter-common
   - ros-noetic-xgc2-px4-multirotor-adapter
   - ros-noetic-xgc2-ugv-adapter
   - ros-noetic-xgc2-ros1-tools-adapter
+  - ros-noetic-xgc2-scene-adapter
   depends:
   - libgrpc++1
   - libxgc2-xrpc-grpc2 (>= 0.2.0-1~focal)
@@ -37,6 +40,12 @@ apt:
   - ros-noetic-sensor-msgs
   - ros-noetic-std-msgs
   - libxgc2-xrpc2 (>= 0.2.0-1~focal)
+  - libxgc2-math-dev (>= 0.6.0-1~focal)
+  - libyaml-cpp0.6
+  - libssl1.1
+  - ros-noetic-tf2-ros
+  - ros-noetic-visualization-msgs
+  - ros-noetic-xgc2-geometry-msgs
   - python3
   - ros-noetic-rosbag
   - ros-noetic-rospy
@@ -49,7 +58,7 @@ usage:
   install: 'sudo apt update
 
     sudo apt install ros-noetic-xgc2-px4-multirotor-adapter ros-noetic-xgc2-ugv-adapter
-    ros-noetic-xgc2-ros1-tools-adapter
+    ros-noetic-xgc2-ros1-tools-adapter ros-noetic-xgc2-scene-adapter
 
     '
   smoke_test: 'rospack find xgc_ros1_adapter_common
@@ -59,6 +68,8 @@ usage:
     rospack find xgc_ugv_ros1_adapter
 
     rospack find xgc_ros1_tools_adapter
+
+    rospack find xgc_scene_ros1_adapter
 
     test -e /opt/ros/noetic/lib/libxgc2_robot_server.so.0
 
@@ -72,6 +83,14 @@ usage:
 
     test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_recorder
 
+    test -x /opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2_scene_adapter
+
+    test -x /opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2-scene-assemble
+
+    test -x /opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2-scene-prepare
+
+    /opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2-scene-prepare --help
+
     test -f /usr/share/xgc2/process-definitions/xgc2-px4-multirotor-ros1-adapter.json
 
     test -f /usr/share/xgc2/process-definitions/xgc2-scout-mini-ros1-adapter.json
@@ -79,6 +98,8 @@ usage:
     test -f /usr/share/xgc2/process-definitions/xgc2-mecanum-ugv-ros1-adapter.json
 
     test -f /usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json
+
+    test -f /usr/share/xgc2/process-definitions/xgc2-ros1-scene-adapter.json
 
     test -f /usr/share/xgc2/robot-adapter-profiles/xgc2-px4-multirotor-ros1-adapter.json
 
@@ -107,6 +128,9 @@ ownership:
   - /opt/ros/noetic/share/xgc_ros1_tools_adapter
   - /opt/ros/noetic/lib/xgc_ros1_tools_adapter
   - /usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json
+  - /opt/ros/noetic/share/xgc_scene_ros1_adapter
+  - /opt/ros/noetic/lib/xgc_scene_ros1_adapter
+  - /usr/share/xgc2/process-definitions/xgc2-ros1-scene-adapter.json
 release:
   repository: XGC-Team/xgc2-ros1-adapter
   ref: master
@@ -115,8 +139,11 @@ release:
   requires:
   - xgc2-xrpc
   - xgc2-protobuf
+  - libxgc2-math-dev
   dependency_policy:
     xgc2-xrpc: rebuild
     xgc2-protobuf: rebuild
+    libxgc2-math-dev: rebuild
+    xgc2-ros-msgs: rebuild
   apt_versions:
-    focal: 0.6.0-1
+    focal: 0.7.0-1
