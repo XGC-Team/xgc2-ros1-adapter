@@ -55,6 +55,17 @@ catalogs. `.xgc2/scripts/test_robot_servers.sh` does that in the release contain
 python3 -m unittest discover -v -s test/integration -p 'test_*.py'
 ```
 
+The `long` master-outage test is skipped in this fast command. Run it with
+`XGC_TEST_LONG=1 python3 -m unittest discover -v -s test/integration -p 'test_start_order.py' -k long`.
+It holds the private master absent for 60 seconds with all type servers and Tools running,
+checks CPU time from `/proc/<pid>/stat` (less than 1.2 seconds), bounded probes and logs,
+stable threads and descriptors, then starts the master and checks a single binding.
+The installed-package release cell, `.xgc2/scripts/test_robot_servers.sh`, enables it.
+Full jitter with a 10-second ceiling averages about 18 attempts in this window; unlike
+an unjittered schedule it cannot guarantee the brief's approximate 15-attempt maximum.
+The long test allows up to 30 attempts; the fast unit test checks the exponential ceilings,
+positive waits, the 10-second cap and reset on success.
+
 Fake vehicles (`fake_robots.py`) publish the topics a profile reads, answer the services it
 calls and record what the server publishes to the vehicle; the robot's own ROS interface is
 derived from its profile (`harness.Robot`), so a change of a profile changes what is faked.
@@ -67,7 +78,7 @@ per invocation, JSON in and out.
 | `test_ugv_servers.py` (`MasterLossTest`) | The master restarted (exit 3), gone (exit 4), briefly stopped and back (the server keeps serving), silent (calls to it end within their budget, exit 4), `rosnode kill` (exit 5), a second node of the same name displacing the first (exit 5, the newer server keeps serving). |
 | `test_px4_server.py` | The same lifecycle for PX4 against fake MAVROS: robots of three profiles, arm and flight mode through the vehicle's services, a mode the profile does not allow never reaching the vehicle, the setpoint stream at the gear limit and its final zero setpoint at Shutdown, SIGTERM and removal, a command in flight during the drain (finished within the budget, or cancelled and reported uncertain), consecutive Runs, a restarted master. |
 | `test_tools_server.py` | The Tools process: discovery and the held unbound Describe with the master facts, a publish reaching a subscriber, a service call reaching a provider, consecutive Runs leaving no ROS registration behind, a restarted master (exit 3), a bound master that stays away or silent (exit 4), a brief silent outage without process restart, `rosnode kill` (exit 5). |
-| `test_start_order.py` | All three type servers and Tools started before their master: `ready:false` with the waiting reason beyond the old startup budget, held Describe released by a late master, SIGTERM during an absent or silent master wait (exit 0), changed run id with the same pid (exit 3); ApplyMembers before robot topics with missing-source health, late and restarted publishers; Tools with late and restarted subscribers and service providers. |
+| `test_start_order.py` | All three type servers and Tools started before their master: `ready:false` with the waiting reason beyond the old startup budget, held Describe released by a late master, SIGTERM during an absent or silent master wait (exit 0), changed run id with the same pid (exit 3); ApplyMembers before robot topics with waiting facts and missing-source health, late and restarted publishers; Tools with late and restarted subscribers and service providers, a subscriber connection waking a pending publish; tagged long outage with idle CPU, bounded retries/logs, stable resources, one binding and latest latched replay. |
 
 Not covered: the real vehicles' drivers (Scout SDK, MAVROS and PX4), Gazebo and xsim worlds,
 and the Core and workflow side of a Run. A Scout Mini, Mecanum or PX4 vehicle is stood in for

@@ -29,6 +29,8 @@ test -x "${devel_root}/lib/xgc_ros1_adapter_common/async_ros_services_driver"
 export XGC_TEST_DEVEL="${devel_root}"
 export XGC_TEST_INSTALL_ROOT="${ROBOT_SERVER_INSTALL_ROOT:-/}"
 export XGC_TEST_REGISTRY="${XGC2_PROTOBUF_REGISTRY_JSON:-/usr/share/xgc2-protobuf/registry/registry.json}"
+# The installed-package release cell owns the tagged 60-second outage check.
+export XGC_TEST_LONG=1
 # Hundreds of TCPROS connections with 100 robots.
 ulimit -n 4096
 # The TCPROS service client against a controlled transport fixture.
