@@ -4,6 +4,7 @@
 // binds to that one master at start, reports readiness through GET /v1/describe
 // and exits, with a status that names the reason, when the master is replaced
 // or stays unreachable.
+#include <ros/master.h>
 #include <ros/param.h>
 #include <ros/ros.h>
 #include <xgc2/xrpc/http.hpp>
@@ -32,6 +33,7 @@ constexpr int kExitFailure = 1;
 constexpr int kExitUsage = 2;
 constexpr int kExitMasterChanged = 3;
 constexpr int kExitMasterUnreachable = 4;
+constexpr int kExitRosShutdown = 5;
 
 // The master is probed once per second; unreachable for this long ends the
 // process.
@@ -361,7 +363,7 @@ private:
                             [] { return stopping.load(); });
     }
     if (!stopping.load() && !ros::ok())
-      requestStop(kExitFailure, "ROS shut this node down");
+      requestStop(kExitRosShutdown, "ROS shut this node down");
   }
   Tools &tools_;
   Describe &describe_;
@@ -424,6 +426,11 @@ int main(int argc, char **argv) {
     ros::M_string remappings;
     ros::init(remappings, node_name,
               ros::init_options::NoSigintHandler | ros::init_options::NoRosout);
+    // roscpp reads /use_sim_time from the master while it starts and retries
+    // until the master answers. Give up after the unreachable budget: the
+    // watch below then reports the master as unreachable and ends the process.
+    ros::master::setRetryTimeout(
+        ros::WallDuration(kUnreachableAfter.count() / 1000.0));
     ros::NodeHandle node;
     ros::AsyncSpinner spinner(4);
     spinner.start();
@@ -458,6 +465,8 @@ int main(int argc, char **argv) {
         server.poll(std::chrono::milliseconds(100));
         describe.expire();
       }
+      if (!ros::ok())
+        requestStop(kExitRosShutdown, "ROS shut this node down");
       stopping.store(true);
     }
     describe.release();
