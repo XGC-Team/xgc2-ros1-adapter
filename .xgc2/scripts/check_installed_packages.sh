@@ -41,7 +41,7 @@ px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 ugv_depends="$(dpkg-query -W -f='${Depends}' "${UGV_PACKAGE}")"
 grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${common_depends}"
 grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${common_depends}"
-grep -Eq '(^|, )libxgc2-xrpc-grpc1( |[(,]|$)' <<<"${common_depends}"
+grep -Eq '(^|, )libxgc2-xrpc-grpc2( |[(,]|$)' <<<"${common_depends}"
 for depends in "${common_depends}" "${px4_depends}" "${ugv_depends}"; do
   if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev|libxgc2-xrpc-(grpc-)?dev' <<<"${depends}"; then
     echo "robot type server package depends on a build-only or removed package" >&2

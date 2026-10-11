@@ -10,7 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(PkgConfig REQUIRED)
 find_package(PythonInterp 3 REQUIRED)
 find_package(Threads REQUIRED)
-find_package(XgcXrpc 0.1 REQUIRED CONFIG COMPONENTS http)
+find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS http)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 catkin_package(

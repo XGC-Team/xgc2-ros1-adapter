@@ -29,14 +29,14 @@ apt:
   - ros-noetic-xgc2-ros1-tools-adapter
   depends:
   - libgrpc++1
-  - libxgc2-xrpc-grpc1 (>= 0.1.0-1~focal)
+  - libxgc2-xrpc-grpc2 (>= 0.2.0-1~focal)
   - libc-ares2
   - ros-noetic-geometry-msgs
   - ros-noetic-mavros-msgs
   - ros-noetic-roscpp
   - ros-noetic-sensor-msgs
   - ros-noetic-std-msgs
-  - libxgc2-xrpc1 (>= 0.1.0-1~focal)
+  - libxgc2-xrpc2 (>= 0.2.0-1~focal)
   - python3
   - ros-noetic-rosbag
   - ros-noetic-rospy

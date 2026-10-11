@@ -19,7 +19,7 @@
   <exec_depend>rosbag</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>libjsoncpp1</exec_depend>
-  <exec_depend>libxgc2-xrpc1</exec_depend>
+  <exec_depend>libxgc2-xrpc2</exec_depend>
 
   <test_depend>geometry_msgs</test_depend>
   <test_depend>rostest</test_depend>
