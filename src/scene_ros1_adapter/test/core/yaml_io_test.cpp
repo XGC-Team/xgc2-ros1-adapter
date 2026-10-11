@@ -56,7 +56,7 @@ TEST(YamlIo, RejectsDuplicateAndNonstringKeysIncludingMerges) {
 }
 
 TEST(YamlIo, KeepsStablePrefixForParserDiagnostics) {
-  for (const auto& value : {"a: [", "---\na: 1\n---\nb: 2\n", "a: !!python/object {}\n", "a: &a {b: *a}\n"}) {
+  for (const auto& value : {"a: [", "---\na: 1\n---\nb: 2\n", "a: !!python/object {}\n", "a: &a {b: *a}\n", "a: =\n"}) {
     try { parseYaml(value); FAIL() << value; }
     catch (const SceneError& exception) { EXPECT_EQ(std::string(exception.what()).substr(0, 20), "Invalid scene YAML: "); }
   }
