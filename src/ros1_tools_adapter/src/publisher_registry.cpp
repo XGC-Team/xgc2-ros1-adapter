@@ -79,6 +79,55 @@ PublisherRegistry::PublisherRegistry(
   }
 }
 
+std::shared_ptr<PublisherRegistry::Entry> PublisherRegistry::select(
+    const PublisherConfiguration &configuration) {
+  auto iterator = entries_.find(configuration.topic);
+  if (iterator == entries_.end()) {
+    if (entries_.size() >= maximum_publishers_) {
+      resourceExhaustedError(
+          "publisher_capacity_exhausted",
+          "maximum cached ROS1 publishers reached; replace or stop the "
+          "Adapter instance before publishing another topic");
+    }
+    auto entry = std::make_shared<Entry>();
+    entry->message_type = configuration.message_type;
+    entry->latch = configuration.latch;
+    entry->queue_size = configuration.queue_size;
+    const std::weak_ptr<Entry> weak = entry;
+    const auto connection_changed = [weak](const ros::SingleSubscriberPublisher &) {
+      if (auto connected = weak.lock()) {
+        {
+          std::lock_guard<std::mutex> lock(connected->connection_mutex);
+          ++connected->connection_version;
+        }
+        connected->connection_changed.notify_all();
+      }
+    };
+    entry->publisher =
+        types_.advertise(node_handle_, configuration.message_type, configuration.topic,
+                         configuration.queue_size, configuration.latch, connection_changed);
+    entries_.emplace(configuration.topic, entry);
+    return entry;
+  } else {
+    const auto &entry = iterator->second;
+    if (entry->message_type != configuration.message_type ||
+        entry->latch != configuration.latch ||
+        entry->queue_size != configuration.queue_size) {
+      permanentError("publisher_configuration_conflict",
+                     "topic '" + configuration.topic +
+                         "' is already cached with a different type, latch, "
+                         "or queueSize");
+    }
+    return entry;
+  }
+}
+
+void PublisherRegistry::declare(const PublisherConfiguration &configuration) {
+  refreshMasterGeneration();
+  std::lock_guard<std::mutex> lock(mutex_);
+  select(configuration)->declared = true;
+}
+
 PublishResult PublisherRegistry::publish(const PublishRequest &request) {
   requireDispatchAllowed(request);
   refreshMasterGeneration();
@@ -94,49 +143,9 @@ PublishResult PublisherRegistry::publish(const PublishRequest &request) {
   std::shared_ptr<Entry> selected_entry;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto iterator = entries_.find(request.topic);
-    if (iterator == entries_.end()) {
-      if (entries_.size() >= maximum_publishers_) {
-        resourceExhaustedError(
-            "publisher_capacity_exhausted",
-            "maximum cached ROS1 publishers reached; replace or stop the "
-            "Adapter instance before publishing another topic");
-      }
-      auto entry = std::make_shared<Entry>();
-      entry->message_type = request.message_type;
-      entry->latch = request.latch;
-      entry->queue_size = request.queue_size;
-      const std::weak_ptr<Entry> weak = entry;
-      const auto connection_changed = [weak](const ros::SingleSubscriberPublisher &) {
-        if (auto connected = weak.lock()) {
-          {
-            std::lock_guard<std::mutex> lock(connected->connection_mutex);
-            ++connected->connection_version;
-          }
-          connected->connection_changed.notify_all();
-        }
-      };
-      entry->publisher =
-          types_.advertise(node_handle_, request.message_type, request.topic,
-                           request.queue_size, request.latch, connection_changed);
-      entry->active_calls = 1u;
-      publisher = entry->publisher;
-      selected_entry = entry;
-      entries_.emplace(request.topic, std::move(entry));
-    } else {
-      const auto &entry = iterator->second;
-      if (entry->message_type != request.message_type ||
-          entry->latch != request.latch ||
-          entry->queue_size != request.queue_size) {
-        permanentError("publisher_configuration_conflict",
-                       "topic '" + request.topic +
-                           "' is already cached with a different type, latch, "
-                           "or queueSize");
-      }
-      ++entry->active_calls;
-      publisher = entry->publisher;
-      selected_entry = entry;
-    }
+    selected_entry = select(request);
+    ++selected_entry->active_calls;
+    publisher = selected_entry->publisher;
   }
 
   bool released = false;
@@ -285,7 +294,7 @@ void PublisherRegistry::release(const std::string &topic,
         entry->native_dispatch_committed || native_dispatch_committed;
     const auto iterator = entries_.find(topic);
     if (iterator != entries_.end() && iterator->second == entry &&
-        entry->active_calls == 0u && !entry->native_dispatch_committed) {
+        entry->active_calls == 0u && !entry->native_dispatch_committed && !entry->declared) {
       removed = std::move(iterator->second);
       entries_.erase(iterator);
     }

@@ -32,6 +32,10 @@
           "rosHostname": {
             "type": "string",
             "default": ""
+          },
+          "publishers": {
+            "type": "json",
+            "default": []
           }
         },
         "required": [
@@ -57,7 +61,9 @@
           "--ros-ip",
           "${rosIp}",
           "--ros-hostname",
-          "${rosHostname}"
+          "${rosHostname}",
+          "--publishers",
+          "${publishers}"
         ]
       },
       "services": [

@@ -1088,20 +1088,31 @@ def forward(signum, _frame):
 signal.signal(signal.SIGINT, forward)
 signal.signal(signal.SIGTERM, forward)
 exit_code = 1
+recorder_ready = threading.Event()
 def start_recorder_service():
-    from xgc2_xrpc import Endpoint, Host, Runtime, ServiceRef
+    from xgc2_xrpc import Endpoint, Fault, Host, Runtime, ServiceRef
     service_ref = ServiceRef(manifest["targetId"], "xgc.recording.v1", "1",
                              os.environ["XGC_RECORDER_RUN_ID"], "http.v1",
                              Endpoint("unix", os.environ["XGC_RECORDER_SOCKET"]))
     rpc_runtime = Runtime(blocking_workers=1, max_connections=4, max_calls=4)
-    def describe(_call, _request):
+    def describe(call, _request):
+        query = re.fullmatch(r"(?:wait_ready_ms=(0|[1-9][0-9]*))?", call.query)
+        if query is None or int(query.group(1) or "0") > 30000:
+            raise Fault("invalid_argument", "wait_ready_ms must be an integer from 0 to 30000")
+        wait_ms = int(query.group(1) or "0")
+        if wait_ms:
+            recorder_ready.wait(min(wait_ms / 1000.0, call.remaining()))
+        call.check_cancelled()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
                 "ready": child is not None and child.poll() is None and manifest["firstBagObservedAt"] is not None,
-                "facts": {"path": output_prefix + ".bag"}}
+                "facts": {"path": output_prefix + ".bag", "recordingId": recording_id,
+                          "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
+                          "startedAt": manifest["recordingStartedAt"],
+                          "timeSource": manifest["recordingStartedAtEvidence"]}}
     rpc_host = Host(service_ref.endpoint.address, {("GET", "/v1/describe"): describe},
                     runtime=rpc_runtime, instance_id=service_ref.instance_id,
-                    discovery_routes={("GET", "/v1/describe")}).start()
+                    discovery_routes=("/v1/describe",)).start()
     return rpc_runtime, rpc_host
 rpc_runtime, rpc_host = start_recorder_service()
 try:
@@ -1113,6 +1124,7 @@ try:
         changed = facts.snapshot(manifest)
         if manifest["firstBagObservedAt"] is None and recorded_paths():
             manifest["firstBagObservedAt"] = facts.clock()
+            recorder_ready.set()
             changed = True
         if changed:
             write_manifest(manifest)
@@ -1133,6 +1145,7 @@ try:
         except subprocess.TimeoutExpired:
             continue
 finally:
+    recorder_ready.set()
     rpc_host.close()
     rpc_runtime.close()
     facts.finish(manifest)

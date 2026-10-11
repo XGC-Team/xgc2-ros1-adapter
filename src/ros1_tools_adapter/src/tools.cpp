@@ -310,12 +310,31 @@ bool NativeContext::operator==(const NativeContext& other) const noexcept {
 
 Tools::Tools(ros::NodeHandle node_handle,
              NativeContext native_context, std::int64_t bound_master_pid,
-             const std::atomic<long> &observed_master_pid)
+             const std::atomic<long> &observed_master_pid,
+             const std::string &publishers_json)
     : native_context_(std::move(native_context)),
       codec_(),
       types_(),
       publishers_(node_handle, types_, codec_, bound_master_pid, observed_master_pid),
-      services_(types_, codec_) {}
+      services_(types_, codec_) {
+  if (publishers_json.size() > (1u << 20))
+    permanentError("invalid_configuration", "publisher declarations exceed 1 MiB");
+  const Json::Value declarations = parseStrictJson(publishers_json, "publishers");
+  if (!declarations.isArray() || declarations.size() > 128)
+    permanentError("invalid_configuration", "publishers must be an array with at most 128 entries");
+  for (const auto &declaration : declarations) {
+    requireObject(declaration, "publisher");
+    rejectUnknownFields(declaration, {"topic", "messageType", "queueSize", "latch"});
+    PublisherConfiguration configuration;
+    configuration.topic = requiredString(declaration, "topic");
+    configuration.message_type = requiredString(declaration, "messageType");
+    validateAbsoluteRosName(configuration.topic, "topic");
+    validateRosType(configuration.message_type, "messageType");
+    configuration.queue_size = requiredUInt(declaration, "queueSize", 1, kMaximumQueueSize);
+    configuration.latch = requiredBool(declaration, "latch");
+    publishers_.declare(configuration);
+  }
+}
 
 Json::Value Tools::Publish(const std::string& raw, const CallContext& call) {
   try {

@@ -18,14 +18,17 @@
 
 namespace xgc_ros1_tools_adapter {
 
-struct PublishRequest {
+struct PublisherConfiguration {
   std::string topic;
   std::string message_type;
+  bool latch{false};
+  std::uint32_t queue_size{10};
+};
+
+struct PublishRequest : PublisherConfiguration {
   Json::Value message;
   std::uint32_t publish_count{1};
   double publish_rate_hz{1.0};
-  bool latch{false};
-  std::uint32_t queue_size{10};
   std::uint32_t wait_for_subscribers_ms{0};
   std::int64_t deadline_unix_nanos{0};
   std::function<bool()> cancellation_requested;
@@ -47,6 +50,7 @@ class PublisherRegistry {
                     std::size_t maximum_publishers = 128);
 
   PublishResult publish(const PublishRequest &request);
+  void declare(const PublisherConfiguration &configuration);
   void clear();
   std::size_t size() const;
 
@@ -58,6 +62,7 @@ class PublisherRegistry {
     ros::Publisher publisher;
     std::size_t active_calls{0};
     bool native_dispatch_committed{false};
+    bool declared{false};
     std::mutex connection_mutex;
     std::condition_variable connection_changed;
     std::uint64_t connection_version{0};
@@ -66,6 +71,7 @@ class PublisherRegistry {
   void release(const std::string &topic, const std::shared_ptr<Entry> &entry,
                bool native_dispatch_committed);
   void refreshMasterGeneration();
+  std::shared_ptr<Entry> select(const PublisherConfiguration &configuration);
 
   ros::NodeHandle node_handle_;
   TypeRegistry &types_;

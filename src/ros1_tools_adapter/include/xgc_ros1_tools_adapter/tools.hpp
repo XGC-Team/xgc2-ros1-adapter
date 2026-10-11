@@ -23,7 +23,8 @@ struct CallContext {
 class Tools {
  public:
   Tools(ros::NodeHandle node_handle, NativeContext context,
-        std::int64_t bound_master_pid, const std::atomic<long> &observed_master_pid);
+        std::int64_t bound_master_pid, const std::atomic<long> &observed_master_pid,
+        const std::string &publishers_json);
   Json::Value Publish(const std::string& input, const CallContext& call);
   Json::Value CallService(const std::string& input, const CallContext& call);
  private:

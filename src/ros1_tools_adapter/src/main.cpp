@@ -361,8 +361,9 @@ private:
 class MasterWatch {
 public:
   MasterWatch(adapter::Ros1Binding &binding, const NativeContext &context,
-              Describe &describe)
+              Describe &describe, std::string publishers_json)
       : binding_(binding), context_(context), describe_(describe),
+        publishers_json_(std::move(publishers_json)),
         thread_([this] { run(); }) {}
   ~MasterWatch() {
     stopping.store(true);
@@ -411,7 +412,7 @@ private:
       ros::AsyncSpinner spinner(4);
       spinner.start();
       observed_master_pid_.store(master.pid);
-      tools_.reset(new Tools(node, context_, master.pid, observed_master_pid_));
+      tools_.reset(new Tools(node, context_, master.pid, observed_master_pid_, publishers_json_));
       {
         std::lock_guard<std::mutex> lock(mutex_);
         workers_.reset(new Workers(*tools_));
@@ -474,6 +475,7 @@ private:
   adapter::Ros1Binding &binding_;
   const NativeContext context_;
   Describe &describe_;
+  const std::string publishers_json_;
   std::mutex mutex_;
   std::atomic<long> observed_master_pid_{0};
   std::unique_ptr<Tools> tools_;
@@ -484,7 +486,7 @@ private:
 int usage() {
   std::cerr << "usage: xgc_ros1_tools_adapter_node --socket-path PATH "
                "--target-id ID --run-id ID --node-name NAME --ros-master-uri URI "
-               "--ros-ip IP --ros-hostname HOST\n";
+               "--ros-ip IP --ros-hostname HOST --publishers JSON\n";
   return kExitUsage;
 }
 } // namespace
@@ -502,7 +504,7 @@ int main(int argc, char **argv) {
     const std::set<std::string> flags{"--socket-path", "--target-id",
                                       "--run-id",      "--node-name",
                                       "--ros-master-uri", "--ros-ip",
-                                      "--ros-hostname"};
+                                      "--ros-hostname", "--publishers"};
     for (const auto &entry : args)
       if (!flags.count(entry.first))
         throw std::invalid_argument("unknown argument " + entry.first);
@@ -575,7 +577,7 @@ int main(int argc, char **argv) {
           watch->push(std::move(request), std::move(reply));
         },
         limits, HttpIdentity{instance, {"/v1/describe"}});
-    watch.reset(new MasterWatch(binding, context, describe));
+    watch.reset(new MasterWatch(binding, context, describe, args.at("--publishers")));
     while (!stopping.load()) {
       server.poll(std::chrono::milliseconds(100));
     }
