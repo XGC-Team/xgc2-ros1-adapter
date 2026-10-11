@@ -489,8 +489,10 @@ std::string attachment(const fs::path& directory, const Json& value, bool requir
 }
 
 Json parameters(const Json& value, bool template_world) {
+  if (value.contains("chassis_robot_ids"))
+    throw SceneError("scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic");
   fields(value, {"overrideWorldPhysicsTiming", "maxStepSize", "realTimeUpdateRate", "generation",
-                 "chassis_robot_ids", "required_components", "clock_rate_hz"});
+                 "required_components", "clock_rate_hz"});
   Json result{{"overrideWorldPhysicsTiming", template_world}, {"maxStepSize", .004}, {"realTimeUpdateRate", 250}};
   result.update(value);
   const auto rate = result.value("clock_rate_hz", Json(0));
@@ -509,17 +511,15 @@ Json parameters(const Json& value, bool template_world) {
   if (!generation.is_object() || std::any_of(generation.begin(), generation.end(), [](const auto& item) { return !finite(item); }))
     throw SceneError("generation must contain finite numeric parameters");
   static const std::regex identity("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
-  for (const auto& name : {"chassis_robot_ids", "required_components"}) {
-    const auto roster = result.value(name, Json::array());
-    bool valid = roster.is_array() && roster.size() <= 16;
-    std::set<std::string> unique;
-    if (valid) for (const auto& item : roster) {
-      if (!item.is_string() || !std::regex_match(item.get_ref<const std::string&>(), identity) ||
-          !unique.insert(item.get<std::string>()).second) { valid = false; break; }
-    }
-    if (!valid) throw SceneError(std::string(name) + " must contain at most 16 unique ASCII short identifiers");
-    result[name] = roster;
+  const auto roster = result.value("required_components", Json::array({"vrpn"}));
+  bool valid = roster.is_array() && roster.size() <= 16;
+  std::set<std::string> unique;
+  if (valid) for (const auto& item : roster) {
+    if (!item.is_string() || !std::regex_match(item.get_ref<const std::string&>(), identity) ||
+        !unique.insert(item.get<std::string>()).second) { valid = false; break; }
   }
+  if (!valid) throw SceneError("required_components must contain at most 16 unique ASCII short identifiers");
+  result["required_components"] = roster;
   return result;
 }
 
@@ -646,7 +646,6 @@ Json prepare(const Json& request) {
   sdf.add(plugin, "target_id", target.get<std::string>());
   sdf.add(plugin, "resource_root", root.string());
   sdf.add(plugin, "configuration_revision", dumpJson(revision));
-  for (const auto& identity : physics.at("chassis_robot_ids")) sdf.add(plugin, "chassis_robot_id", identity.get<std::string>());
   for (const auto& identity : physics.at("required_components")) sdf.add(plugin, "required_component", identity.get<std::string>());
   sdf.add(plugin, "clock_rate_hz", dumpJson(physics.at("clock_rate_hz")));
   const auto encoded = sdf.encode();
@@ -717,6 +716,8 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   }
   const auto authored = selection.value("parameters", Json::object());
   if (!authored.is_object()) throw SceneError("Scene parameters must be an object");
+  if (authored.contains("chassis_robot_ids"))
+    throw SceneError("scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic");
   const auto physics = simulator == "gazebo" ? parameters(authored, template_world) : authored;
   auto obstacle_input = manifest.value("obstacleInput", Json());
   if (!truth(obstacle_input)) obstacle_input = Json::object();
