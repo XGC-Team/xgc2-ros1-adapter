@@ -27,7 +27,7 @@ class ToolsServerTest(MasterCase):
     def ready(self, server):
         status, headers, body = server.http.describe()
         self.assertEqual(status, 200, body)
-        status, headers, body = server.http.describe(instance=body["instance_id"], wait_ms=20000)
+        status, headers, body = server.http.describe(wait_ms=20000)
         self.assertEqual(status, 200, body)
         self.assertTrue(body["ready"], body)
         return body
@@ -47,9 +47,9 @@ class ToolsServerTest(MasterCase):
         self.assertEqual(discovered["service"], "ros1.tools")
         self.assertEqual(discovered["api_version"], "1")
         self.assertTrue(discovered["instance_id"])
-        # Holding for readiness needs the pinned instance.
+        # Core waits for readiness with an unbound GET /v1/describe query.
         started = time.monotonic()
-        status, _, body = server.http.describe(instance=discovered["instance_id"], wait_ms=20000)
+        status, _, body = server.http.describe(wait_ms=20000)
         self.assertEqual(status, 200, body)
         self.assertTrue(body["ready"], body)
         self.assertLess(time.monotonic() - started, 15)
@@ -62,7 +62,7 @@ class ToolsServerTest(MasterCase):
         self.assertEqual(facts["target_id"], "local")
         self.assertIn(server.node, self.roscore.nodes())
         # Anything else about the query is refused, a wrong instance is a conflict.
-        status, _, body = server.http.describe(instance=discovered["instance_id"], wait_ms=30001)
+        status, _, body = server.http.describe(wait_ms=30001)
         self.assertEqual(status, 400, body)
         status, _, body = server.http.describe(instance="another-instance", wait_ms=0)
         self.assertEqual(status, 409, body)
@@ -153,7 +153,7 @@ class ToolsMasterLossTest(unittest.TestCase):
         server = ToolsServer(self.workspace, self.roscore, new_run_id()).start()
         status, _, body = server.http.describe()
         self.assertEqual(status, 200, body)
-        status, _, body = server.http.describe(instance=body["instance_id"], wait_ms=20000)
+        status, _, body = server.http.describe(wait_ms=20000)
         self.assertTrue(body["ready"], body)
         return server
 
