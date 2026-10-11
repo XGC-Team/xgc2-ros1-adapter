@@ -59,9 +59,11 @@ Packages are built with catkin against the XGC2 foundation (XRPC C++17 libraries
 ```
 
 builds in the release image, runs the tests and checks the installed packages. A local
-build is `catkin_make --source src` with `XGC2_PROTOBUF_PROTO_ROOT` and
-`XGC2_PROTOBUF_REGISTRY_JSON` pointing at the protocol checkout when `xgc2-protobuf-dev`
-is not installed.
+build is `catkin_make --source src --directory <build>`; when `xgc2-protobuf-dev` is not
+installed, pass `-DXGC2_PROTOBUF_PROTO_ROOT=<proto directory>` and
+`-DXGC2_PROTOBUF_REGISTRY_JSON=<registry.json>` of the protocol checkout, and make the c-ares
+development files visible on `CMAKE_PREFIX_PATH`. [Tests](docs/testing.md) says how to run
+what the build produces.
 
 Debian packages: `ros-noetic-xgc2-ros1-adapter-common` (the shared libraries),
 `ros-noetic-xgc2-px4-multirotor-adapter`, `ros-noetic-xgc2-ugv-adapter` and
