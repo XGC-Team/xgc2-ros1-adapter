@@ -437,6 +437,21 @@ class MasterLossTest(unittest.TestCase):
         self.assertEqual(server.wait(90), EXIT_MASTER_UNREACHABLE, server.output())
         self.assertLess(time.monotonic() - started, 60)
 
+    def test_a_node_of_the_same_name_displaces_the_first(self):
+        # The master lets the newest node of a name win and tells the older one
+        # to shut down: ROS ends the node, the server exits with that status. A
+        # Run's node name carries its Run id, so only a process started again
+        # for the same Run can meet this.
+        first = self.start_server()
+        second = Server(self.workspace, self.roscore, SCOUT, new_run_id(), name=first.name).start()
+        reply = second.client.describe(wait_ms=20000)
+        self.assertTrue(reply["response"]["ready"], reply)
+        self.assertEqual(first.wait(60), EXIT_ROS_SHUTDOWN, first.output())
+        self.assertFalse(second.exited(), second.output())
+        self.assertEqual(second.client.health()["response"]["serving"], True)
+        second.signal(signal.SIGTERM)
+        self.assertEqual(second.wait(60), EXIT_OK, second.output())
+
     def test_ros_shutting_the_node_down_ends_the_server(self):
         server = self.start_server()
         import subprocess
