@@ -118,6 +118,5 @@ release:
   dependency_policy:
     xgc2-xrpc: rebuild
     xgc2-protobuf: rebuild
-    xgc2-ros-msgs: rebuild
   apt_versions:
     focal: 0.6.0-1
