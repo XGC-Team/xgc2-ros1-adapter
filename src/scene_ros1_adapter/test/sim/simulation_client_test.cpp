@@ -96,9 +96,11 @@ TEST(SimulationClient, ImmediateTerminalSuccessNeedsNoWaitAndApplyChecksRevision
 }
 
 TEST(SimulationClient, MotionUsesOnlyItsExplicitExtension) {
+  std::mutex mutex;
   std::string route;
   Json received;
   World world([&](HttpRequest request, HttpReply reply) {
+    std::lock_guard<std::mutex> lock(mutex);
     route = request.target;
     received = parseJson(request.body);
     answer(reply, Json{{"id", request.request_id}, {"state", "succeeded"}, {"result", Json::object()}});
@@ -106,6 +108,7 @@ TEST(SimulationClient, MotionUsesOnlyItsExplicitExtension) {
   SimulationClient client(world.reference, "fixture");
   EXPECT_EQ(client.motion("pause", "epoch", 2), Json::object());
   client.close();
+  std::lock_guard<std::mutex> lock(mutex);
   EXPECT_EQ(route, "/v1/extensions/scene/motion");
   EXPECT_EQ(received, (Json{{"operation", "pause"}, {"epoch", "epoch"}, {"revision", 2}, {"operation_timeout_ms", 30000}}));
 }
