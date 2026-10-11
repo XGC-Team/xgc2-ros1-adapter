@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(xgc_ros1_tools_adapter VERSION 0.5.0 LANGUAGES CXX)
+project(xgc_ros1_tools_adapter VERSION 0.6.0 LANGUAGES CXX)
 
 find_package(catkin REQUIRED COMPONENTS
   ros_babel_fish
@@ -10,7 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(PkgConfig REQUIRED)
 find_package(PythonInterp 3 REQUIRED)
 find_package(Threads REQUIRED)
-find_package(XgcXrpc 0.1 REQUIRED CONFIG)
+find_package(XgcXrpc 0.1 REQUIRED CONFIG COMPONENTS http)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 catkin_package(
