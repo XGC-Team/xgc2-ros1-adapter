@@ -37,7 +37,8 @@ explicitly.
 ```
 --socket-path PATH   Unix socket to create (its directory exists and is private)
 --run-id ID          the owning Run; every member must carry it
---node-name NAME     ROS node name; includes the Run id so two Runs never clash
+--node-name NAME     ROS node name; must include the Run id (checked) so that two
+                     Runs on one master never share a name and displace each other
 --provider TYPE      robot type: xgc2-px4-multirotor-ros1-adapter,
                      xgc2-scout-mini-ros1-adapter or xgc2-mecanum-ugv-ros1-adapter
 --target-id ID       XRPC target the service is published on
@@ -45,7 +46,9 @@ explicitly.
 [--ros-ip ADDRESS]   ROS_IP of this host
 ```
 
-Characters of `--node-name` that are not legal in a ROS name become `_`.
+Characters of `--node-name` that are not legal in a ROS name become `_`, and the Run id is
+compared with the same replacement. A name without the Run id is an invalid command line
+(exit 2).
 
 ### Exit status
 

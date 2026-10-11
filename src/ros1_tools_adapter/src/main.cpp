@@ -68,13 +68,18 @@ std::string json(const Json::Value &value) {
 }
 
 // ROS names allow letters, digits and underscores; a Run identifier may carry
-// more, so the node name keeps only those.
-std::string rosNodeName(const std::string &name) {
+// more, so a node name keeps only those.
+std::string rosNameCharacters(const std::string &name) {
   std::string result;
   for (const unsigned char character : name)
     result += std::isalnum(character) || character == '_'
                   ? static_cast<char>(character)
                   : '_';
+  return result;
+}
+
+std::string rosNodeName(const std::string &name) {
+  std::string result = rosNameCharacters(name);
   if (result.empty() || !std::isalpha(static_cast<unsigned char>(result[0])))
     result.insert(result.begin(), 'n');
   return result;
@@ -401,6 +406,11 @@ int main(int argc, char **argv) {
         !validIdentifier(args.at("--run-id")) || args.at("--node-name").empty() ||
         args.at("--node-name").size() > 128)
       throw std::invalid_argument("invalid target, run or node identity");
+    // Two Runs on one ROS master must never share a node name: the master
+    // would let the newer node displace the older one.
+    if (rosNameCharacters(args.at("--node-name"))
+            .find(rosNameCharacters(args.at("--run-id"))) == std::string::npos)
+      throw std::invalid_argument("--node-name must include the --run-id");
   } catch (const std::exception &error) {
     std::cerr << "ros1.tools: " << error.what() << '\n';
     return usage();

@@ -13,6 +13,17 @@ bool identifierCharacter(unsigned char character) {
          (character >= '0' && character <= '9') || character == '.' ||
          character == '_' || character == ':' || character == '-';
 }
+// The characters of a ROS name; everything else becomes an underscore.
+std::string RosNameCharacters(const std::string &text) {
+  std::string name;
+  for (const unsigned char character : text)
+    name += (character >= 'a' && character <= 'z') ||
+                    (character >= 'A' && character <= 'Z') ||
+                    (character >= '0' && character <= '9') || character == '_'
+                ? static_cast<char>(character)
+                : '_';
+  return name;
+}
 void requireIdentifier(const std::string &flag, const std::string &value) {
   if (!ValidReferenceId(value))
     throw std::invalid_argument(
@@ -104,6 +115,11 @@ ServerOptions ParseServerOptions(int argc, char **argv,
   requireIdentifier("--target-id", options.target_id);
   if (options.node_name.size() > 128)
     throw std::invalid_argument("--node-name must have at most 128 characters");
+  // Two Runs on one ROS master must never share a node name: the master would
+  // let the newer node displace the older one.
+  if (RosNameCharacters(options.node_name).find(RosNameCharacters(options.run_id)) ==
+      std::string::npos)
+    throw std::invalid_argument("--node-name must include the --run-id");
   if (std::find(providers.begin(), providers.end(), options.provider) ==
       providers.end())
     throw std::invalid_argument("--provider is not served by this executable: " +
@@ -121,13 +137,7 @@ std::string ServerUsage(const char *program) {
 }
 
 std::string RosNodeName(const std::string &node_name) {
-  std::string name;
-  for (const unsigned char character : node_name)
-    name += (character >= 'a' && character <= 'z') ||
-                    (character >= 'A' && character <= 'Z') ||
-                    (character >= '0' && character <= '9') || character == '_'
-                ? static_cast<char>(character)
-                : '_';
+  std::string name = RosNameCharacters(node_name);
   if (name.empty() || (name.front() >= '0' && name.front() <= '9') ||
       name.front() == '_')
     name.insert(name.begin(), 'n');

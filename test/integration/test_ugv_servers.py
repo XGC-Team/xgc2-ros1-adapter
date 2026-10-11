@@ -8,11 +8,12 @@ experiment workflow drives it.
 
 import json
 import signal
+import subprocess
 import time
 import unittest
 
 from harness import (
-    EXIT_MASTER_CHANGED, EXIT_MASTER_UNREACHABLE, EXIT_OK, EXIT_ROS_SHUTDOWN,
+    EXIT_MASTER_CHANGED, EXIT_MASTER_UNREACHABLE, EXIT_OK, EXIT_ROS_SHUTDOWN, EXIT_USAGE,
     MECANUM, SCOUT, MasterCase, Robot, Roscore, Server, Workspace,
     is_zero, motion_intent_payload, new_run_id, process_exists, registrations,
     top_name, wait_until,
@@ -66,6 +67,16 @@ class UgvServerTests:
         for topic in robot.input_topics():
             self.assertEqual(node in subscribers.get(topic, ()), subscribed,
                              "{} on {}".format(node, topic))
+
+    def test_the_node_name_has_to_carry_the_run_id(self):
+        # A name two Runs could share would let the master displace one node.
+        server = Server(self.workspace, self.roscore, self.provider, new_run_id(),
+                        name="xgc_name_without_the_run")
+        out = subprocess.run(server.command(), env=self.roscore.environment(),
+                             capture_output=True, timeout=30)
+        self.assertEqual(out.returncode, EXIT_USAGE, out.stderr)
+        self.assertIn(b"--node-name must include the --run-id", out.stderr)
+        self.assertFalse(server.socket.exists())
 
     # Describe --------------------------------------------------------------
 
@@ -454,7 +465,6 @@ class MasterLossTest(unittest.TestCase):
 
     def test_ros_shutting_the_node_down_ends_the_server(self):
         server = self.start_server()
-        import subprocess
         subprocess.check_call(["rosnode", "kill", server.node],
                               env=self.roscore.environment(), timeout=30,
                               stdout=subprocess.DEVNULL)

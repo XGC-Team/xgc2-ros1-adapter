@@ -128,6 +128,14 @@ class ToolsServerTest(MasterCase):
         # A latched topic of a ended Run is not left in the master.
         self.assertNotIn("/tools_it/latched", self.roscore.system_state()["publishers"])
 
+    def test_the_node_name_has_to_carry_the_run_id(self):
+        server = ToolsServer(self.workspace, self.roscore, new_run_id(), name="xgc_name_without_the_run")
+        out = subprocess.run(server.command(), env=self.roscore.environment(),
+                             capture_output=True, timeout=30)
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn(b"--node-name must include the --run-id", out.stderr)
+        self.assertFalse(server.socket.exists())
+
     def test_the_process_is_unusable_without_its_run_arguments(self):
         out = subprocess.run([str(ToolsServer(self.workspace, self.roscore, "x").executable),
                               "--socket-path", "/tmp/unused"], capture_output=True, timeout=30)

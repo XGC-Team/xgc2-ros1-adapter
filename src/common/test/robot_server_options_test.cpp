@@ -10,7 +10,7 @@ const std::vector<std::string> kProviders{"type-a", "type-b"};
 std::vector<std::string> complete() {
   return {"--socket-path", "/run/xgc2/sockets/type-a.sock",
           "--run-id",      "0b1f6a6e-5f31-4a4f-9d31-0e7a8f0c1d11",
-          "--node-name",   "xgc_type_a_0b1f6a6e",
+          "--node-name",   "xgc_type_a_0b1f6a6e-5f31-4a4f-9d31-0e7a8f0c1d11",
           "--provider",    "type-a",
           "--target-id",   "local",
           "--ros-master-uri", "http://127.0.0.1:11311",
@@ -30,7 +30,7 @@ TEST(ServerOptions, ParseEveryFlagOfTheRun) {
   const auto options = parseAll(complete());
   EXPECT_EQ("/run/xgc2/sockets/type-a.sock", options.socket_path);
   EXPECT_EQ("0b1f6a6e-5f31-4a4f-9d31-0e7a8f0c1d11", options.run_id);
-  EXPECT_EQ("xgc_type_a_0b1f6a6e", options.node_name);
+  EXPECT_EQ("xgc_type_a_0b1f6a6e-5f31-4a4f-9d31-0e7a8f0c1d11", options.node_name);
   EXPECT_EQ("type-a", options.provider);
   EXPECT_EQ("local", options.target_id);
   EXPECT_EQ("http://127.0.0.1:11311", options.ros_master_uri);
@@ -110,6 +110,19 @@ TEST(ServerOptions, ValidatesSocketRunAndMasterSyntax) {
     bad(11, uri);
   auto flags = complete();
   flags[11] = "http://localhost:11311/";
+  EXPECT_NO_THROW(parseAll(flags));
+}
+
+TEST(ServerOptions, TheNodeNameMustIncludeTheRunId) {
+  auto flags = complete();
+  flags[5] = "xgc_type_a"; // two Runs would share it
+  EXPECT_THROW(parseAll(flags), std::invalid_argument);
+  flags[5] = "xgc_type_a_0b1f6a6e"; // a part of the Run id is not enough
+  EXPECT_THROW(parseAll(flags), std::invalid_argument);
+  // Characters ROS does not allow in a name compare as the underscores they
+  // become.
+  flags[3] = "run:1.2";
+  flags[5] = "xgc_type_a_run_1_2";
   EXPECT_NO_THROW(parseAll(flags));
 }
 
