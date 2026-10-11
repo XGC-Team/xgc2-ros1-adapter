@@ -3,9 +3,9 @@
 One process per robot type and ROS master, started by the experiment workflow of a Run
 and ended with it. It serves every robot of that type in the Run over one gRPC service on a
 Unix socket (`xgc.robot.v1.RobotAdapterServerService`, XRPC grpc.v1, service name
-`xgc2.robot-adapter`). Core keeps no server across Runs and no server keeps state across
-Runs: a Run that starts again starts a new process, registers its robots again and gets
-fresh ROS registrations.
+`xgc2.robot-adapter`). No server outlives its Run and none keeps state from one Run to the
+next: a Run that starts again starts a new process, registers its robots again and gets fresh
+ROS registrations.
 
 ## Lifecycle
 
