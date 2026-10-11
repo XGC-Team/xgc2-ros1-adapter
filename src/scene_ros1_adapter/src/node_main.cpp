@@ -1,4 +1,7 @@
 #include "xgc_scene/node.hpp"
+#include "xgc_scene/lidar/control.hpp"
+#include "xgc_scene/lidar_ros/edge.hpp"
+#include "xgc_scene/lidar_ros/scene_tap.hpp"
 
 #include <xgc2_ros1_robot_adapter/ros1_binding.hpp>
 #include <xgc2/xrpc/unix.hpp>
@@ -9,6 +12,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <future>
 #include <mutex>
 #include <thread>
 
@@ -39,8 +43,47 @@ xgc_scene::Json parameters(ros::NodeHandle& private_node, const adapter::ServerO
 
 struct Objects {
   std::shared_ptr<xgc_scene::RosPublishers> outputs;
+  std::shared_ptr<xgc_scene::lidar_ros::SceneTap> tap;
+  std::shared_ptr<xgc_scene::lidar_ros::Edge> lidar;
   std::shared_ptr<xgc_scene::SceneNode> node;
   std::shared_ptr<xgc_scene::SimulationClient> simulation;
+};
+
+class Dispatch final : public ros::CallbackInterface {
+ public:
+  explicit Dispatch(std::function<void()> fn) : fn_(std::move(fn)) {}
+  CallResult call() override { fn_(); return Success; }
+ private:
+  std::function<void()> fn_;
+};
+
+// The authoring service's business worker waits for its command on lane 0.
+// That keeps native application, the scene tap, poses and ticks on one owner.
+class LaneAuthoring final : public xgc_scene::AuthoringNode {
+ public:
+  LaneAuthoring(std::shared_ptr<xgc_scene::SceneNode> node,
+                std::function<void(std::function<void()>)> post, std::atomic<bool>& stopping)
+      : node_(std::move(node)), post_(std::move(post)), stopping_(stopping) {}
+  bool online() const override { return node_->online(); }
+  xgc_scene::Json envelope() override { return node_->envelope(); }
+  std::optional<xgc_scene::Json> requestResult(const std::string& id) override { return node_->requestResult(id); }
+  xgc_scene::Json commandValue(const xgc_scene::Json& command) override {
+    auto result = std::make_shared<std::promise<xgc_scene::Json>>();
+    auto future = result->get_future();
+    post_([node = node_, result, command, stopping = &stopping_] {
+      try {
+        if (stopping->load()) throw xgc_scene::SceneError("Scene process is stopping");
+        result->set_value(node->commandValue(command));
+      } catch (...) { result->set_exception(std::current_exception()); }
+    });
+    while (future.wait_for(milliseconds(100)) != std::future_status::ready)
+      if (stopping_.load()) throw xgc_scene::SceneError("Scene process is stopping");
+    return future.get();
+  }
+ private:
+  std::shared_ptr<xgc_scene::SceneNode> node_;
+  std::function<void(std::function<void()>)> post_;
+  std::atomic<bool>& stopping_;
 };
 }  // namespace
 
@@ -57,7 +100,7 @@ int main(int argc, char** argv) {
       if (argument == "--help") {
         std::cout << "usage: xgc2_scene_adapter --socket-path PATH --target-id ID --run-id ID "
                      "--node-name NAME --ros-master-uri URI [--ros-ip IP] [--ros-hostname HOST] "
-                     "_scene_file:=PATH _profile:=gazebo|xsim|physical [ROS private parameters]\n";
+                     "_scene_file:=PATH _lidar_xrpc_socket:=PATH _profile:=gazebo|xsim|physical [ROS private parameters]\n";
         return adapter::kExitOk;
       }
       const auto separator = argument.find(":=");
@@ -87,6 +130,7 @@ int main(int argc, char** argv) {
   std::condition_variable changed;
   Objects objects;
   std::unique_ptr<xgc_scene::SceneService> service;
+  std::unique_ptr<xgc_scene::lidar::Control> lidar_control;
   auto stop = [&](int code, const std::string& message) {
     std::lock_guard<std::mutex> lock(stop_mutex);
     if (!stopping.exchange(true)) {
@@ -97,6 +141,7 @@ int main(int argc, char** argv) {
   };
 
   adapter::Ros1Binding binding;
+  std::unique_ptr<adapter::RosNode> ros_node;
   std::thread lifecycle;
   try {
     setenv("ROS_MASTER_URI", options.ros_master_uri.c_str(), 1);
@@ -110,21 +155,42 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signalStop);
     std::signal(SIGTERM, signalStop);
 
+    xgc_scene::lidar_ros::Parameters lidar_parameters;
+    {
+      auto budget = binding.BoundMasterCalls(seconds(5));
+      binding.Connect();
+      ros::NodeHandle private_node("~");
+      private_node.param<std::string>("profile", profile, profile);
+      lidar_parameters = xgc_scene::lidar_ros::Parameters::read(private_node, profile);
+      if (lidar_parameters.socket == options.socket_path)
+        throw xgc_scene::SceneError("Lidar parameter ~lidar_xrpc_socket must differ from ~xrpc_socket");
+      if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply lidar parameters");
+    }
+    ros_node = binding.CreateNode(0);
+    auto& handle = adapter::Ros1Handle(*ros_node);
+    auto post = [queue = handle.getCallbackQueue()](std::function<void()> fn) {
+      queue->addCallback(ros::CallbackInterfacePtr(new Dispatch(std::move(fn))));
+    };
+
     service.reset(new xgc_scene::SceneService(options.socket_path, options.target_id, profile));
     xgc2::xrpc::HttpServer server(xgc2::xrpc::UnixOptions{options.socket_path},
         [&](xgc2::xrpc::HttpRequest request, xgc2::xrpc::HttpReply reply) {
           service->handle(std::move(request), std::move(reply));
         }, xgc_scene::SceneService::limits(),
         {service->reference().at("instance_id").get<std::string>(), {"/v1/describe"}});
+    lidar_control = std::make_unique<xgc_scene::lidar::Control>(
+        lidar_parameters.socket, options.target_id, lidar_parameters.enabled, post,
+        [&](bool enabled) {
+          std::shared_ptr<xgc_scene::lidar_ros::Edge> edge;
+          { std::lock_guard<std::mutex> lock(objects_mutex); edge = objects.lidar; }
+          if (edge) edge->setEnabled(enabled);
+        }, lidar_parameters.facts(profile));
+    lidar_control->SetReady(false);
+    lidar_control->Start();
 
     lifecycle = std::thread([&] {
       std::thread callbacks;
       try {
-        {
-          auto budget = binding.BoundMasterCalls(seconds(5));
-          binding.Connect();
-          if (budget->failed()) throw xgc_scene::SceneError("ROS master did not finish node startup");
-        }
         adapter::MasterIdentity master;
         bool bound = false;
         const auto startup_deadline = steady_clock::now() + seconds(5);
@@ -138,8 +204,6 @@ int main(int argc, char** argv) {
           if (!stopping.load()) stop(adapter::kExitMasterUnreachable, "ROS master has not answered during startup");
           return;
         }
-        auto ros_node = binding.CreateNode(0);
-        auto& handle = adapter::Ros1Handle(*ros_node);
         ros::NodeHandle private_node("~");
         xgc_scene::SceneParameters config;
         {
@@ -152,26 +216,35 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> lock(objects_mutex); objects.simulation = simulation; }
         if (stopping.load()) { if (simulation) simulation->close(); return; }
         std::shared_ptr<xgc_scene::RosPublishers> outputs;
+        std::shared_ptr<xgc_scene::lidar_ros::Edge> lidar;
         {
           auto budget = binding.BoundMasterCalls(seconds(5));
           outputs = std::make_shared<xgc_scene::RosPublishers>(handle);
+          lidar = std::make_shared<xgc_scene::lidar_ros::Edge>(handle, lidar_parameters);
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not register scene outputs");
         }
+        auto tap = std::make_shared<xgc_scene::lidar_ros::SceneTap>(*outputs, lidar->engine(),
+            [] { return ros::Time::now().toNSec(); });
         auto name_space = handle.getNamespace();
         // rospy.get_namespace() includes the trailing slash; NodeHandle does
         // not. Hash the Python spelling to preserve the public TF prefix.
         if (name_space.empty() || name_space.back() != '/') name_space += '/';
-        auto node = std::make_shared<xgc_scene::SceneNode>(config, name_space, *outputs,
+        auto node = std::make_shared<xgc_scene::SceneNode>(config, name_space, *tap,
             [] { return ros::Time::now().toSec(); }, simulation);
         {
           std::lock_guard<std::mutex> lock(objects_mutex);
           objects.outputs = outputs;
+          objects.tap = tap;
+          objects.lidar = lidar;
           objects.node = node;
         }
-        if (!stopping.load()) service->ready(node, xgc_scene::Json{{"run_id", options.run_id}, {"target_id", options.target_id},
+        if (!stopping.load()) {
+          lidar_control->SetReady(true);
+          service->ready(std::make_shared<LaneAuthoring>(node, post, stopping), xgc_scene::Json{{"run_id", options.run_id}, {"target_id", options.target_id},
             {"profile", config.profile},
             {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid}, {"ros_master_run_id", master.run_id},
             {"ros_node", ros::this_node::getName()}});
+        }
         auto timer = handle.createTimer(ros::Duration(1.0 / 30.0), [node](const ros::TimerEvent&) { node->tick(); });
         callbacks = std::thread([&] {
           try {
@@ -196,10 +269,13 @@ int main(int argc, char** argv) {
           changed.wait_for(lock, seconds(1), [&] { return stopping.load(); });
         }
         if (!stopping.load()) stop(adapter::kExitRosShutdown, "ROS shut this node down");
+        lidar_control->Stop();
         timer.stop();
+        lidar->stopTimer();
       } catch (const std::exception& error) { if (!stopping.load()) stop(adapter::kExitFailure, error.what()); }
       stopping.store(true);
       changed.notify_all();
+      lidar_control->Stop();
       std::shared_ptr<xgc_scene::SimulationClient> simulation;
       { std::lock_guard<std::mutex> lock(objects_mutex); simulation = objects.simulation; }
       if (simulation) simulation->close();
@@ -210,6 +286,7 @@ int main(int argc, char** argv) {
     while (!stopping.load() && !signalled) server.poll(milliseconds(100));
     stopping.store(true);
     changed.notify_all();
+    lidar_control->Stop();
     service->stopping();
     std::shared_ptr<xgc_scene::SimulationClient> simulation;
     { std::lock_guard<std::mutex> lock(objects_mutex); simulation = objects.simulation; }
@@ -219,17 +296,33 @@ int main(int argc, char** argv) {
     service->close();
     server.drain_until(steady_clock::now() + seconds(2));
     binding.FlushPublications(milliseconds(500));
-    { auto budget = binding.BoundMasterCalls(seconds(2)); objects.node.reset(); objects.outputs.reset(); binding.Shutdown(); }
+    {
+      auto budget = binding.BoundMasterCalls(seconds(2));
+      objects.node.reset();
+      objects.tap.reset();
+      if (objects.lidar) objects.lidar->shutdown();
+      objects.lidar.reset();
+      objects.outputs.reset();
+      ros_node.reset();
+      binding.Shutdown();
+    }
     return exit_code.load();
   } catch (const std::exception& error) {
     stopping.store(true);
     changed.notify_all();
+    if (lidar_control) lidar_control->Stop();
     std::shared_ptr<xgc_scene::SimulationClient> simulation;
     { std::lock_guard<std::mutex> lock(objects_mutex); simulation = objects.simulation; }
     if (simulation) simulation->close();
     if (lifecycle.joinable()) lifecycle.join();
     if (objects.node) objects.node->shutdown();
     if (service) service->close();
+    objects.node.reset();
+    objects.tap.reset();
+    if (objects.lidar) objects.lidar->shutdown();
+    objects.lidar.reset();
+    objects.outputs.reset();
+    ros_node.reset();
     if (ros::isInitialized()) { auto budget = binding.BoundMasterCalls(seconds(2)); binding.Shutdown(); }
     std::cerr << "scene adapter: " << error.what() << '\n';
     return adapter::kExitFailure;

@@ -50,15 +50,41 @@
           },
           "profile": {
             "type": "string",
-            "enum": ["gazebo", "xsim", "physical"],
+            "enum": [
+              "gazebo",
+              "xsim",
+              "physical"
+            ],
             "default": "gazebo"
           },
           "simulationServiceRefJson": {
             "type": "string",
             "default": ""
+          },
+          "lidarSocketPath": {
+            "type": "string",
+            "fixedOnly": true
+          },
+          "lidarFleetJson": {
+            "type": "string",
+            "default": ""
+          },
+          "lidarEnabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "lidarDefaultsJson": {
+            "type": "string",
+            "default": "{}"
           }
         },
-        "required": ["socketPath", "targetId", "rosMasterUri", "sceneFile"]
+        "required": [
+          "socketPath",
+          "targetId",
+          "rosMasterUri",
+          "sceneFile",
+          "lidarSocketPath"
+        ]
       },
       "command": {
         "executable": "/opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2_scene_adapter",
@@ -75,7 +101,11 @@
           "_xrpc_socket:=${socketPath}",
           "_frozen:=${frozen}",
           "_profile:=${profile}",
-          "_simulation_service_ref_json:=${simulationServiceRefJson}"
+          "_simulation_service_ref_json:=${simulationServiceRefJson}",
+          "_lidar_xrpc_socket:=${lidarSocketPath}",
+          "_lidar_fleet_json:=${lidarFleetJson}",
+          "_lidar_enabled:=${lidarEnabled}",
+          "_lidar_defaults_json:=${lidarDefaultsJson}"
         ]
       },
       "services": [
@@ -84,6 +114,12 @@
           "api_version": "1",
           "profile": "http.v1",
           "endpointParameter": "socketPath"
+        },
+        {
+          "service": "xgc2.sensor.lidar",
+          "api_version": "1",
+          "profile": "http.v1",
+          "endpointParameter": "lidarSocketPath"
         }
       ],
       "readiness": {

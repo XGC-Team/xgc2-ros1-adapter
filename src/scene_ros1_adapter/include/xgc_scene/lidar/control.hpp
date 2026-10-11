@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 
 namespace xgc_scene::lidar {
@@ -12,7 +13,8 @@ class Control {
  public:
   Control(std::string socket, std::string target, bool initial_enabled,
           std::function<void(std::function<void()>)> post,
-          std::function<void(bool)> apply);
+          std::function<void(bool)> apply,
+          nlohmann::json facts = nlohmann::json::object());
   ~Control();
   Control(const Control&) = delete;
   Control& operator=(const Control&) = delete;

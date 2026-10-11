@@ -53,6 +53,7 @@ public:
     std::string socket, target, instance = new_instance_id();
     std::function<void(std::function<void()>)> post;
     std::function<void(bool)> apply;
+    Json::Value facts;
     std::mutex mutex;
     std::array<Operation, 128> operations;
     std::deque<std::size_t> pending;
@@ -74,11 +75,20 @@ public:
          std::string t,
          bool enabled,
          std::function<void(std::function<void()>)> executor,
-         std::function<void(bool)> fn)
+         std::function<void(bool)> fn,
+         const nlohmann::json& description_facts)
         : socket(std::move(p)), target(std::move(t)), post(std::move(executor)), apply(std::move(fn)),
           desired(enabled), applied(enabled) {
         if (target.empty() || !post || !apply)
             throw std::invalid_argument("lidar control identity and dispatcher required");
+        if (!description_facts.is_object())
+            throw std::invalid_argument("lidar control facts must be an object");
+        Json::CharReaderBuilder builder;
+        std::string failure;
+        const auto encoded = description_facts.dump();
+        std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+        if (!reader->parse(encoded.data(), encoded.data() + encoded.size(), &facts, &failure))
+            throw std::invalid_argument("invalid lidar control facts");
     }
     Json::Value Configuration() const {
         Json::Value value;
@@ -123,6 +133,7 @@ public:
         value["api_version"] = "v1";
         value["instance_id"] = instance;
         value["ready"] = ready && !stopping;
+        value["facts"] = facts;
         value["facts"]["target_id"] = target;
         return value;
     }
@@ -353,9 +364,9 @@ public:
 
 Control::Control(std::string socket, std::string target, bool enabled,
                  std::function<void(std::function<void()>)> post,
-                 std::function<void(bool)> apply)
+                 std::function<void(bool)> apply, nlohmann::json facts)
     : impl_(std::make_shared<Impl>(std::move(socket), std::move(target), enabled,
-                                   std::move(post), std::move(apply))) {}
+                                   std::move(post), std::move(apply), facts)) {}
 
 Control::~Control() {
     Stop();
