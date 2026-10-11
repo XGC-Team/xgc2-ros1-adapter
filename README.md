@@ -29,6 +29,9 @@ appear later or restart, with the latest scene replayed once per instance.
 `unsupported`; `physical` provides authoring and visualization. Simulators own their
 sensor implementations. The finite `xgc2-scene-assemble` and `xgc2-scene-prepare` tools
 provide assembly and world preparation to workflows.
+Gazebo preparation defaults `scene.parameters.required_components` to `["vrpn"]`;
+an explicit list, including an empty list, wins. The [finite CLI documentation](docs/scene-adapter.md#finite-cli-usage)
+also describes the error for the removed chassis roster parameter.
 
 ## Documents
 

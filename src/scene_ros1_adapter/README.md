@@ -5,6 +5,9 @@ XRPC `http.v1` on a Unix socket and `xgc2.sensor.lidar` v1 on a second required
 socket (`~lidar_xrpc_socket`). `xgc2_scene_adapter` publishes scene snapshots,
 state, envelope JSON, markers and TF. Profiles are `gazebo`, `xsim` and `physical`.
 The finite tools are `xgc2-scene-assemble` and `xgc2-scene-prepare`.
+Gazebo preparation defaults `required_components` to `["vrpn"]`; explicit lists,
+including an empty list, win. The removed chassis roster parameter is rejected
+with the error documented in the [CLI usage](../../docs/scene-adapter.md#finite-cli-usage).
 The Gazebo profile hosts the CPU fleet; `xsim` and `physical` host an empty lidar
 service. Both services answer unbound readiness discovery before the ROS master
 starts, report `ros_master: "waiting"` and wait without a startup deadline.

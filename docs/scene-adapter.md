@@ -246,6 +246,22 @@ To materialize a Gazebo world, add `--prepare-world --socket-path PATH --target-
 and the workspace root is an existing directory granted by the provider. Preparation
 writes only inside that grant. `xgc2-scene-prepare --help` lists the arguments.
 
+Core passes the authored `scene.parameters` unchanged. Gazebo preparation defaults
+`required_components` to `["vrpn"]` when that key is absent: the native world always
+attaches VRPN. The prepared native plugin contains one
+`<required_component>vrpn</required_component>`, and the JSON receipt reports the
+effective list in `parameters.required_components`. An explicit list wins,
+including `[]`, which emits no required-component elements, or a list containing
+another component.
+
+The Gazebo chassis HOLD roster is dynamic. The removed `chassis_robot_ids` scene
+parameter is rejected whenever present, including empty or null values. The CLI
+exits 1, writes no stdout and emits this one line on stderr:
+
+```text
+scene_prepare: scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic
+```
+
 ## Tests
 
 The golden corpus in `test/scene_golden` is the behavioral reference. Core sources
