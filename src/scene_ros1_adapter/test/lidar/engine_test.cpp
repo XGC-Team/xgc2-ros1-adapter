@@ -398,3 +398,33 @@ TEST(Engine, LegacyUnsensedNeighborsAndSceneReplacementMidRun) {
   EXPECT_EQ(1u, engine.tick(second + 3 * second / 10));
   EXPECT_GT(sink.points[0].back().count, sink.points[0].front().count);
 }
+
+TEST(Engine, NanosecondFreshnessAtLargeAbsoluteSimulationTime) {
+  constexpr std::int64_t now = 1000000000000000000;
+  Capture sink(1);
+  Engine engine(roster(), sink);
+  engine.setScene({}, 1);
+  engine.setDemand(0, true);
+  engine.setBodyPose(0, pose(), now);
+  engine.setBodyPose(1, pose(3), now + 1);
+  EXPECT_EQ(0u, engine.tick(now));
+  engine.setBodyPose(1, pose(3), now - second / 2 - 1);
+  EXPECT_EQ(0u, engine.tick(now));
+  engine.setBodyPose(1, pose(3), now - second / 2);
+  ASSERT_EQ(1u, engine.tick(now));
+  EXPECT_EQ(now, sink.points[0].back().stamp);
+}
+
+TEST(Engine, ThreadOverrideIsBoundedAndInvalidOptionsAreRefused) {
+  Capture sink(2);
+  EngineOptions options;
+  options.worker_threads = 100;
+  Engine bounded(fleet(2), sink, options);
+  EXPECT_EQ(2u, bounded.threads());
+  options.pose_timeout = 0;
+  EXPECT_THROW(Engine(fleet(2), sink, options), std::invalid_argument);
+  options.pose_timeout = 0.5;
+  options.vehicle_bodies = true;
+  options.vehicle_body_radius = 0;
+  EXPECT_THROW(Engine(fleet(2), sink, options), std::invalid_argument);
+}

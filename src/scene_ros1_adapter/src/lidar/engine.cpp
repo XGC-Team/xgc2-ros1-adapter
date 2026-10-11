@@ -183,8 +183,11 @@ bool Engine::setBodyPose(std::size_t body, const xgc2_math::Pose3 &pose,
 }
 
 bool Engine::fresh(std::int64_t stamp, std::int64_t now) const {
-  return freshObservationTime(static_cast<double>(stamp) * 1e-9,
-                              static_cast<double>(now) * 1e-9,
+  if (stamp < 0 || now < stamp)
+    return false;
+  // Subtract in nanoseconds before converting to Math's seconds contract:
+  // large absolute clock values must not round a future sample into the past.
+  return freshObservationTime(0.0, static_cast<double>(now - stamp) * 1e-9,
                               options_.pose_timeout);
 }
 
@@ -284,35 +287,49 @@ void Engine::scan(std::size_t sensor) {
       lidars_[sensor]->config().mode == SensorConfig::kPenetrating) {
     count = lidars_[sensor]->scanInto(p.position, q, others, false, &points);
   } else {
-    auto &scan = beam_scans_[sensor];
+    auto &scan = beam_scans_[sensor].scan;
     lidars_[sensor]->scanBeamsInto(p.position, q, others, &scan);
+    // Byte writes can alias scan storage from the compiler's point of view.
+    // Local headers avoid reloading origins and pointers for every record.
+    const auto beam_count = scan.size();
+    const Eigen::Vector3d origin = scan.origin;
+    const auto *directions = scan.direction.data();
+    const auto *ranges = scan.range.data();
+    const auto *hits = scan.hit.data();
     count = static_cast<std::size_t>(
         std::count(scan.hit.begin(), scan.hit.end(), std::uint8_t{1}));
     points.resize(12 * count);
-    auto &beams = beams_[sensor];
-    beams.resize(32 * scan.size());
+    auto *point_bytes = points.data();
     std::size_t hit = 0;
-    for (std::size_t i = 0; i < scan.size(); ++i) {
-      if (scan.hit[i])
-        packPoint(scan.point(i), points.data() + 12 * hit++);
-      const auto &d = scan.direction[i];
-      const float record[8] = {static_cast<float>(scan.origin.x()),
-                               static_cast<float>(scan.origin.y()),
-                               static_cast<float>(scan.origin.z()),
+    for (std::size_t i = 0; i < beam_count; ++i)
+      if (hits[i])
+        packPoint(origin + ranges[i] * directions[i], point_bytes + 12 * hit++);
+    sink_.onPoints(sensor, {points.data(), count, stamps_[sensor], 12,
+                            scenes_.revision()});
+    auto &beams = beams_[sensor];
+    beams.resize(32 * beam_count);
+    auto *beam_bytes = beams.data();
+    const float ox = static_cast<float>(origin.x());
+    const float oy = static_cast<float>(origin.y());
+    const float oz = static_cast<float>(origin.z());
+    for (std::size_t i = 0; i < beam_count; ++i) {
+      const auto &d = directions[i];
+      const float record[8] = {ox,
+                               oy,
+                               oz,
                                static_cast<float>(d.x()),
                                static_cast<float>(d.y()),
                                static_cast<float>(d.z()),
-                               static_cast<float>(scan.range[i]),
-                               static_cast<float>(scan.hit[i])};
-      std::memcpy(beams.data() + 32 * i, record, sizeof record);
+                               static_cast<float>(ranges[i]),
+                               static_cast<float>(hits[i])};
+      std::memcpy(beam_bytes + 32 * i, record, sizeof record);
     }
+    sink_.onBeams(sensor, {beams.data(), beam_count, stamps_[sensor], 32,
+                           scenes_.revision()});
+    return;
   }
   sink_.onPoints(
       sensor, {points.data(), count, stamps_[sensor], 12, scenes_.revision()});
-  if (manifest_.robots[sensor].publish_beams &&
-      lidars_[sensor]->config().mode != SensorConfig::kPenetrating)
-    sink_.onBeams(sensor, {beams_[sensor].data(), beam_scans_[sensor].size(),
-                           stamps_[sensor], 32, scenes_.revision()});
 }
 
 } // namespace xgc_scene::lidar

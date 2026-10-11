@@ -102,7 +102,12 @@ private:
   std::vector<std::optional<xgc2_math::scene::WorldLidar>> lidars_;
   std::vector<std::size_t> policies_, body_point_bounds_;
   std::vector<std::vector<std::uint8_t>> points_, beams_;
-  std::vector<xgc2_math::scene::BeamScan> beam_scans_;
+  // Math updates four vector end pointers for every beam. Adjacent sensors
+  // must not write those headers on the same cache line from different workers.
+  struct alignas(64) SensorBeams {
+    xgc2_math::scene::BeamScan scan;
+  };
+  std::vector<SensorBeams> beam_scans_;
   std::vector<std::vector<xgc2_math::scene::VehicleBody>> others_;
 
   // Hot fields are separate contiguous arrays; tick never grows these arrays.
