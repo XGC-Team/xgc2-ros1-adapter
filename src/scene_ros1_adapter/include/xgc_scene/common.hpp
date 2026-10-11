@@ -5,10 +5,12 @@
 #include <cstddef>
 #include <stdexcept>
 
+#include "xgc_scene/ordered_object.hpp"
+
 namespace xgc_scene {
 
 // The document model: the same shapes as the dicts of the Python scene runtime, kept as JSON values.
-using Json = nlohmann::json;
+using Json = nlohmann::basic_json<OrderedObject>;
 
 // Every validation and command failure of the authoring core; the text is the wire-visible error message.
 class SceneError : public std::runtime_error {
