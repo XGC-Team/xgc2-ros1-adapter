@@ -48,7 +48,7 @@ target_compile_options(${PROJECT_NAME}_node PRIVATE
   -Wall -Wextra -Wpedantic -Werror
 )
 target_link_libraries(${PROJECT_NAME}_node
-  xgc2_robot_server_ros1 ${PROJECT_NAME}_core XgcXrpc::http)
+  ${PROJECT_NAME}_core XgcXrpc::http)
 
 add_executable(${PROJECT_NAME}_service_helper src/service_helper_main.cpp)
 target_compile_features(${PROJECT_NAME}_service_helper PUBLIC cxx_std_17)
