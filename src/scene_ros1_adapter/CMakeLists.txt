@@ -42,6 +42,14 @@ if(CORE_SOURCES)
   endforeach()
 endif()
 
+# ---- ROS-bound parts: they need catkin and build only inside a catkin workspace; plain CMake builds skip them ----
+if(catkin_FOUND)
+  # --- service and process (package sa-service) ---
+
+  # --- ROS outputs and the simulation client (package sa-ros) ---
+
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
