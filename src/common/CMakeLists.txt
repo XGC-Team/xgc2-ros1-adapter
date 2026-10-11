@@ -95,13 +95,15 @@ add_library(xgc2_robot_server SHARED
 )
 set_target_properties(xgc2_robot_server PROPERTIES VERSION ${PROJECT_VERSION}
                       SOVERSION 0)
+# The generated code is the pinned protocol, not ours to lint: its directory is
+# a system include.
 target_include_directories(xgc2_robot_server
-  PUBLIC include "${proto_dir}"
+  PUBLIC include
   PRIVATE ${GRPC_INCLUDE_DIRS})
+target_include_directories(xgc2_robot_server SYSTEM PUBLIC "${proto_dir}")
 target_link_libraries(xgc2_robot_server
   PUBLIC protobuf::libprotobuf Threads::Threads
   PRIVATE XgcXrpc::grpc nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
-# The generated code is the pinned protocol, not ours to lint.
 set_source_files_properties(${protocol_sources} "${grpc_source}" PROPERTIES
   COMPILE_FLAGS "-Wno-array-bounds")
 
@@ -118,8 +120,9 @@ add_library(xgc2_robot_server_ros1 SHARED
 set_target_properties(xgc2_robot_server_ros1 PROPERTIES VERSION ${PROJECT_VERSION}
                       SOVERSION 0)
 target_include_directories(xgc2_robot_server_ros1
-  PUBLIC include "${proto_dir}" ${catkin_INCLUDE_DIRS}
+  PUBLIC include ${catkin_INCLUDE_DIRS}
   PRIVATE "${CARES_INCLUDE_DIR}")
+target_include_directories(xgc2_robot_server_ros1 SYSTEM PUBLIC "${proto_dir}")
 target_link_libraries(xgc2_robot_server_ros1
   PUBLIC xgc2_robot_server ${catkin_LIBRARIES}
   PRIVATE "${CARES_LIBRARY}")

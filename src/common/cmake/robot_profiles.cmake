@@ -55,9 +55,12 @@ function(xgc2_add_robot_profiles)
     VERBATIM
   )
   add_custom_target(${PROFILE_TARGET} ALL DEPENDS "${PROFILE_HEADER}" "${catalog}")
+  # The profiles are installed with the package that owns them, next to the
+  # catalog Core reads. The caller may run before catkin_package(), so the
+  # package share directory is spelled out.
   install(FILES "${catalog}" DESTINATION /usr/share/xgc2/robot-adapter-profiles)
   install(FILES ${PROFILE_PROFILES}
-    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/ros1)
+    DESTINATION share/${PROJECT_NAME}/profiles/ros1)
   install(FILES "${schema}"
-    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/profiles/schema)
+    DESTINATION share/${PROJECT_NAME}/profiles/schema)
 endfunction()
