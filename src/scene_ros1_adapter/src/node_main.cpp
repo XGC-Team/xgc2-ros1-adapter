@@ -1,4 +1,6 @@
 #include "xgc_scene/node.hpp"
+#include "peer_backoff.hpp"
+#include <xmlrpcpp/XmlRpcValue.h>
 #include "xgc_scene/lidar/control.hpp"
 #include "xgc_scene/lidar_ros/edge.hpp"
 #include "xgc_scene/lidar_ros/scene_tap.hpp"
@@ -22,6 +24,12 @@ using namespace std::chrono;
 
 volatile std::sig_atomic_t signalled = 0;
 void signalStop(int) { signalled = 1; }
+
+bool launchBoolean(const std::string& name, const std::string& text) {
+  if (text == "true" || text == "True" || text == "TRUE") return true;
+  if (text == "false" || text == "False" || text == "FALSE") return false;
+  throw xgc_scene::SceneError("Scene parameter ~" + name + " must be a boolean");
+}
 
 xgc_scene::Json parameters(ros::NodeHandle& private_node, const adapter::ServerOptions& options) {
   xgc_scene::Json values = xgc_scene::Json::object();
@@ -58,7 +66,7 @@ class Dispatch final : public ros::CallbackInterface {
 };
 
 // The authoring service's business worker waits for its command on lane 0.
-// That keeps native application, the scene tap, poses and ticks on one owner.
+// That keeps authored state, native reports, the scene tap, poses and ticks on one owner.
 class LaneAuthoring final : public xgc_scene::AuthoringNode {
  public:
   LaneAuthoring(std::shared_ptr<xgc_scene::SceneNode> node,
@@ -149,32 +157,39 @@ int main(int argc, char** argv) {
   adapter::Ros1Binding binding;
   std::unique_ptr<adapter::RosNode> ros_node;
   std::thread lifecycle;
+  std::atomic<ros::CallbackQueueInterface*> lane{nullptr};
+  std::atomic<std::uint64_t> master_attempts{0};
   try {
     setenv("ROS_MASTER_URI", options.ros_master_uri.c_str(), 1);
     if (!options.ros_ip.empty()) { setenv("ROS_IP", options.ros_ip.c_str(), 1); unsetenv("ROS_HOSTNAME"); }
     else if (!hostname.empty()) { setenv("ROS_HOSTNAME", hostname.c_str(), 1); unsetenv("ROS_IP"); }
     const auto node_name = adapter::RosNodeName(options.node_name);
     // Install ROS remappings before the common binding's idempotent Init.
-    ros::init(remappings, node_name, ros::init_options::NoSigintHandler);
+    auto transport_remappings = remappings;
+    for (auto it = transport_remappings.begin(); it != transport_remappings.end();) {
+      if (it->first.size() > 1 && it->first[0] == '_' && it->first[1] != '_') it = transport_remappings.erase(it);
+      else ++it;
+    }
+    ros::init(transport_remappings, node_name, ros::init_options::NoSigintHandler);
     binding.Init(options, node_name);
     ros::master::setRetryTimeout(ros::WallDuration(5));
     std::signal(SIGINT, signalStop);
     std::signal(SIGTERM, signalStop);
 
-    xgc_scene::lidar_ros::Parameters lidar_parameters;
-    {
-      auto budget = binding.BoundMasterCalls(seconds(5));
-      binding.Connect();
-      ros::NodeHandle private_node("~");
-      private_node.param<std::string>("profile", profile, profile);
-      lidar_parameters = xgc_scene::lidar_ros::Parameters::read(private_node, profile, session);
-      if (lidar_parameters.socket == options.socket_path)
-        throw xgc_scene::SceneError("Lidar parameter ~lidar_xrpc_socket must differ from ~xrpc_socket");
-      if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply lidar parameters");
+    xgc_scene::Json lidar_values = xgc_scene::Json::object();
+    for (const auto* key : {"lidar_xrpc_socket", "lidar_defaults_json", "lidar_enabled"}) {
+      const auto found = remappings.find(std::string("_") + key);
+      if (found == remappings.end()) continue;
+      if (std::string(key) == "lidar_enabled") {
+        lidar_values[key] = launchBoolean(key, found->second);
+      } else lidar_values[key] = found->second;
     }
-    ros_node = binding.CreateNode(0);
-    auto& handle = adapter::Ros1Handle(*ros_node);
-    auto post = [queue = handle.getCallbackQueue()](std::function<void()> fn) {
+    const auto lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session);
+    if (lidar_parameters.socket == options.socket_path)
+      throw xgc_scene::SceneError("Lidar parameter ~lidar_xrpc_socket must differ from ~xrpc_socket");
+    auto post = [&lane](std::function<void()> fn) {
+      auto* queue = lane.load();
+      if (!queue) throw xgc_scene::SceneError("ROS master is waiting");
       queue->addCallback(ros::CallbackInterfacePtr(new Dispatch(std::move(fn))));
     };
 
@@ -191,6 +206,10 @@ int main(int argc, char** argv) {
           { std::lock_guard<std::mutex> lock(objects_mutex); edge = objects.lidar; }
           if (edge) edge->setEnabled(enabled);
         }, lidar_parameters.facts(profile));
+    service->facts({{"ros_master", "waiting"}}, [&] { return xgc_scene::Json{{"master_probe_attempts", master_attempts.load()}}; });
+    auto waiting_facts = lidar_parameters.facts(profile);
+    waiting_facts["ros_master"] = "waiting";
+    lidar_control->SetFacts(waiting_facts, [&] { return xgc_scene::Json{{"master_probe_attempts", master_attempts.load()}, {"scene_ready", false}}; });
     lidar_control->SetReady(false);
     lidar_control->Start();
 
@@ -198,19 +217,45 @@ int main(int argc, char** argv) {
       std::thread callbacks;
       try {
         adapter::MasterIdentity master;
+        xgc_scene::PeerBackoff backoff;
         bool bound = false;
-        const auto startup_deadline = steady_clock::now() + seconds(5);
-        while (!stopping.load() && steady_clock::now() < startup_deadline) {
-          { auto budget = binding.BoundMasterCalls(milliseconds(500)); bound = binding.ProbeMaster(&master); }
-          if (bound) break;
+        while (!stopping.load()) {
+          XmlRpc::XmlRpcValue request, response, payload;
+          request.setSize(1);
+          request[0] = "/" + node_name;
+          ++master_attempts;
+          {
+            auto budget = binding.BoundMasterCalls(milliseconds(500));
+            bound = ros::master::execute("getPid", request, response, payload, false) &&
+                    payload.getType() == XmlRpc::XmlRpcValue::TypeInt;
+          }
+          if (bound) { backoff.success(); break; }
+          const auto delay = backoff.failed("ros_master", "XML-RPC liveness unavailable");
           std::unique_lock<std::mutex> lock(stop_mutex);
-          changed.wait_for(lock, seconds(1), [&] { return stopping.load(); });
+          changed.wait_for(lock, delay, [&] { return stopping.load(); });
         }
-        if (!bound) {
-          if (!stopping.load()) stop(adapter::kExitMasterUnreachable, "ROS master has not answered during startup");
-          return;
+        if (!bound || stopping.load()) return;
+        {
+          auto budget = binding.BoundMasterCalls(seconds(5));
+          if (!binding.ProbeMaster(&master)) throw xgc_scene::SceneError("ROS master identity unavailable after liveness");
+          binding.Connect();
+          ros_node = binding.CreateNode(0);
+          if (budget->failed()) throw xgc_scene::SceneError("ROS master registration failed");
         }
+        auto& handle = adapter::Ros1Handle(*ros_node);
+        lane.store(handle.getCallbackQueue());
         ros::NodeHandle private_node("~");
+        {
+          auto budget = binding.BoundMasterCalls(seconds(5));
+          for (const auto& entry : remappings) {
+            if (entry.first.size() < 2 || entry.first[0] != '_' || entry.first[1] == '_') continue;
+            const auto name = entry.first.substr(1);
+            if (name == "frozen" || name == "lidar_enabled") {
+              private_node.setParam(name, launchBoolean(name, entry.second));
+            } else private_node.setParam(name, entry.second);
+          }
+          if (budget->failed()) throw xgc_scene::SceneError("ROS master did not retain scene launch parameters");
+        }
         xgc_scene::SceneParameters config;
         {
           auto budget = binding.BoundMasterCalls(seconds(5));
@@ -245,11 +290,17 @@ int main(int argc, char** argv) {
           objects.node = node;
         }
         if (!stopping.load()) {
+          auto facts = lidar_parameters.facts(config.profile);
+          facts["ros_master"] = "bound";
+          lidar_control->SetFacts(facts, [lidar] { return lidar->peerFacts(); });
           lidar_control->SetReady(true);
           service->ready(std::make_shared<LaneAuthoring>(node, post, stopping), xgc_scene::Json{{"run_id", options.run_id}, {"target_id", options.target_id},
             {"profile", config.profile},
             {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid}, {"ros_master_run_id", master.run_id},
-            {"ros_node", ros::this_node::getName()}});
+            {"ros_node", ros::this_node::getName()}, {"ros_master", "bound"}});
+          service->facts({{"run_id", options.run_id}, {"target_id", options.target_id}, {"profile", config.profile},
+              {"ros_master", "bound"}, {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid},
+              {"ros_master_run_id", master.run_id}, {"ros_node", ros::this_node::getName()}}, [node] { return node->peerFacts(); });
         }
         auto timer = handle.createTimer(ros::Duration(1.0 / 30.0), [node](const ros::TimerEvent&) { node->tick(); });
         callbacks = std::thread([&] {
@@ -301,7 +352,7 @@ int main(int argc, char** argv) {
     if (objects.node) objects.node->shutdown();
     service->close();
     server.drain_until(steady_clock::now() + seconds(2));
-    binding.FlushPublications(milliseconds(500));
+    if (ros_node) binding.FlushPublications(milliseconds(500));
     {
       auto budget = binding.BoundMasterCalls(seconds(2));
       objects.node.reset();
@@ -310,7 +361,8 @@ int main(int argc, char** argv) {
       objects.lidar.reset();
       objects.outputs.reset();
       ros_node.reset();
-      binding.Shutdown();
+      if (ros_node || ros::isStarted()) binding.Shutdown();
+      else ros::shutdown();
     }
     return exit_code.load();
   } catch (const std::exception& error) {

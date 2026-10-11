@@ -6,8 +6,6 @@
 #include <iosfwd>
 #include <optional>
 
-namespace ros { class NodeHandle; }
-
 namespace xgc_scene::lidar_ros {
 
 // Called only for --session-stdin, before ROS or either service is started.
@@ -22,8 +20,6 @@ struct Parameters {
   bool have_fleet = false;
   static Parameters parse(const Json& values, const std::string& profile,
                           const std::optional<lidar::SessionInput>& session = std::nullopt);
-  static Parameters read(ros::NodeHandle& private_node, const std::string& profile,
-                         const std::optional<lidar::SessionInput>& session = std::nullopt);
   Json facts(const std::string& profile) const;
 };
 

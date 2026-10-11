@@ -98,7 +98,16 @@ class SimulationHandler(socketserver.StreamRequestHandler):
                 break
             key, value = line.split(':', 1)
             headers[key.lower()] = value.strip()
-        body = json.loads(self.rfile.read(int(headers['content-length'])))
+        text = self.rfile.read(int(headers.get('content-length', 0)))
+        body = json.loads(text) if text else None
+        if method == 'GET':
+            assert route == '/v1/describe?wait_ready_ms=30000'
+            payload = json.dumps({'service': 'xgc2.simulation', 'api_version': 'v1',
+                                  'instance_id': 'simulation-fixture', 'ready': True}).encode()
+            self.wfile.write(('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n'
+                              'X-Xrpc-Instance-ID: simulation-fixture\r\nX-Request-ID: ' + headers['x-request-id'] + '\r\n' +
+                              'Content-Length: {}\r\n\r\n'.format(len(payload))).encode() + payload)
+            return
         assert headers['x-xrpc-instance-id'] == 'simulation-fixture'
         assert method == 'POST' and route in ['/v1/extensions/scene/apply', '/v1/extensions/scene/motion']
         self.server.applying.set()
@@ -163,16 +172,14 @@ def fleet_process(args, root, node_log, namespace, source):
         wait_socket(str(path), node, unix=True)
         assert native.applying.wait(timeout=5), 'Native application did not start'
         for address in [scene_socket, path]:
-            assert not http_call(address, 'GET', '/v1/describe?wait_ready_ms=0', 'starting')['ready']
+            assert http_call(address, 'GET', '/v1/describe?wait_ready_ms=30000', 'starting')['ready']
         with ThreadPoolExecutor(max_workers=2) as calls:
             authoring = calls.submit(http_call, scene_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'scene-ready')
             lidar = calls.submit(http_call, path, 'GET', '/v1/describe?wait_ready_ms=30000', 'lidar-ready')
-            time.sleep(0.1)
-            assert not authoring.done() and not lidar.done()
-            native.release.set()
             described, lidar_described = authoring.result(timeout=5), lidar.result(timeout=5)
+            native.release.set()
         assert described['ready'] and lidar_described['ready']
-        assert lidar_described['facts'] == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 1, 'backend': 'cpu'}
+        assert {key: lidar_described['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 1, 'backend': 'cpu'}
         instance = lidar_described['instance_id']
         assert not any(topic.startswith('/lf_process/B/simple_lidar/') for topic, _ in rospy.get_published_topics())
         for robot in session['robots'][:1]:
@@ -270,7 +277,7 @@ def fleet_process(args, root, node_log, namespace, source):
                                         stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
                 assert result.returncode == 2 and '--session-stdin' in result.stdout, result.stdout
                 assert not path.exists() and not scene_socket.exists()
-        print('PASS: two sockets held unbound readiness, sampled/default roster, beams/reference, enable control, stdin/refusal errors, SIGTERM')
+        print('PASS: two sockets ready during held native apply, sampled/default roster, beams/reference, enable control, stdin/refusal errors, SIGTERM')
     finally:
         native.release.set()
         stop(node, signal.SIGTERM)
@@ -352,7 +359,7 @@ def main():
             instance = describe['instance_id']
             assert describe['facts']['run_id'] == run_id
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'empty-fleet')
-            assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'physical', 'sensors': 0, 'backend': 'none'}
+            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'physical', 'sensors': 0, 'backend': 'none'}
             # Subscribe after startup to prove that definition outputs latch.
             for name, message_type in [('snapshot', SceneSnapshot), ('state', SceneState),
                                        ('document', String), ('markers', MarkerArray)]:
@@ -409,7 +416,7 @@ def main():
             node.stdin.close()
             wait_socket(str(lidar_socket), node, unix=True)
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'xsim-fleet')
-            assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}
+            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}
             assert not any(topic.startswith('/lf_absent/simple_lidar/') for topic, _ in rospy.get_published_topics())
             stop(node, signal.SIGTERM)
             assert node.returncode == 0 and not lidar_socket.exists()

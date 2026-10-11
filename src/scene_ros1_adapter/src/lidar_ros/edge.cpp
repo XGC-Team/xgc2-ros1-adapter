@@ -51,7 +51,10 @@ Edge::Edge(ros::NodeHandle& handle, const Parameters& parameters) {
     reference_ = handle.advertise(options);
   }
   timer_ = handle.createTimer(ros::Duration(1.0 / std::min(rate, 1000.0)),
-      [this](const ros::TimerEvent&) { engine_->tick(ros::Time::now().toNSec()); });
+      [this](const ros::TimerEvent&) {
+        engine_->tick(ros::Time::now().toNSec());
+        scene_ready_.store(engine_->sceneReady());
+      });
 }
 
 Edge::~Edge() { shutdown(); }

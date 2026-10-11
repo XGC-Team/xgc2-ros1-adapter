@@ -1,7 +1,6 @@
 #include "xgc_scene/lidar_ros/parameters.hpp"
 
 #include "xgc_scene/json_io.hpp"
-#include <ros/node_handle.h>
 
 #include <cmath>
 #include <array>
@@ -113,20 +112,6 @@ Parameters Parameters::parse(const Json& values, const std::string& profile,
   }
   result.have_fleet = !result.manifest.robots.empty() || bool(result.manifest.reference);
   return result;
-}
-
-Parameters Parameters::read(ros::NodeHandle& private_node, const std::string& profile,
-                            const std::optional<lidar::SessionInput>& session) {
-  Json values = Json::object();
-  for (const auto* key : {"lidar_xrpc_socket", "lidar_defaults_json"}) {
-    std::string value;
-    if (private_node.getParam(key, value)) values[key] = value;
-    else if (private_node.hasParam(key)) error(key, "must be a string");
-  }
-  bool enabled;
-  if (private_node.getParam("lidar_enabled", enabled)) values["lidar_enabled"] = enabled;
-  else if (private_node.hasParam("lidar_enabled")) error("lidar_enabled", "must be a boolean");
-  return parse(values, profile, session);
 }
 
 Json Parameters::facts(const std::string& profile) const {

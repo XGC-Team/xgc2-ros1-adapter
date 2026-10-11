@@ -36,18 +36,21 @@ class Outputs final : public RosOutputs {
 
 class FakeSimulation final : public Simulation {
  public:
-  Json apply(const Json& document, const std::string& epoch, std::uint64_t revision) override {
-    applies.push_back(Json{{"document", document}, {"epoch", epoch}, {"revision", revision}});
-    if (on_apply) on_apply(document, epoch, revision);
-    if (failure && revision > 1) throw SceneError("native outcome unknown");
-    return Json{{"epoch", epoch}, {"revision", revision}};
+  void update(const Json& document, const std::string& epoch, std::uint64_t revision, const Json& motion) override {
+    if (applies.empty() || applies.back().at("epoch") != epoch || applies.back().at("revision") != revision)
+      applies.push_back(Json{{"document", document}, {"epoch", epoch}, {"revision", revision}});
+    if (motion.value("operation", std::string()) != "")
+      motions.push_back(Json{{"operation", motion.at("operation")}, {"epoch", epoch}, {"revision", revision}});
+    pending = Json{{"epoch", epoch}, {"revision", revision}, {"applied", !failure},
+                   {"operational", !failure}, {"message", failure ? "native outcome unknown" : "Native scene operation completed"}};
   }
-  Json motion(const std::string& operation, const std::string& epoch, std::uint64_t revision) override {
-    motions.push_back(Json{{"operation", operation}, {"epoch", epoch}, {"revision", revision}});
-    return Json::object();
+  std::optional<Json> takeReport() override {
+    if (hold) return {};
+    auto value = std::move(pending); pending.reset(); return value;
   }
   void close() override { ++closes; }
-  SceneStore::Apply on_apply;
+  std::optional<Json> pending;
+  bool hold = false;
   std::vector<Json> applies, motions;
   bool failure = false;
   int closes = 0;
@@ -287,9 +290,9 @@ TEST(SceneNode, OnlyPublicChangesRepublishDocumentIncludingNativeFailureAndRecov
   auto edited = node.envelope().at("document").at("obstacles")[0];
   edited["name"] = "Rejected";
   const auto failed = command(node, "update", "lost", Json{{"obstacle", edited}});
-  EXPECT_EQ(failed.at("success"), false);
-  EXPECT_EQ(failed.at("revision"), 1);
-  EXPECT_EQ(failed.at("configuration").at("applied").at("known"), false);
+  EXPECT_EQ(failed.at("success"), true);
+  EXPECT_EQ(failed.at("revision"), 2);
+  EXPECT_EQ(failed.at("configuration").at("applied").at("known"), true);
   EXPECT_EQ(failed.at("configuration").at("persisted").at("revision"), 1);
   EXPECT_EQ(failed.at("synchronized"), false);
   EXPECT_EQ(failed.at("syncRetryable"), true);
@@ -326,28 +329,50 @@ TEST(SceneNode, DuplicateIdsReplayTheOriginalPublicReceiptAfterLaterEdits) {
   EXPECT_EQ(node.commandValue(conflict).at("error"), "Request ID was already used for a different operation");
 }
 
-TEST(SceneNode, NodeLockSpansNativeApplicationAndTheResultingPublications) {
+TEST(SceneNode, EditsCommitAndRemainReadableWhileNativeReportIsPending) {
   Outputs outputs;
   auto simulation = std::make_shared<FakeSimulation>();
   SceneParameters config; config.profile = "gazebo";
   SceneNode node(scene(), config, "/run/", outputs, [] { return 100.0; }, simulation);
-  std::promise<void> applying;
-  auto entered = applying.get_future();
-  std::promise<void> release;
-  auto released = release.get_future();
-  simulation->on_apply = [&](const Json&, const std::string&, std::uint64_t) { applying.set_value(); released.wait(); };
+  simulation->hold = true;
   auto edited = node.envelope().at("document").at("obstacles")[0]; edited["name"] = "Edited";
-  auto writer = std::async(std::launch::async, [&] { return command(node, "update", "edit", Json{{"obstacle", edited}}); });
-  EXPECT_EQ(entered.wait_for(seconds(1)), std::future_status::ready);
-  auto reader = std::async(std::launch::async, [&] { return node.envelope(); });
-  EXPECT_EQ(reader.wait_for(milliseconds(20)), std::future_status::timeout);
-  release.set_value();
-  ASSERT_EQ(writer.wait_for(seconds(1)), std::future_status::ready);
-  EXPECT_EQ(writer.get().at("success"), true);
-  ASSERT_EQ(reader.wait_for(seconds(1)), std::future_status::ready);
-  EXPECT_EQ(reader.get().at("revision"), outputs.snapshots.back().revision);
-  EXPECT_EQ(outputs.snapshots.back().revision, 2u);
-  EXPECT_EQ(parseJson(outputs.documents.back()).at("revision"), 2);
+  const auto receipt = command(node, "update", "edit", Json{{"obstacle", edited}});
+  EXPECT_EQ(receipt.at("success"), true);
+  EXPECT_EQ(receipt.at("synchronized"), false);
+  EXPECT_EQ(node.envelope().at("revision"), 2);
+  EXPECT_EQ(node.envelope().at("document").at("obstacles")[0].at("name"), "Edited");
+  simulation->hold = false;
+  node.tick();
+  EXPECT_EQ(node.envelope().at("synchronized"), true);
+}
+
+TEST(SceneNode, PendingMotionAndUnrestorableNativePhaseNeverAuthorizeSceneTruth) {
+  Outputs outputs;
+  auto simulation = std::make_shared<FakeSimulation>();
+  SceneParameters config; config.profile = "gazebo";
+  double now = 100;
+  SceneNode node(scene(), config, "/run/", outputs, [&] { return now; }, simulation);
+  simulation->hold = true;
+  const auto play = command(node, "play", "play");
+  EXPECT_EQ(play.at("success"), true);
+  EXPECT_EQ(play.at("synchronized"), false);
+  const auto status = node.envelope();
+  const Json report{{"consumer", "gazebo"}, {"epoch", status.at("epoch")}, {"revision", status.at("revision")},
+                    {"applied", true}, {"operational", true}, {"playing", false}, {"scene_time", 0}};
+  simulation->pending = report;
+  simulation->hold = false;
+  node.tick();
+  EXPECT_EQ(node.envelope().at("synchronized"), false);
+  EXPECT_EQ(node.envelope().at("consumers")[0].at("message"), "World host motion state is pending");
+  now += 2;
+  simulation->pending = report;
+  (*simulation->pending)["playing"] = true;
+  node.tick();
+  const auto failed = node.envelope();
+  EXPECT_EQ(failed.at("synchronized"), false);
+  EXPECT_EQ(failed.at("syncRetryable"), true);
+  EXPECT_EQ(failed.at("consumers")[0].at("applied"), false);
+  EXPECT_EQ(failed.at("consumers")[0].at("message"), "World host scene time differs; native motion seek is unavailable");
 }
 
 TEST(SceneNode, PublicReceiptsFollowStoreRetentionAndKeepFailedResults) {

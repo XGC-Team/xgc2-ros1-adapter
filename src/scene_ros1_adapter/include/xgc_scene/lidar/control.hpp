@@ -26,6 +26,7 @@ class Control {
   // The service is ready on listening by default. An owner with an additional
   // dependency can hold discovery until it has made that dependency ready.
   void SetReady(bool ready);
+  void SetFacts(nlohmann::json facts, std::function<nlohmann::json()> current = {});
 
  private:
   class Impl;

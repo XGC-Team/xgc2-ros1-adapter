@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace xgc_scene {
@@ -14,8 +15,10 @@ namespace xgc_scene {
 class Simulation {
  public:
   virtual ~Simulation() = default;
-  virtual Json apply(const Json& document, const std::string& epoch, std::uint64_t revision) = 0;
-  virtual Json motion(const std::string& operation, const std::string& epoch, std::uint64_t revision) = 0;
+  // Latest desired state only. Neither method waits for a peer or calls ROS.
+  virtual void update(const Json& document, const std::string& epoch, std::uint64_t revision,
+                      const Json& motion) = 0;
+  virtual std::optional<Json> takeReport() = 0;
   virtual void close() = 0;
 };
 
@@ -24,17 +27,14 @@ class SimulationClient final : public Simulation {
   SimulationClient(const Json& reference, const std::string& local_target,
                    std::chrono::milliseconds timeout = std::chrono::seconds(30));
   ~SimulationClient() override;
-  Json operation(const std::string& route, const Json& value, const std::string& method = "POST",
-                 std::string request_id = {});
-  Json apply(const Json& document, const std::string& epoch, std::uint64_t revision) override;
-  Json motion(const std::string& operation, const std::string& epoch, std::uint64_t revision) override;
+  void update(const Json& document, const std::string& epoch, std::uint64_t revision,
+              const Json& motion) override;
+  std::optional<Json> takeReport() override;
   void close() override;
 
  private:
-  Json call(const std::string& route, const Json& value, const std::string& method,
-            const std::string& request_id, xgc2::xrpc::Clock::time_point deadline);
-  std::chrono::milliseconds timeout_;
-  std::unique_ptr<xgc2::xrpc::HttpClient> client_;
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace xgc_scene

@@ -3,6 +3,7 @@
 #include "xgc_scene/lidar_ros/cloud.hpp"
 #include "xgc_scene/lidar_ros/parameters.hpp"
 #include <ros/node_handle.h>
+#include <atomic>
 
 namespace xgc_scene::lidar_ros {
 
@@ -14,6 +15,7 @@ class Edge final : public lidar::Sink {
   void setEnabled(bool enabled);
   void stopTimer();
   void shutdown();
+  Json peerFacts() const { return {{"scene_ready", scene_ready_.load()}}; }
   void onPoints(std::size_t sensor, lidar::CloudView cloud) override;
   void onBeams(std::size_t sensor, lidar::CloudView cloud) override;
   void onReference(lidar::CloudView cloud, lidar::ReferenceAction action) override;
@@ -31,6 +33,7 @@ class Edge final : public lidar::Sink {
   sensor_msgs::PointCloud2 reference_message_ = cloudLayout();
   std::size_t reference_demand_ = 0;
   ros::Timer timer_;
+  std::atomic<bool> scene_ready_{false};
   // Explicit shutdown joins the pool before any ROS handles or messages die.
   std::unique_ptr<lidar::Engine> engine_;
 };

@@ -37,6 +37,7 @@ class SceneService {
   // Call once after the store, ROS outputs and listening sockets are ready.
   // facts.profile, when present, is the resolved private ~profile parameter.
   void ready(std::shared_ptr<AuthoringNode> node, Json facts = Json::object());
+  void facts(Json facts, std::function<Json()> current = {});
   void stopping();
   // Completes discovery asynchronously at readiness or its deadline. Business
   // work runs off the HTTP owner; the host retains admission through Complete.

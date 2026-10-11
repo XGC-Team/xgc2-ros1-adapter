@@ -2,6 +2,7 @@
 
 #include "xgc_scene/generation.hpp"
 #include "xgc_scene/json_io.hpp"
+#include <cmath>
 
 namespace xgc_scene {
 namespace {
@@ -73,6 +74,8 @@ void SceneNode::initialize(const Json& initial, const std::optional<std::string>
       [this](const Json& document, const std::string& epoch, std::uint64_t revision) { applyScene(document, epoch, revision); },
       clock_, source_digest, parameters_.frozen, pathOption(parameters_.working_file),
       [this](const std::string& operation, const std::string& epoch, std::uint64_t revision) { applyMotion(operation, epoch, revision); }));
+  queueSimulation();
+  receiveSimulation();
   publishDefinition();
 }
 
@@ -82,20 +85,53 @@ bool SceneNode::online() const { return online_.load(); }
 void SceneNode::applyScene(const Json& document, const std::string& epoch, std::uint64_t revision) {
   if (!simulation_) return;
   outputs_.application(epoch, revision, false);
-  try {
-    applied_snapshot_ = projection_.snapshot(document, epoch, revision, clock_());
-    simulation_->apply(document, epoch, revision);
-  } catch (const SceneError& error) {
-    gazeboFailure(epoch, revision, error.what());
-    throw;
-  }
-  native_report_ = Json{{"consumer", "gazebo"}, {"epoch", epoch}, {"revision", revision},
-                        {"applied", true}, {"operational", true}, {"capability", "ok"},
-                        {"message", "Native scene operation completed"}, {"header_stamp", clock_()}};
-  outputs_.application(epoch, revision, true);
+  applied_snapshot_ = projection_.snapshot(document, epoch, revision, clock_());
+  gazeboFailure(epoch, revision, "World host application pending");
 }
-void SceneNode::applyMotion(const std::string& operation, const std::string& epoch, std::uint64_t revision) {
-  if (simulation_) simulation_->motion(operation, epoch, revision);
+void SceneNode::applyMotion(const std::string& operation, const std::string&, std::uint64_t) {
+  if (simulation_) motion_operation_ = operation;
+}
+void SceneNode::queueSimulation() {
+  if (!simulation_) return;
+  const auto value = store_->envelope();
+  gazeboFailure(value.at("epoch").get<std::string>(), value.at("revision").get<std::uint64_t>(), "World host application pending");
+  Json motion{{"playing", value.at("playing")}, {"scene_time", store_->sceneTime()}, {"operation", motion_operation_}};
+  simulation_->update(value.at("document"), value.at("epoch").get<std::string>(),
+                      value.at("revision").get<std::uint64_t>(), motion);
+  motion_operation_.clear();
+}
+void SceneNode::receiveSimulation() {
+  if (!simulation_) return;
+  auto report = simulation_->takeReport();
+  if (!report) return;
+  const auto status = store_->status();
+  if (report->value("epoch", Json()) != status.at("epoch") || report->value("revision", Json()) != status.at("revision")) return;
+  // The native wire can replay play/pause/reset, but cannot seek elapsed time.
+  // A peer that reports a different phase must never authorize lidar truth.
+  if (report->value("applied", false) && report->contains("playing") && report->at("playing") != status.at("playing")) {
+    (*report)["applied"] = false;
+    (*report)["message"] = "World host motion state is pending";
+  }
+  if (report->value("applied", false) && report->contains("scene_time") &&
+      std::abs(report->at("scene_time").get<double>() - store_->sceneTime()) > 0.1) {
+    (*report)["applied"] = false;
+    (*report)["operational"] = false;
+    (*report)["message"] = "World host scene time differs; native motion seek is unavailable";
+  }
+  if (!report->value("applied", false)) { (*report)["capability"] = ""; (*report)["operational"] = false; }
+  (*report)["header_stamp"] = clock_();
+  native_report_ = std::move(*report);
+  outputs_.application(status.at("epoch").get<std::string>(), status.at("revision").get<std::uint64_t>(),
+                       native_report_->value("applied", false));
+  publishDocument();
+}
+Json SceneNode::peerFacts() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (parameters_.profile != "gazebo") return Json::object();
+  const auto status = store_->status();
+  auto result = applicationView(status.at("epoch").get<std::string>(), status.at("revision").get<std::uint64_t>());
+  result["world_host"] = result.at("synchronized") == true ? "connected" : "waiting";
+  return result;
 }
 void SceneNode::gazeboFailure(const std::string& epoch, std::uint64_t revision, const std::string& message) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -138,6 +174,10 @@ Json SceneNode::commandValue(const Json& command) {
   if (retained && result == *retained && cached != public_receipts_.end()) {
     for (auto it = cached->second.begin(); it != cached->second.end(); ++it) result[it.key()] = it.value();
     return result;
+  }
+  if (store_->status().at("revision") != previous || !motion_operation_.empty()) {
+    queueSimulation();
+    receiveSimulation();
   }
   if (store_->status().at("revision") != previous) publishDefinition();
   else if (!command.is_object() || command.value("operation", Json()) != "get") {
@@ -208,6 +248,7 @@ void SceneNode::publishDefinition() {
 void SceneNode::tick() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (!online()) return;
+  receiveSimulation();
   const auto status = store_->status();
   projection_.tick(clock_(), store_->sceneTime(), status.at("playing").get<bool>(), outputs_);
 }

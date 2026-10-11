@@ -54,6 +54,7 @@ public:
     std::function<void(std::function<void()>)> post;
     std::function<void(bool)> apply;
     Json::Value facts;
+    std::function<nlohmann::json()> current_facts;
     std::mutex mutex;
     std::array<Operation, 128> operations;
     std::deque<std::size_t> pending;
@@ -134,6 +135,15 @@ public:
         value["instance_id"] = instance;
         value["ready"] = ready && !stopping;
         value["facts"] = facts;
+        if (current_facts) {
+            const auto encoded = current_facts().dump();
+            Json::CharReaderBuilder builder;
+            std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+            Json::Value current;
+            std::string failure;
+            if (reader->parse(encoded.data(), encoded.data() + encoded.size(), &current, &failure))
+                for (const auto& key : current.getMemberNames()) value["facts"][key] = current[key];
+        }
         value["facts"]["target_id"] = target;
         return value;
     }
@@ -429,6 +439,20 @@ void Control::SetReady(bool ready) {
     }
     if (s.host)
         s.host->wake();
+}
+
+void Control::SetFacts(nlohmann::json facts, std::function<nlohmann::json()> current) {
+    if (!facts.is_object()) throw std::invalid_argument("lidar control facts must be an object");
+    const auto encoded = facts.dump();
+    Json::CharReaderBuilder builder;
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+    Json::Value value;
+    std::string failure;
+    if (!reader->parse(encoded.data(), encoded.data() + encoded.size(), &value, &failure))
+        throw std::invalid_argument("invalid lidar control facts");
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->facts = std::move(value);
+    impl_->current_facts = std::move(current);
 }
 
 }  // namespace xgc_scene::lidar

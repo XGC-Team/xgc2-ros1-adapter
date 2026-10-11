@@ -368,12 +368,13 @@ TEST(LidarSceneTap, NativeSceneNodeReportsAreTheApplicationBoundary) {
   struct Simulation : xgc_scene::Simulation {
     lidar::Engine* engine;
     bool refuse = false;
-    Json apply(const Json&, const std::string& epoch, std::uint64_t revision) override {
-      EXPECT_FALSE(engine->sceneReady());  // Pending native apply invalidates first.
-      if (refuse) throw SceneError("refused native application");
-      return {{"epoch", epoch}, {"revision", revision}};
+    std::optional<Json> report;
+    void update(const Json&, const std::string& epoch, std::uint64_t revision, const Json&) override {
+      EXPECT_FALSE(engine->sceneReady());
+      report = Json{{"epoch", epoch}, {"revision", revision}, {"applied", !refuse},
+                    {"message", refuse ? "refused native application" : "applied"}};
     }
-    Json motion(const std::string&, const std::string&, std::uint64_t) override { return Json::object(); }
+    std::optional<Json> takeReport() override { auto result = std::move(report); report.reset(); return result; }
     void close() override {}
   };
   Outputs outputs;

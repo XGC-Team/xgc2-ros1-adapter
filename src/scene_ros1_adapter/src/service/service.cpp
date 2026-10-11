@@ -91,6 +91,7 @@ class SceneService::Impl {
     if (profile_ == "gazebo" || profile_ == "physical") capabilities.push_back("scene.motion");
     capabilities.push_back("scene.save");
     auto facts = facts_;
+    if (current_facts_) facts.update(current_facts_());
     facts["profile"] = profile_;
     facts["scene_application"] = profile_ == "gazebo" ? "native" : profile_ == "xsim" ? "unsupported" : "visualization";
     if (profile_ == "gazebo") {
@@ -98,7 +99,7 @@ class SceneService::Impl {
     }
     return Json{{"service_ref", reference_}, {"capabilities", capabilities},
                 {"limits", Json{{"document_bytes", kMaxDocumentBytes}, {"in_flight", 4}, {"request_results", 256}}},
-                {"completion", "The command returns after the world operation completes. Transport loss can leave the result unknown; writes are not replayed."},
+                {"completion", "The command commits local desired state. Native application completes asynchronously and is reported in the scene envelope; reconnect replays the current scene once per world instance."},
                 {"service", "xgc2.scene.authoring"}, {"api_version", "v1"},
                 {"instance_id", reference_.at("instance_id")}, {"ready", node_ && node_->online() && !stopping_},
                 {"facts", facts}};
@@ -124,6 +125,13 @@ class SceneService::Impl {
     std::lock_guard<std::mutex> lock(mutex_);
     stopping_ = true;
     changed_.notify_all();
+  }
+
+  void facts(Json facts, std::function<Json()> current) {
+    if (!facts.is_object()) throw SceneError("Scene facts must be an object");
+    std::lock_guard<std::mutex> lock(mutex_);
+    facts_ = std::move(facts);
+    current_facts_ = std::move(current);
   }
 
   void close() {
@@ -195,6 +203,7 @@ class SceneService::Impl {
   bool stopping_ = false, closed_ = false;
   std::shared_ptr<AuthoringNode> node_;
   Json facts_ = Json::object();
+  std::function<Json()> current_facts_;
   std::deque<Work> queue_;
   std::vector<Waiter> waiters_;
   std::thread worker_, readiness_;
@@ -298,6 +307,7 @@ xgc2::xrpc::HttpLimits SceneService::limits() {
   return limits;
 }
 void SceneService::ready(std::shared_ptr<AuthoringNode> node, Json facts) { impl_->ready(std::move(node), std::move(facts)); }
+void SceneService::facts(Json facts, std::function<Json()> current) { impl_->facts(std::move(facts), std::move(current)); }
 void SceneService::stopping() { impl_->stopping(); }
 void SceneService::handle(xgc2::xrpc::HttpRequest request, Complete complete, Cancelled cancelled) {
   impl_->handle(std::move(request), std::move(complete), std::move(cancelled));

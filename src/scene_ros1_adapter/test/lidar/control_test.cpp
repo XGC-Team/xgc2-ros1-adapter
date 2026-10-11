@@ -211,6 +211,21 @@ TEST_F(ControlTest, DescribeStatusHealthAndRoutes) {
     Error(Call("POST", route), 400, "invalid_argument", "unknown lidar operation route");
 }
 
+TEST_F(ControlTest, PeerFactsChangeWithoutChangingReadinessOrTargetIdentity) {
+  std::atomic<bool> scene_ready{false};
+  control_->SetFacts({{"profile", "gazebo"}, {"sensors", 2}, {"backend", "cpu"}},
+      [&] { return Json{{"scene_ready", scene_ready.load()}, {"target_id", "other"}}; });
+  auto describe = Json::parse(Call("GET", "/v1/describe", "", "", false).body);
+  EXPECT_EQ(describe.at("ready"), true);
+  EXPECT_EQ(describe.at("facts"), (Json{{"target_id", "fixture"}, {"profile", "gazebo"},
+      {"sensors", 2}, {"backend", "cpu"}, {"scene_ready", false}}));
+  scene_ready.store(true);
+  describe = Json::parse(Call("GET", "/v1/describe", "", "", false).body);
+  EXPECT_EQ(describe.at("ready"), true);
+  EXPECT_EQ(describe.at("facts").at("scene_ready"), true);
+  EXPECT_THROW(control_->SetFacts(Json::array()), std::invalid_argument);
+}
+
 TEST_F(ControlTest, ClosedConfigurationSchemaAndParser) {
   std::vector<std::pair<std::string, std::string>> cases = {
       {"", "invalid lidar JSON"}, {"{", "invalid lidar JSON"}, {"{} {}", "invalid lidar JSON"},

@@ -36,6 +36,7 @@ class SceneNode final : public AuthoringNode {
   Json commandValue(const Json& command) override;
   std::optional<Json> requestResult(const std::string& request_id) override;
   Json applicationView(const std::string& epoch, std::uint64_t revision);
+  Json peerFacts();
   void gazeboFailure(const std::string& epoch, std::uint64_t revision, const std::string& message);
   void publishDefinition();
   bool publishDocument();
@@ -49,12 +50,11 @@ class SceneNode final : public AuthoringNode {
   void initialize(const Json& initial, const std::optional<std::string>& source_digest);
   void applyScene(const Json& document, const std::string& epoch, std::uint64_t revision);
   void applyMotion(const std::string& operation, const std::string& epoch, std::uint64_t revision);
+  void queueSimulation();
+  void receiveSimulation();
   void addPublicView(Json& envelope);
 
-  // One node lock spans store commands, synchronous hooks, caches and the
-  // resulting publications. Store's private recursive lock is always nested
-  // beneath this lock; the store is never exposed. Hooks run on this thread,
-  // and neither publishers nor the clock may call back from another thread.
+  // Lane 0 owns store hooks and publications. Peer IO never holds this lock.
   std::recursive_mutex mutex_;
   SceneParameters parameters_;
   RosOutputs& outputs_;
@@ -67,6 +67,7 @@ class SceneNode final : public AuthoringNode {
   std::optional<Json> native_report_, published_view_;
   std::optional<xgc2_geometry_msgs::SceneSnapshot> applied_snapshot_;
   Json definition_;
+  std::string motion_operation_;
   // Store receipts contain core fields. These bounded public projections keep
   // native reports and online state at receipt time, including on replay.
   std::unordered_map<std::string, Json> public_receipts_;

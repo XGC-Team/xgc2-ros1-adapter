@@ -9,8 +9,8 @@ void SceneTap::invalidate() {
   // Engine revisions are monotonic installations, including dynamic state
   // changes and new epochs whose document revision may restart at one.
   engine_->invalidateScene(++installation_);
-  // Flush the engine's Clear before a synchronous native apply can hold this
-  // lane. The scene is unready, so this tick cannot schedule a scan.
+  // Clear the reference immediately on this lane. The scene is unready,
+  // so this tick cannot schedule a scan.
   engine_->tick(now_());
 }
 bool SceneTap::synchronized() const {
