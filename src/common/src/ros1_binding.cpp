@@ -35,7 +35,9 @@ void Ros1Binding::Connect() {
   node_->setCallbackQueue(&queues_[0]);
 }
 
-bool Ros1Binding::Running() const { return !ros::isStarted() || ros::ok(); }
+// ros::ok() is true from ros::init (Init) until ros::shutdown, which is what
+// ends the node when the master or a user (rosnode kill) asks it to.
+bool Ros1Binding::Running() const { return ros::ok(); }
 
 // getPid and getUri are the cheapest calls that name a master incarnation: a
 // restarted master has another pid even when it listens on the same URI. Both

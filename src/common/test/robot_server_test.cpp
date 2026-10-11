@@ -105,6 +105,7 @@ public:
   // ---- script
   std::atomic<long> master_pid{4242};
   std::atomic<bool> master_answers{true};
+  std::atomic<bool> master_calls_fail{false}; // BoundMasterCalls reports failure
   std::atomic<bool> running{true};
   std::atomic<bool> hold_connect{false};
   void releaseConnect() {
@@ -159,9 +160,11 @@ public:
   std::unique_ptr<MasterBudget>
   BoundMasterCalls(std::chrono::milliseconds) override {
     struct Budget final : MasterBudget {
-      bool failed() const override { return false; }
+      explicit Budget(bool failure) : failure_(failure) {}
+      bool failed() const override { return failure_; }
+      bool failure_;
     };
-    return std::unique_ptr<MasterBudget>(new Budget());
+    return std::unique_ptr<MasterBudget>(new Budget(master_calls_fail));
   }
   void FlushPublications(std::chrono::milliseconds) override {
     world_.record("flush");
@@ -881,6 +884,12 @@ TEST_F(ServerMasterWatch, ExitsWhenRosShutsTheNodeDown) {
   startReady();
   binding_->running = false;
   EXPECT_EQ(kExitRosShutdown, join());
+}
+
+TEST_F(ServerMasterWatch, AMasterThatDoesNotAcceptTheNodeFailsTheStartup) {
+  binding_->master_calls_fail = true;
+  start();
+  EXPECT_EQ(kExitMasterUnreachable, join());
 }
 
 TEST_F(ServerMasterWatch, AMasterThatNeverAnswersFailsTheStartup) {

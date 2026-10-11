@@ -822,8 +822,13 @@ private:
     {
       auto budget = binding_.BoundMasterCalls(Milliseconds(3000));
       binding_.Connect();
-      if (budget->failed())
-        throw std::runtime_error("the ROS master did not accept the node");
+      if (budget->failed()) {
+        setDetail(options_.ros_master_uri +
+                  " did not accept the registration of the node");
+        log(failure_detail());
+        requestStop(StopReason::MasterUnreachable);
+        return;
+      }
     }
     MasterIdentity identity;
     if (!binding_.ProbeMaster(&identity)) {
