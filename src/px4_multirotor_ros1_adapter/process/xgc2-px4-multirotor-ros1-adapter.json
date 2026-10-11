@@ -3,15 +3,14 @@
   "definitions": [
     {
       "id": "xgc2-px4-multirotor-ros1-adapter",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "label": "PX4 multirotor ROS1 type server",
       "description": "Serves every PX4 multirotor of one Run on one ROS master: telemetry, VRPN forwarding, arm, mode, reboot and remote-control operations. Started by the Run, ended with it.",
       "parameters": {
         "properties": {
           "socketPath": {
             "type": "string",
-            "fixedOnly": true,
-            "ownedEndpoint": "unix-socket"
+            "fixedOnly": true
           },
           "runId": {
             "type": "string",
@@ -36,8 +35,7 @@
           "runId",
           "targetId",
           "rosMasterUri"
-        ],
-        "additionalProperties": false
+        ]
       },
       "command": {
         "executable": "/opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter/xgc_px4_multirotor_ros1_adapter_node",
@@ -74,9 +72,6 @@
       "stop": {
         "graceMs": 25000,
         "rpc": "Shutdown"
-      },
-      "restart": {
-        "mode": "never"
       }
     }
   ]

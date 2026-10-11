@@ -125,14 +125,21 @@ path, executable, provider = sys.argv[1:]
 document = json.load(open(path))
 assert document["apiVersion"] == "xgc.execution.process/v1", document["apiVersion"]
 (definition,) = document["definitions"]
+assert set(definition) <= {"id", "version", "label", "description", "parameters", "setupFiles", "command", "services", "readiness", "stop", "logs"}
 assert definition["id"] == provider
 assert definition["command"]["executable"] == executable
 assert os.access(executable, os.X_OK)
 assert definition["services"][0]["service"] == "xgc2.robot-adapter"
 assert definition["services"][0]["profile"] == "grpc.v1"
+assert set(definition["services"][0]) == {"service", "api_version", "profile", "endpointParameter"}
+assert set(definition["parameters"]) <= {"properties", "required", "groups"}
+for parameter in definition["parameters"]["properties"].values():
+    assert set(parameter) <= {"type", "default", "enum", "minimum", "maximum", "sensitive", "output", "fixedOnly"}
+endpoint = definition["services"][0]["endpointParameter"]
+assert definition["parameters"]["properties"][endpoint] == {"type": "string", "fixedOnly": True}
 assert definition["readiness"]["kind"] == "describe"
 assert definition["stop"]["rpc"] == "Shutdown"
-assert definition["restart"] == {"mode": "never"}
+assert set(definition["stop"]) <= {"graceMs", "rpc"}
 args = definition["command"]["args"]
 assert args[args.index("--provider") + 1] == provider
 PYTHON
@@ -181,11 +188,17 @@ with open('/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json') as
     document = json.load(source)
 assert document['apiVersion'] == 'xgc.execution.process/v1'
 definition = document['definitions'][0]
-assert definition['id'] == 'xgc2-ros1-tools-adapter' and not definition.get('internal', False)
+assert set(definition) <= {'id', 'version', 'label', 'description', 'parameters', 'setupFiles', 'command', 'services', 'readiness', 'stop', 'logs'}
+assert definition['id'] == 'xgc2-ros1-tools-adapter'
 assert definition['services'][0]['service'] == 'ros1.tools'
 assert definition['services'][0]['profile'] == 'http.v1'
-assert definition['parameters']['properties']['socketPath']['ownedEndpoint'] == 'unix-socket'
+assert set(definition['services'][0]) == {'service', 'api_version', 'profile', 'endpointParameter'}
+assert set(definition['parameters']) <= {'properties', 'required', 'groups'}
+for parameter in definition['parameters']['properties'].values():
+    assert set(parameter) <= {'type', 'default', 'enum', 'minimum', 'maximum', 'sensitive', 'output', 'fixedOnly'}
+endpoint = definition['services'][0]['endpointParameter']
+assert definition['parameters']['properties'][endpoint] == {'type': 'string', 'fixedOnly': True}
 assert definition['readiness']['kind'] == 'describe'
-assert definition['restart'] == {'mode': 'never'}
+assert definition['stop'] == {'graceMs': 5000}
 PYTOOLS
 echo "Installed Tools package checks passed"

@@ -26,18 +26,17 @@ parameters; there is no wrapper script, probe command or environment preparation
   "apiVersion": "xgc.execution.process/v1",
   "definitions": [{
     "id": "xgc2-scout-mini-ros1-adapter",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "label": "Scout Mini ROS1 type server",
     "parameters": {
       "properties": {
-        "socketPath":   {"type": "string", "fixedOnly": true, "ownedEndpoint": "unix-socket"},
+        "socketPath":   {"type": "string", "fixedOnly": true},
         "runId":        {"type": "string", "fixedOnly": true},
         "targetId":     {"type": "string", "default": "local", "fixedOnly": true},
         "rosMasterUri": {"type": "string", "default": "http://127.0.0.1:11311"},
         "rosIp":        {"type": "string", "default": ""}
       },
-      "required": ["socketPath", "runId", "targetId", "rosMasterUri"],
-      "additionalProperties": false
+      "required": ["socketPath", "runId", "targetId", "rosMasterUri"]
     },
     "command": {
       "executable": "/opt/ros/noetic/lib/xgc_ugv_ros1_adapter/xgc_ugv_ros1_adapter_node",
@@ -49,14 +48,14 @@ parameters; there is no wrapper script, probe command or environment preparation
     "services": [{"service": "xgc2.robot-adapter", "profile": "grpc.v1",
                   "endpointParameter": "socketPath", "api_version": "v1"}],
     "readiness": {"kind": "describe", "startGraceMs": 15000, "timeoutMs": 30000},
-    "stop": {"graceMs": 25000, "rpc": "Shutdown"},
-    "restart": {"mode": "never"}
+    "stop": {"graceMs": 25000, "rpc": "Shutdown"}
   }]
 }
 ```
 
-- **Parameters.** `socketPath` is the Unix socket Core owns (`ownedEndpoint`): Core picks it in
-  the private runtime directory of the Run and the process creates it there. `runId` is the
+- **Parameters.** Core allocates the Unix socket named by the service's `endpointParameter`
+  (`socketPath`) in the private runtime directory of the Run; the process creates it there.
+  The socket parameter remains `fixedOnly`. `runId` is the
   owning Run; it is part of the ROS node name (`xgc_scout_mini_${runId}`), so the processes
   of two Runs on one ROS master never share a node name, and every robot registered with the
   process must carry the same Run id. `rosMasterUri` is the Run's ROS master, `rosIp` the
@@ -72,13 +71,14 @@ parameters; there is no wrapper script, probe command or environment preparation
   `graceMs`. The type servers need up to 23 s in the worst case (2 s commands in flight, 15 s
   robots, 0.5 s status subscribers, 5 s RPC drain), hence 25 s. The Tools process has no
   drain and 5 s.
-- **Restart.** `never`: a Run-owned process that ends fails its Run. The exit status says why
+- **Run ownership.** A Run-owned process that ends fails its Run; there is no restart field.
+  The exit status says why
   (type-servers.md): a changed or unreachable ROS master is 3 or 4.
 
-`id`, `label`, `parameters`, `command`, `services` and `restart` are the fields Core's loader
-read before. `readiness.kind: describe` with `startGraceMs`/`timeoutMs`, and `stop.graceMs`
-with `stop.rpc`, are the additive fields of the Run-owned lifecycle; the schema id is
-unchanged.
+The definition fields are `id`, `version`, `label`, `description`, `parameters`, `setupFiles`,
+`command`, `services`, `readiness`, `stop` and `logs`. Readiness uses `kind: describe` with
+`startGraceMs`/`timeoutMs`; stopping uses `graceMs` and, for type servers, `rpc: Shutdown`.
+The schema id is unchanged.
 
 ## Differences between the definitions
 

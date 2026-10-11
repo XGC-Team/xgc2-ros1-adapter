@@ -11,8 +11,8 @@ SOURCES = REPOSITORY_ROOT / "src"
 SCHEMA_ID = "xgc.execution.process/v1"
 DEFINITION_FILES = sorted(SOURCES.glob("*/process/*.json"))
 KNOWN_KEYS = {
-    "id", "version", "label", "description", "parameters", "command", "services",
-    "readiness", "stop", "restart",
+    "id", "version", "label", "description", "parameters", "setupFiles", "command",
+    "services", "readiness", "stop", "logs",
 }
 OPTIONS_SOURCE = SOURCES / "common" / "src" / "robot_server_options.cpp"
 TOOLS_SOURCE = SOURCES / "ros1_tools_adapter" / "src" / "main.cpp"
@@ -66,9 +66,22 @@ class ProcessDefinitionTest(unittest.TestCase):
                 self.assertLessEqual(set(definition), KNOWN_KEYS)
                 self.assertTrue(
                     {"id", "version", "label", "command", "parameters", "services",
-                     "readiness", "stop", "restart"} <= set(definition)
+                     "readiness", "stop"} <= set(definition)
                 )
-                self.assertEqual(definition["restart"], {"mode": "never"})
+                self.assertEqual(definition["version"], "0.7.0")
+                for fields, allowed in (
+                    (definition["parameters"], {"properties", "required", "groups"}),
+                    (definition["command"], {"executable", "args", "workDir", "env", "stdinParameter"}),
+                    (definition["readiness"], {"kind", "startGraceMs", "timeoutMs", "address", "masterUri"}),
+                    (definition["stop"], {"graceMs", "rpc"}),
+                    (definition.get("logs", {}), {"maxBytes", "files"}),
+                ):
+                    self.assertLessEqual(set(fields), allowed)
+                for parameter in definition["parameters"]["properties"].values():
+                    self.assertLessEqual(
+                        set(parameter),
+                        {"type", "default", "enum", "minimum", "maximum", "sensitive", "output", "fixedOnly"},
+                    )
                 self.assertEqual(definition["readiness"]["kind"], "describe")
                 readiness = definition["readiness"]
                 self.assertGreater(readiness["startGraceMs"], 0)
@@ -122,7 +135,6 @@ class ProcessDefinitionTest(unittest.TestCase):
                 self.assertLessEqual(used, set(declared))
                 self.assertEqual(used, set(declared))
                 self.assertLessEqual(set(definition["parameters"]["required"]), set(declared))
-                self.assertFalse(definition["parameters"]["additionalProperties"])
                 arguments = dict(zip(flags, values))
                 self.assertEqual(arguments["--run-id"], "${runId}")
                 self.assertTrue(arguments["--node-name"].endswith("${runId}"))
@@ -149,8 +161,9 @@ class ProcessDefinitionTest(unittest.TestCase):
             with self.subTest(definition=path.stem):
                 definition = load(path)
                 (service,) = definition["services"]
+                self.assertEqual(set(service), {"service", "api_version", "profile", "endpointParameter"})
                 socket = definition["parameters"]["properties"][service["endpointParameter"]]
-                self.assertEqual(socket["ownedEndpoint"], "unix-socket")
+                self.assertEqual(socket, {"type": "string", "fixedOnly": True})
                 self.assertEqual(
                     service["profile"],
                     "http.v1" if path.stem == "xgc2-ros1-tools-adapter" else "grpc.v1",

@@ -3,15 +3,14 @@
   "definitions": [
     {
       "id": "xgc2-ros1-tools-adapter",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "label": "ROS1 Tools",
       "description": "Typed ROS1 topic publishing and service calls over XRPC for one Run on one ROS master. Started by the Run, ended with it.",
       "parameters": {
         "properties": {
           "socketPath": {
             "type": "string",
-            "fixedOnly": true,
-            "ownedEndpoint": "unix-socket"
+            "fixedOnly": true
           },
           "runId": {
             "type": "string",
@@ -40,8 +39,7 @@
           "runId",
           "targetId",
           "rosMasterUri"
-        ],
-        "additionalProperties": false
+        ]
       },
       "command": {
         "executable": "/opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node",
@@ -77,9 +75,6 @@
       },
       "stop": {
         "graceMs": 5000
-      },
-      "restart": {
-        "mode": "never"
       }
     }
   ]

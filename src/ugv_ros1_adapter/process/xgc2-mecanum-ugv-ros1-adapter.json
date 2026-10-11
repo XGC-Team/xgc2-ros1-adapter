@@ -3,15 +3,14 @@
   "definitions": [
     {
       "id": "xgc2-mecanum-ugv-ros1-adapter",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "label": "Mecanum UGV ROS1 type server",
       "description": "Serves every Mecanum UGV of one Run on one ROS master: VRPN, IMU and power telemetry and discrete motion control with lateral velocity. Started by the Run, ended with it.",
       "parameters": {
         "properties": {
           "socketPath": {
             "type": "string",
-            "fixedOnly": true,
-            "ownedEndpoint": "unix-socket"
+            "fixedOnly": true
           },
           "runId": {
             "type": "string",
@@ -36,8 +35,7 @@
           "runId",
           "targetId",
           "rosMasterUri"
-        ],
-        "additionalProperties": false
+        ]
       },
       "command": {
         "executable": "/opt/ros/noetic/lib/xgc_ugv_ros1_adapter/xgc_ugv_ros1_adapter_node",
@@ -74,9 +72,6 @@
       "stop": {
         "graceMs": 25000,
         "rpc": "Shutdown"
-      },
-      "restart": {
-        "mode": "never"
       }
     }
   ]
