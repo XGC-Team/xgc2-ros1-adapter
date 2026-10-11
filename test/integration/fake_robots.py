@@ -21,7 +21,6 @@ import sys
 import threading
 import time
 
-import genpy
 import roslib.message
 import rospy
 

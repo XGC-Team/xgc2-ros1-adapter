@@ -10,7 +10,7 @@ import time
 import unittest
 
 from harness import (
-    EXIT_FAILURE, EXIT_MASTER_CHANGED, EXIT_MASTER_UNREACHABLE, EXIT_OK, EXIT_ROS_SHUTDOWN,
+    EXIT_MASTER_CHANGED, EXIT_MASTER_UNREACHABLE, EXIT_OK, EXIT_ROS_SHUTDOWN,
     FakeRobots, MasterCase, Roscore, ToolsServer, Workspace, new_run_id, process_exists,
     registrations, wait_until,
 )

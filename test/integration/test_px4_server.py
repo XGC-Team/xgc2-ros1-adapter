@@ -14,7 +14,7 @@ import unittest
 from harness import (
     EXIT_MASTER_CHANGED, EXIT_OK, PX4_PROVIDER, MasterCase, Robot, Roscore, Server,
     Workspace, arm_payload, mode_payload, motion_intent_payload, new_run_id,
-    process_exists, registrations, top_name, wait_until,
+    process_exists, top_name, wait_until,
 )
 
 PROFILES = ("gazebo.vrpn", "physical.vrpn", "xsim.ros")
