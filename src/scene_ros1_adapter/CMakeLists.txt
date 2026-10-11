@@ -87,6 +87,17 @@ if(catkin_FOUND)
   install(TARGETS xgc2_scene_adapter RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
   if(BUILD_TESTING)
+    find_package(PythonInterp 3 REQUIRED)
+    foreach(peer master world)
+      add_test(NAME scene_${peer}_startup_test
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/ros/startup_peer_test.py
+                $<TARGET_FILE:xgc2_scene_adapter> --peer ${peer})
+      set_tests_properties(scene_${peer}_startup_test PROPERTIES LABELS ros TIMEOUT 90)
+      add_test(NAME scene_${peer}_outage_test
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/ros/startup_peer_test.py
+                $<TARGET_FILE:xgc2_scene_adapter> --peer ${peer} --long)
+      set_tests_properties(scene_${peer}_outage_test PROPERTIES LABELS "ros;long" TIMEOUT 160)
+    endforeach()
     file(GLOB LIDAR_ROS_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/lidar_ros/*_test.cpp)
     foreach(test_source ${LIDAR_ROS_TESTS})
       get_filename_component(test_name ${test_source} NAME_WE)
