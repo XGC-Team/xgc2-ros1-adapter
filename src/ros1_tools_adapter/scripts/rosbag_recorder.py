@@ -119,10 +119,23 @@ def read_request():
     if len(data) > 16 << 20:
         raise ValueError("frozen recorder request exceeds 16 MiB")
     document = json.loads(data, object_pairs_hook=unique)
-    if not isinstance(document, dict) or set(document) != {"parameters", "robots", "context"}:
-        raise ValueError("recorder request requires parameters, robots and context")
+    if not isinstance(document, dict) or set(document) != {"parameters", "context"}:
+        raise ValueError("recorder request requires parameters and frozen Session context")
     if not all(isinstance(document[key], dict) for key in document):
         raise ValueError("recorder request fields must be objects")
+    session = document["context"]
+    robots = []
+    for robot in session["robots"]:
+        robots.append({"id": robot["slotId"], "namespace": robot["namespace"], "kind": robot["kind"],
+                       "profileId": robot["profile"]["id"], "runtimeParameters": robot["profile"]["parameters"],
+                       "hybridSource": robot["binding"]["hybridSource"], "initialPose": robot["binding"]["initialPose"],
+                       "robotAssetId": robot["assetId"], "robotAssetCommitId": robot["assetCommitId"],
+                       "visualization": robot.get("derived", {}).get("visualization", {}),
+                       **{key: robot["asset"][key] for key in ("px4", "scout", "mecanum") if key in robot["asset"]}})
+    document["robots"] = {"robots": robots, "experimentResourceId": session["experimentResourceId"],
+                          "experimentCommitId": session["experimentCommitId"]}
+    document["context"] = dict(session, rosMasterUri=session["simulation"]["rosMasterUri"],
+                               rosIp=session["simulation"]["rosIp"])
     return document
 
 
@@ -131,7 +144,7 @@ def normalize_parameters(value, context, preview):
     fields = {"worldBoundary", "recordAllTopics", "slotIds", "robotTopics", "globalTopics", "recordingProfile", "cameras", "expectedDurationMinutes", "estimatedVideoBitrateMbps", "capacitySafetyFactor", "includeMotionCapture", "excludedTopics", "sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "calibrationFiles", "factParameters", "algorithmSidecarFiles", "splitSizeMiB", "maxSplits", "minFreeSpaceGiB", "compression", "repeatLatched", "rosInstallPath", "rosMasterUri", "rosIp", "rosHostname"}
     if set(p) - fields:
         raise ValueError("unknown recorder parameters: " + ", ".join(sorted(set(p) - fields)))
-    for name in ("sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "worldBoundary"):
+    for name in ("sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "worldBoundary", "rosMasterUri", "rosIp"):
         if name in context:
             if name in p and p[name] != context[name]:
                 raise ValueError(name + " disagrees with the frozen Session context")
@@ -275,7 +288,7 @@ def prepare(document, preview=False):
                     item["mocapRigidBodyName"] = body
                 break
         sidecar.append(item)
-    manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "experimentName": context["experimentName"], "runMode": context["runMode"], "recordingProfile": p["recordingProfile"], "recordAllTopics": p["recordAllTopics"], "includeMotionCapture": p["includeMotionCapture"], "experimentResourceId": robots["experimentResourceId"], "experimentCommitId": robots["experimentCommitId"], "experimentDigest": robots["experimentDigest"], "robotSelectionDigest": robots["robotSelectionDigest"], "slotIds": resolved["slotIds"], "cameras": p["cameras"], "cameraTopicRoots": [c["root"] for c in p["cameras"]], "excludedTopics": p["excludedTopics"], "topics": resolved["topics"], "expectedDurationMinutes": p["expectedDurationMinutes"], "estimatedVideoBitrateMbps": p["estimatedVideoBitrateMbps"], "capacitySafetyFactor": p["capacitySafetyFactor"], "estimatedBytes": estimated, "robots": sidecar, "requestEvidence": "workflow-bound-request-not-producer-applied", "requestedParameters": document["parameters"], "factSources": {name: p[name] for name in ("calibrationFiles", "algorithmSidecarFiles")}, "timestampContract": {"imageTime": "xgc_camera_msgs/FrameTiming.source_time", "sceneTime": "ROS message header stamp or /clock", "alignment": "immutable sidecar; source bags are never rewritten"}}
+    manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "experimentName": context["experimentName"], "runMode": context["runMode"], "recordingProfile": p["recordingProfile"], "recordAllTopics": p["recordAllTopics"], "includeMotionCapture": p["includeMotionCapture"], "experimentResourceId": robots["experimentResourceId"], "experimentCommitId": robots["experimentCommitId"], "slotIds": resolved["slotIds"], "cameras": p["cameras"], "cameraTopicRoots": [c["root"] for c in p["cameras"]], "excludedTopics": p["excludedTopics"], "topics": resolved["topics"], "expectedDurationMinutes": p["expectedDurationMinutes"], "estimatedVideoBitrateMbps": p["estimatedVideoBitrateMbps"], "capacitySafetyFactor": p["capacitySafetyFactor"], "estimatedBytes": estimated, "robots": sidecar, "requestEvidence": "workflow-bound-request-not-producer-applied", "requestedParameters": document["parameters"], "factSources": {name: p[name] for name in ("calibrationFiles", "algorithmSidecarFiles")}, "timestampContract": {"imageTime": "xgc_camera_msgs/FrameTiming.source_time", "sceneTime": "ROS message header stamp or /clock", "alignment": "immutable sidecar; source bags are never rewritten"}}
     manifest["factSources"]["parameters"] = p["factParameters"]
     for key in ("sessionId", "localizationOffset", "worldBoundary"):
         if key in p:
@@ -287,20 +300,20 @@ def prepare(document, preview=False):
 
 def record_arguments(document):
     p, resolved, manifest = prepare(document)
-    archive = json.loads(os.environ["XGC_RECORD_CONTEXT_JSON"])
+    import subprocess
     context = document["context"]
-    if archive.get("schemaVersion") != 1 or archive.get("category") != "Data" or archive.get("extension") != "bag" or context.get("runId") != archive.get("workflowRunId") or context.get("rootRunId") != archive.get("rootRunId") or context.get("targetId") != archive.get("targetId"):
-        raise ValueError("recorder archive does not belong to the executing frozen Run")
-    if archive.get("experimentId") != manifest["experimentResourceId"] or archive.get("experimentCommitId") != manifest["experimentCommitId"] or archive.get("experimentDigest") != manifest["experimentDigest"] or archive.get("runMode") != manifest["runMode"]:
-        raise ValueError("recorder archive disagrees with the frozen Experiment")
+    archive = json.loads(subprocess.check_output(
+        ["/usr/lib/xgc2/xgc-storage", "record-archive"], input=json_bytes({
+            "session": context, "run": {"id": os.environ["XGC_RECORDER_RUN_ID"]}, "kind": "rosbag"
+        }), timeout=10))
+    os.environ["XGC_USER_FILES_DIR"] = context["runtime"]["userFilesDir"]
     os.environ["ROS_MASTER_URI"] = p["rosMasterUri"]
     for name, field in (("ROS_IP", "rosIp"), ("ROS_HOSTNAME", "rosHostname")):
         if p[field]: os.environ[name] = p[field]
         else: os.environ.pop(name, None)
-    output = archive["outputPath"]
-    if not output.endswith(".bag") or os.path.dirname(output) != archive["outputDirectory"] or archive["outputDirectory"] != os.path.join(archive["recordDirectory"], "Data"):
-        raise ValueError("recorder archive paths disagree")
-    manifest.update(recordingId=archive["recordId"], recordPlannedAt=archive["plannedAt"], runId=archive["workflowRunId"], rootRunId=archive["rootRunId"], invocationId=archive["invocationId"], parentRunId=archive.get("parentRunId", ""), definitionId=archive["definitionId"], definitionDigest=archive["definitionDigest"], nodeId=archive["nodeId"])
+    output = archive["path"]
+    manifest.update(targetId=context["targetId"], recordingId=archive["recordId"], recordPlannedAt=archive["plannedAt"],
+                    runId=os.environ["XGC_RECORDER_RUN_ID"])
     return [sys.argv[0], p["rosInstallPath"], output[:-4], json.dumps(resolved["topics"]), str(p["splitSizeMiB"]), str(p["maxSplits"]), str(p["minFreeSpaceGiB"]), p["compression"], str(p["repeatLatched"]).lower(), str(p["expectedDurationMinutes"]), str(p["estimatedVideoBitrateMbps"]), str(p["capacitySafetyFactor"]), json_bytes(manifest).decode("utf-8")]
 
 
@@ -1075,6 +1088,22 @@ def forward(signum, _frame):
 signal.signal(signal.SIGINT, forward)
 signal.signal(signal.SIGTERM, forward)
 exit_code = 1
+def start_recorder_service():
+    from xgc2_xrpc import Endpoint, Host, Runtime, ServiceRef
+    service_ref = ServiceRef(manifest["targetId"], "xgc.recording.v1", "1",
+                             os.environ["XGC_RECORDER_RUN_ID"], "http.v1",
+                             Endpoint("unix", os.environ["XGC_RECORDER_SOCKET"]))
+    rpc_runtime = Runtime(blocking_workers=1, max_connections=4, max_calls=4)
+    def describe(_call, _request):
+        return {"service": service_ref.service, "api_version": service_ref.api_version,
+                "instance_id": service_ref.instance_id,
+                "ready": child is not None and child.poll() is None and manifest["firstBagObservedAt"] is not None,
+                "facts": {"path": output_prefix + ".bag"}}
+    rpc_host = Host(service_ref.endpoint.address, {("GET", "/v1/describe"): describe},
+                    runtime=rpc_runtime, instance_id=service_ref.instance_id,
+                    discovery_routes={("GET", "/v1/describe")}).start()
+    return rpc_runtime, rpc_host
+rpc_runtime, rpc_host = start_recorder_service()
 try:
     child = subprocess.Popen(arguments)
     if forwarded_signal is not None and not signal_delivered and child.poll() is None:
@@ -1104,6 +1133,8 @@ try:
         except subprocess.TimeoutExpired:
             continue
 finally:
+    rpc_host.close()
+    rpc_runtime.close()
     facts.finish(manifest)
     manifest["recordingEndedAt"] = utc_now()
     manifest["recorderExitCode"] = exit_code

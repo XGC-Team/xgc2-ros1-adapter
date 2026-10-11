@@ -314,7 +314,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         topics = ["/xgc/record_facts", "/tf"]
         manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "recordingId": "a" * 32,
                     "recordingProfile": "general", "topics": topics, "estimatedBytes": 0,
-                    "experimentName": "experiment", "runMode": "simulation",
+                    "experimentName": "experiment", "runMode": "simulation", "targetId": "local",
                     "factSources": {"calibrationFiles": [{"role": "calibration", "path": str(source)}]}}
         directory = self.directory / "Experiments" / "Data"
         prefix = directory / "record"
@@ -322,7 +322,8 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
                    "64", "1", "1", "none", "true", "1", "0", "1", json.dumps(manifest)]
         result = subprocess.run(command, text=True, capture_output=True, timeout=10,
                                 env=dict(os.environ, FACT_TEST_FILE=str(source),
-                                         XGC_USER_FILES_DIR=str(self.directory)))
+                                         XGC_USER_FILES_DIR=str(self.directory), XGC_RECORDER_RUN_ID="facts-test",
+                                         XGC_RECORDER_SOCKET=str(self.directory / "rpc.sock")))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((directory / "session-manifest.json").read_text())
         self.assertEqual(document["bagFiles"][0]["id"], "bag." + "a" * 32 + ".0")
