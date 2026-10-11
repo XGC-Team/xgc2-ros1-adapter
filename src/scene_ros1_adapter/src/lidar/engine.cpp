@@ -111,6 +111,14 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
   if (!invalidateScene(revision))
     return false;
   scenes_.setScene(obstacles, revision);
+  if (manifest_.reference) {
+    const auto &reference = scenes_.scene(
+        scenes_.policyIndex({manifest_.reference->surface_spacing, false}));
+    reference_bytes_.resize(12 * reference->sampleCount());
+    for (std::size_t i = 0; i < reference->sampleCount(); ++i)
+      packPoint(reference->samples()[i], reference_bytes_.data() + 12 * i);
+    reference_dirty_ = true;
+  }
   for (std::size_t i = 0; i < lidars_.size(); ++i) {
     const auto &scene = scenes_.scene(policies_[i]);
     lidars_[i]->setScene(scene);
@@ -127,6 +135,9 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
 bool Engine::invalidateScene(std::uint64_t revision) {
   if (!scenes_.invalidate(revision))
     return false;
+  reference_dirty_ = false;
+  reference_clear_pending_ = bool(manifest_.reference);
+  reference_bytes_.clear();
   for (auto &data : points_)
     data.clear();
   for (auto &data : beams_)
@@ -201,7 +212,10 @@ std::size_t Engine::tick(std::int64_t now) {
   if (last_tick_ >= 0 && now < last_tick_)
     std::fill(next_due_.begin(), next_due_.end(), -1);
   last_tick_ = now;
-  if (!enabled_ || !scenes_.ready())
+  if (!enabled_)
+    return 0;
+  deliverReference(now);
+  if (!scenes_.ready())
     return 0;
   bool body_truth_ready = true;
   body_snapshot_.clear();
@@ -235,6 +249,20 @@ std::size_t Engine::tick(std::int64_t now) {
     engine.scan(engine.active_[job]);
   });
   return count;
+}
+
+void Engine::deliverReference(std::int64_t now) {
+  if (reference_clear_pending_) {
+    sink_.onReference({nullptr, 0, now, 12, scenes_.revision()},
+                      ReferenceAction::Clear);
+    reference_clear_pending_ = false;
+  }
+  if (scenes_.ready() && reference_dirty_ && reference_demand_) {
+    sink_.onReference({reference_bytes_.data(), reference_bytes_.size() / 12,
+                       now, 12, scenes_.revision()},
+                      ReferenceAction::Publish);
+    reference_dirty_ = false;
+  }
 }
 
 void Engine::scan(std::size_t sensor) {

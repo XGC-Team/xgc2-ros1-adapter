@@ -25,6 +25,8 @@ struct CloudView {
   std::size_t byteSize() const { return count * point_step; }
 };
 
+enum class ReferenceAction { Publish, Clear };
+
 class Sink {
 public:
   virtual ~Sink() = default;
@@ -33,6 +35,10 @@ public:
   // tick returns. A sink must not call engine methods from a callback.
   virtual void onPoints(std::size_t sensor, CloudView cloud) = 0;
   virtual void onBeams(std::size_t sensor, CloudView cloud) = 0;
+  // Called only on the tick thread. Clear invalidates the edge's latched cloud,
+  // including on re-enable while awaiting scene truth; Publish delivers the
+  // exterior map once per installed revision, when reference demand exists.
+  virtual void onReference(CloudView cloud, ReferenceAction action) = 0;
 };
 
 struct EngineOptions {
@@ -70,6 +76,7 @@ public:
   void setEnabled(bool enabled) { enabled_ = enabled; }
   void setEnabled(std::size_t sensor, bool enabled);
   void setDemand(std::size_t sensor, bool demand);
+  void setReferenceDemand(bool demand) { reference_demand_ = demand; }
   bool setPose(std::size_t sensor, const xgc2_math::Pose3 &pose,
                std::int64_t stamp_ns, const std::string &frame = "world");
   // body is an index into manifest().bodies. Matching truth pose topics also
@@ -84,6 +91,7 @@ private:
   void scan(std::size_t sensor);
   void advance(std::size_t sensor, std::int64_t now);
   bool fresh(std::int64_t stamp, std::int64_t now) const;
+  void deliverReference(std::int64_t now);
 
   const FleetManifest manifest_;
   Sink &sink_;
@@ -108,6 +116,10 @@ private:
   std::vector<std::int64_t> body_stamps_;
   std::vector<std::uint8_t> body_valid_;
   std::vector<xgc2_math::scene::VehicleBody> body_snapshot_;
+  std::vector<std::uint8_t> reference_bytes_;
+  bool reference_demand_ = false;
+  bool reference_dirty_ = false;
+  bool reference_clear_pending_ = false;
   std::int64_t last_tick_ = -1;
   bool enabled_ = true;
   // Declared last so destruction joins workers before sensor storage dies.

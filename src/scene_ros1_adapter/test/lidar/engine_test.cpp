@@ -39,6 +39,7 @@ struct Capture : Sink {
                         c.point_step,
                         c.revision});
   }
+  void onReference(CloudView, ReferenceAction) override {}
 };
 FleetManifest fleet(std::size_t n = 1, const std::string &mode = "raycast",
                     bool beams = false) {
