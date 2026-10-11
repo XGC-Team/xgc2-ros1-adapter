@@ -198,7 +198,7 @@ class SceneLoader {
     const auto kind = tag(node);
     if (node.IsScalar()) {
       const auto value = scalarText(node, bytes_);
-      if (kind == "str" || kind == "value") return value;
+      if (kind == "str") return value;
       if (kind == "null") return nullptr;
       if (kind == "int") return integerScalar(value);
       if (kind == "float") return floatScalar(value);
