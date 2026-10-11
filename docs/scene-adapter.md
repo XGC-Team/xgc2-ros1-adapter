@@ -18,7 +18,7 @@ Describe declares the selected profile and its explicit capabilities.
 
 | Profile | Capabilities | Simulator application |
 |---|---|---|
-| `gazebo` | `scene.read`, `scene.edit`, `scene.motion`, `scene.save`; CPU-only lidar facts | Applies scene and motion asynchronously through the Gazebo world host's `/v1/extensions/scene/*` routes. Requires `~simulation_service_ref_json`; world availability does not gate readiness. GPU lidar backends are rejected. |
+| `gazebo` | `scene.read`, `scene.edit`, `scene.motion`, `scene.save`; CPU-only lidar facts | Applies scene and motion asynchronously through the Gazebo world host's `/v1/extensions/scene/*` routes. Requires `~simulation_endpoint`; world availability does not gate readiness. GPU lidar backends are rejected. |
 | `xsim` | `scene.read`, `scene.edit`, `scene.save` | The simulator uses its scene fixed at startup; live simulator edits report `unsupported`. |
 | `physical` | Scene authoring and visualization | Reads, edits and saves documents and publishes visualization. |
 
@@ -32,11 +32,11 @@ The process definition passes these as standard ROS `_parameter:=value` argument
 | `~working_file` | Working copy used for editing and reopening; empty selects no working copy. |
 | `~generation_parameters_json` | JSON generator overrides; defaults to `{}`. Python 3 is available for generator commands. |
 | `~save_directory` | Directory granted for saves; empty uses the working file's directory, or the source directory when there is no working file. |
-| `~target_id` | XRPC target identity; the definition defaults to `local`. |
+| `~target_id` | XRPC target identity and local target fence for world discovery; the definition defaults to `local`. |
 | `~xrpc_socket` | Unix socket path allocated by Core in the Run's private runtime directory. |
 | `~frozen` | Rejects authoring edits when true; defaults to false. |
 | `~profile` | `gazebo`, `xsim` or `physical`; defaults to `gazebo`. |
-| `~simulation_service_ref_json` | JSON service reference of the Gazebo world host, required for `gazebo`. |
+| `~simulation_endpoint` | World host's absolute Unix socket path from `$session.endpoints.world`, passed as `simulationEndpoint` (`fixedOnly`). The adapter discovers the instance itself. Defaults to empty, meaning no world; `gazebo` rejects empty or relative paths with a named usage error. Other profiles ignore it. |
 
 ## Topics and TF
 
@@ -92,8 +92,8 @@ scene envelope and Describe facts report `synchronized: false`,
 Command receipts retain the synchronization state at the time of the command.
 
 The simulation client starts its worker when the first scene must be applied.
-One held unbound Describe discovers the instance at the original ServiceRef's
-endpoint. Reconnect uses full jitter from 250 ms to 10 s and one directory
+One held unbound Describe discovers the instance at `~simulation_endpoint`, the
+session's world rendezvous path. Reconnect uses full jitter from 250 ms to 10 s and one directory
 inotify watch for socket disappearance or appearance. Each peer has one attempt
 in flight, at most 15 failed attempts in a rolling minute, and one latest desired
 scene; reconnect never holds the authoring or lidar locks. A changed instance

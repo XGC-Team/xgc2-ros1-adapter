@@ -12,6 +12,10 @@ Readiness reflects the adapter's own resources. Gazebo world availability, poses
 scene truth and subscribers are runtime inputs. Edits remain usable during a
 world outage; the client lazily discovers replacement instances and replays the
 latest scene once, with native synchronization reported separately.
+Core supplies the world rendezvous path from `$session.endpoints.world` through
+`simulationEndpoint` (`~simulation_endpoint`). Gazebo requires a non-empty absolute
+Unix socket path; other profiles ignore it. The adapter discovers the instance
+itself and uses `targetId` to fence it to the local target.
 
 [Scene adapter](../../docs/scene-adapter.md) documents the profiles, private ROS
 parameters, topics, TF and CLI usage. The Debian package is

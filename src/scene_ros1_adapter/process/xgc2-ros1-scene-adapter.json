@@ -57,9 +57,11 @@
             ],
             "default": "gazebo"
           },
-          "simulationServiceRefJson": {
+          "simulationEndpoint": {
             "type": "string",
-            "default": ""
+            "fixedOnly": true,
+            "default": "",
+            "description": "The world host's Unix socket path from $session.endpoints.world; the adapter discovers the instance itself. Empty means no world and is rejected by the gazebo profile."
           },
           "lidarSocketPath": {
             "type": "string",
@@ -102,7 +104,7 @@
           "_xrpc_socket:=${socketPath}",
           "_frozen:=${frozen}",
           "_profile:=${profile}",
-          "_simulation_service_ref_json:=${simulationServiceRefJson}",
+          "_simulation_endpoint:=${simulationEndpoint}",
           "_lidar_xrpc_socket:=${lidarSocketPath}",
           "_lidar_enabled:=${lidarEnabled}",
           "_lidar_defaults_json:=${lidarDefaultsJson}",

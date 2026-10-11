@@ -119,7 +119,7 @@ the master ends the process, so it never replays Run state into a new master.
 The Scene definition starts `xgc2_scene_adapter` directly with ROS remappings:
 `__ns`, `__master` and `__ip` select the namespace and ROS environment, and `_scene_file`,
 `_working_file`, `_generation_parameters_json`, `_save_directory`, `_target_id`,
-`_xrpc_socket`, `_frozen`, `_profile` and `_simulation_service_ref_json` set the private
+`_xrpc_socket`, `_frozen`, `_profile` and `_simulation_endpoint` set the private
 parameters. The lidar remappings are `_lidar_xrpc_socket`, `_lidar_enabled`
 and `_lidar_defaults_json`, rendered from `lidarSocketPath`, `lidarEnabled`
 and `lidarDefaultsJson`. The enabled/defaults values default to true and `{}`;
@@ -128,10 +128,12 @@ by `command.stdinParameter`; `command.args` contains `--session-stdin`. It
 carries the frozen Run session facts as one JSON document on stdin. Empty input
 means no fleet; the executable reads only with the flag and validates a present
 document before starting ROS or either socket. `sceneFile` is required;
-the `gazebo` profile also requires a valid
-`simulationServiceRefJson` at startup; the referenced world host may start later or
-restart. Scene accepts and stores edits while it is absent and lazily re-discovers
-the instance at the original endpoint, replaying the current scene once per instance.
+the `gazebo` profile also requires a non-empty absolute Unix socket path in
+`simulationEndpoint` (`fixedOnly`, default empty). Core passes `$session.endpoints.world`,
+the flat `<socketDir>/<32 hex>.sock` rendezvous path. `targetId` fences discovery to the
+local target. Other profiles ignore the endpoint. The world host may start later or
+restart. Scene accepts and stores edits while it is absent and lazily discovers
+the instance at that path, replaying the current scene once per instance.
 Synchronization and its reason are reported separately from readiness. The namespace defaults to `/xgc_scene` and the
 node name is `xgc2_scene_adapter`. See [Scene adapter](scene-adapter.md) for the profiles,
 topics, TF and CLI contract. Scene readiness holds the unbound

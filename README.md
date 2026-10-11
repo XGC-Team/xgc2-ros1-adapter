@@ -22,7 +22,10 @@ the type with `--provider`. Everything that differs between Scout Mini and Mecan
 
 The scene adapter validates, edits and saves `xgc2.scene.v1` documents and publishes
 snapshots, state, markers and TF. Its `gazebo` profile applies scenes and motion through
-the world host; `xsim` reads, edits and saves documents with live simulator edits reporting
+the world host, discovering its instance from `simulationEndpoint`, the session's
+world Unix socket path. Gazebo requires a non-empty absolute path; the world may
+appear later or restart, with the latest scene replayed once per instance.
+`xsim` reads, edits and saves documents with live simulator edits reporting
 `unsupported`; `physical` provides authoring and visualization. Simulators own their
 sensor implementations. The finite `xgc2-scene-assemble` and `xgc2-scene-prepare` tools
 provide assembly and world preparation to workflows.
