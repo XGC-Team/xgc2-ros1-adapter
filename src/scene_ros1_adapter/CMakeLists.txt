@@ -50,6 +50,7 @@ if(catkin_FOUND)
 
 endif()
 
+include(cmake/lidar_control.cmake)
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
