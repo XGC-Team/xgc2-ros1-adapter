@@ -7,6 +7,7 @@ the real parameter, topic, timer, TF and process-lifecycle wiring.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import random
 import signal
 import socket
+import socketserver
 import statistics
 import subprocess
 import tempfile
@@ -74,9 +76,192 @@ def http_call(path, method, route, request_id, instance=None, body=None):
     return json.loads(response)
 
 
+class SimulationServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """Native application receipts, with a held startup for readiness checks."""
+    def __init__(self, path):
+        self.applying = threading.Event()
+        self.release = threading.Event()
+        self.refuse = False
+        super().__init__(str(path), SimulationHandler)
+
+
+class SimulationHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        line = self.rfile.readline().decode().strip()
+        if not line:
+            return
+        method, route, _ = line.split()
+        headers = {}
+        while True:
+            line = self.rfile.readline().decode().strip()
+            if not line:
+                break
+            key, value = line.split(':', 1)
+            headers[key.lower()] = value.strip()
+        body = json.loads(self.rfile.read(int(headers['content-length'])))
+        assert headers['x-xrpc-instance-id'] == 'simulation-fixture'
+        assert method == 'POST' and route in ['/v1/extensions/scene/apply', '/v1/extensions/scene/motion']
+        self.server.applying.set()
+        assert self.server.release.wait(timeout=10), 'Native apply was not released'
+        if self.server.refuse:
+            receipt = {'id': headers['x-request-id'], 'state': 'failed', 'error': 'native application refused'}
+        else:
+            receipt = {'id': headers['x-request-id'], 'state': 'succeeded',
+                       'result': {'epoch': body['epoch'], 'revision': body['revision']}}
+        payload = json.dumps(receipt).encode()
+        self.wfile.write(('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n'
+                          'X-Xrpc-Instance-ID: simulation-fixture\r\n'
+                          'X-Request-ID: ' + headers['x-request-id'] + '\r\n' +
+                          'Content-Length: {}\r\n\r\n'.format(len(payload))).encode() + payload)
+
+
+def fleet_process(args, root, node_log, namespace, source):
+    """Real adapter timer, both discovery sockets and enable control."""
+    import rospy
+    from geometry_msgs.msg import PoseStamped
+    from sensor_msgs.msg import PointCloud2
+    path = root / 'fleet.sock'
+    scene_socket = root / 'fleet-scene.sock'
+    sim_path = root / 'simulation.sock'
+    native = SimulationServer(sim_path)
+    serving = threading.Thread(target=native.serve_forever, kwargs={'poll_interval': 0.05})
+    serving.start()
+    node = None
+    subscribers = []
+    poses = []
+    observed = {}
+    counts = {}
+    changed = threading.Condition()
+    def receive(name, message):
+        with changed:
+            observed[name] = message
+            counts[name] = counts.get(name, 0) + 1
+            changed.notify_all()
+    fleet = {'schemaVersion': 1, 'robots': [
+        {'namespace': '/lf_process/A', 'poseTopic': '/lf_process/A/pose', 'hRes': 1, 'vRes': 1,
+         'hFovDeg': 90, 'vFovDeg': 0, 'publishBeams': True, 'rateHz': 20},
+        {'namespace': '/lf_process/B', 'poseTopic': '/lf_process/B/pose', 'hRes': 1, 'vRes': 1,
+         'hFovDeg': 90, 'vFovDeg': 0, 'publishBeams': True, 'rateHz': 10}],
+        'referenceCloud': {'surfaceSpacing': 0.5}}
+    simulation_ref = {'target_id': 'fixture', 'service': 'xgc2.simulation', 'api_version': 'v1',
+                      'instance_id': 'simulation-fixture', 'profile': 'http.v1',
+                      'endpoint': {'kind': 'unix', 'address': str(sim_path)}}
+    command = [str(args.executable.resolve()), '--socket-path', str(scene_socket), '--target-id', 'fixture',
+               '--run-id', 'fleet-smoke', '--node-name', 'scene_fleet_smoke',
+               '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
+               '_scene_file:=' + str(source), '_profile:=gazebo', '__ns:=' + namespace,
+               '_simulation_service_ref_json:=' + json.dumps(simulation_ref),
+               '_lidar_xrpc_socket:=' + str(path), '_lidar_fleet_json:=' + json.dumps(fleet),
+               '_lidar_defaults_json:={"worker_threads":2}', '_lidar_enabled:=false']
+    try:
+        with node_log.open('a') as output:
+            node = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        wait_socket(str(scene_socket), node, unix=True)
+        wait_socket(str(path), node, unix=True)
+        assert native.applying.wait(timeout=5), 'Native application did not start'
+        for address in [scene_socket, path]:
+            assert not http_call(address, 'GET', '/v1/describe?wait_ready_ms=0', 'starting')['ready']
+        with ThreadPoolExecutor(max_workers=2) as calls:
+            authoring = calls.submit(http_call, scene_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'scene-ready')
+            lidar = calls.submit(http_call, path, 'GET', '/v1/describe?wait_ready_ms=30000', 'lidar-ready')
+            time.sleep(0.1)
+            assert not authoring.done() and not lidar.done()
+            native.release.set()
+            described, lidar_described = authoring.result(timeout=5), lidar.result(timeout=5)
+        assert described['ready'] and lidar_described['ready']
+        assert lidar_described['facts'] == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 2, 'backend': 'cpu'}
+        instance = lidar_described['instance_id']
+        for robot in fleet['robots']:
+            name = robot['namespace']
+            for suffix in ['points', 'beams']:
+                topic = name + '/world_lidar/' + suffix
+                subscribers.append(rospy.Subscriber(topic, PointCloud2, lambda msg, topic=topic: receive(topic, msg)))
+            poses.append(rospy.Publisher(robot['poseTopic'], PoseStamped, queue_size=1))
+        subscribers.append(rospy.Subscriber('/xgc/scene/reference_cloud', PointCloud2, lambda msg: receive('reference', msg)))
+        def send(duration, predicate=None):
+            until = time.monotonic() + duration
+            while time.monotonic() < until:
+                for publisher in poses:
+                    pose = PoseStamped()
+                    pose.header.frame_id = 'world'
+                    pose.header.stamp = rospy.Time.now()
+                    pose.pose.position.x = -4
+                    pose.pose.orientation.w = 1
+                    publisher.publish(pose)
+                time.sleep(0.02)
+                with changed:
+                    if predicate and predicate():
+                        return True
+            return False
+        send(0.4)
+        assert not observed, 'Initially disabled fleet published data'
+        receipt = http_call(path, 'POST', '/v1/configure', 'enable', instance,
+                            {'expected_revision': 1, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
+        assert receipt['state'] == 'succeeded'
+        assert send(5, lambda: len(observed) == 5 and observed['reference'].width > 0), list(observed)
+        with changed:
+            for name, cloud in observed.items():
+                assert cloud.header.frame_id == 'world' and cloud.height == 1 and cloud.is_dense, name
+                assert cloud.point_step == (32 if name.endswith('/beams') else 12), name
+                assert cloud.header.stamp.to_nsec() > 0, name
+        receipt = http_call(path, 'POST', '/v1/configure', 'disable', instance,
+                            {'expected_revision': 2, 'configuration': {'enabled': False}, 'operation_timeout_ms': 5000})
+        assert receipt['state'] == 'succeeded'
+        time.sleep(0.1)
+        with changed:
+            before = dict(counts)
+        send(0.3)
+        assert counts == before, 'Disabled fleet still published'
+        receipt = http_call(path, 'POST', '/v1/configure', 'reenable', instance,
+                            {'expected_revision': 3, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
+        assert receipt['state'] == 'succeeded'
+        assert send(3, lambda: counts['/lf_process/A/world_lidar/points'] > before['/lf_process/A/world_lidar/points'])
+        current = http_call(scene_socket, 'GET', '/v1/scene', 'current', described['instance_id'])
+        native.release.clear()
+        native.applying.clear()
+        with ThreadPoolExecutor(max_workers=1) as calls:
+            edit = calls.submit(http_call, scene_socket, 'POST', '/v1/commands', 'native-refusal', described['instance_id'],
+                                {'operation': 'clear', 'expectedEpoch': current['epoch'], 'expectedRevision': current['revision']})
+            assert native.applying.wait(timeout=5)
+            with changed:
+                assert changed.wait_for(lambda: observed['reference'].width == 0, timeout=3), 'Pending map stayed latched'
+            native.refuse = True
+            native.release.set()
+            refused = edit.result(timeout=5)
+        assert not refused['synchronized']
+        time.sleep(0.1)
+        with changed:
+            before = dict(counts)
+        send(0.3)
+        assert counts == before, 'Refused simulator revision left scans enabled'
+        stop(node, signal.SIGTERM)
+        assert node.returncode == 0
+        assert not path.exists() and not scene_socket.exists()
+        for key, value in [('lidar_defaults_json', '{"typo":1}'), ('lidar_fleet_json', '{"schemaVersion":2}')]:
+            invalid = [arg for arg in command if not arg.startswith('_' + key + ':=')]
+            invalid.append('_' + key + ':=' + value)
+            with node_log.open('a') as output:
+                node = subprocess.Popen(invalid, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            assert node.wait(timeout=10) == 1
+            assert not path.exists() and not scene_socket.exists()
+            assert '~' + key in node_log.read_text()
+        print('PASS: two sockets held unbound readiness, real two-sensor timer, beams/reference, enable control, pending/refused truth, SIGTERM')
+    finally:
+        native.release.set()
+        stop(node, signal.SIGTERM)
+        for subscriber in subscribers:
+            subscriber.unregister()
+        for publisher in poses:
+            publisher.unregister()
+        native.shutdown()
+        serving.join()
+        native.server_close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('executable', type=Path)
+    parser.add_argument('--edge-test', type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='sa-node-process-') as root:
         root = Path(root)
@@ -96,6 +281,7 @@ def main():
         source = root / 'scene.yaml'
         source.write_text(json.dumps(scene))
         socket_path = root / 'scene.sock'
+        lidar_socket = root / 'empty-lidar.sock'
         run_id = 'smoke-{}'.format(port)
         namespace = '/sa_node_{}/'.format(port)
         master = node = None
@@ -127,7 +313,8 @@ def main():
             command_line = [str(args.executable.resolve()), '--socket-path', str(socket_path), '--target-id', 'fixture',
                             '--run-id', run_id, '--node-name', 'scene_' + run_id,
                             '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
-                            '_scene_file:=' + str(source), '_profile:=physical', '__ns:=' + namespace]
+                            '_scene_file:=' + str(source), '_profile:=physical', '__ns:=' + namespace,
+                            '_lidar_xrpc_socket:=' + str(lidar_socket)]
             with node_log.open('w') as output:
                 node = subprocess.Popen(command_line, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             wait_socket(str(socket_path), node, unix=True)
@@ -136,6 +323,8 @@ def main():
             assert describe['ready'] is True and describe['facts']['profile'] == 'physical', describe
             instance = describe['instance_id']
             assert describe['facts']['run_id'] == run_id
+            empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'empty-fleet')
+            assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'physical', 'sensors': 0, 'backend': 'none'}
             # Subscribe after startup to prove that definition outputs latch.
             for name, message_type in [('snapshot', SceneSnapshot), ('state', SceneState),
                                        ('document', String), ('markers', MarkerArray)]:
@@ -168,8 +357,29 @@ def main():
             stop(node, signal.SIGTERM)
             assert node.returncode == 0, node.returncode
             assert not socket_path.exists()
+            assert not lidar_socket.exists()
             with changed:
                 assert changed.wait_for(lambda: not json.loads(observed['document'].data)['online'], timeout=3)
+            # A declared lidar service also answers in xsim with no engine,
+            # even when launch configuration supplies a nonempty manifest.
+            xsim_command = [arg.replace('_profile:=physical', '_profile:=xsim') for arg in command_line]
+            xsim_command.append('_lidar_fleet_json:=' + json.dumps({'schemaVersion': 1, 'robots': [{'namespace': '/lf_absent'}]}))
+            with node_log.open('a') as output:
+                node = subprocess.Popen(xsim_command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            wait_socket(str(lidar_socket), node, unix=True)
+            empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'xsim-fleet')
+            assert empty['ready'] and empty['facts'] == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}
+            assert not any(topic.startswith('/lf_absent/world_lidar/') for topic, _ in rospy.get_published_topics())
+            stop(node, signal.SIGTERM)
+            assert node.returncode == 0 and not lidar_socket.exists()
+            if args.edge_test:
+                env = dict(os.environ, XGC_LIDAR_TEST_MASTER='1')
+                child = subprocess.Popen([str(args.edge_test.resolve())], env=env, start_new_session=True)
+                try:
+                    assert child.wait(timeout=45) == 0, 'ROS edge transport assertions failed'
+                finally:
+                    stop(child, signal.SIGTERM)
+            fleet_process(args, root, node_log, namespace, source)
             # A fresh incarnation binds the same master and must end when that
             # dependency stays unreachable, with the common lifecycle status.
             with node_log.open('a') as output:

@@ -145,15 +145,27 @@ class ProcessDefinitionTest(unittest.TestCase):
                         "_frozen": "${frozen}",
                         "_profile": "${profile}",
                         "_simulation_service_ref_json": "${simulationServiceRefJson}",
+                        "_lidar_xrpc_socket": "${lidarSocketPath}",
+                        "_lidar_fleet_json": "${lidarFleetJson}",
+                        "_lidar_enabled": "${lidarEnabled}",
+                        "_lidar_defaults_json": "${lidarDefaultsJson}",
                     })
                     declared = definition["parameters"]["properties"]
                     used = set(re.findall(r"\$\{([A-Za-z0-9]+)\}", " ".join(args)))
                     self.assertEqual(used, set(declared))
                     self.assertEqual(
                         set(definition["parameters"]["required"]),
-                        {"socketPath", "targetId", "rosMasterUri", "sceneFile"},
+                        {"socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "sceneFile"},
                     )
                     self.assertEqual(declared["profile"]["enum"], ["gazebo", "xsim", "physical"])
+                    self.assertEqual(set(declared), {
+                        "socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
+                        "sceneFile", "workingFile", "generationParametersJson", "saveDirectory", "frozen",
+                        "profile", "simulationServiceRefJson", "lidarFleetJson", "lidarEnabled", "lidarDefaultsJson",
+                    })
+                    self.assertEqual(declared["lidarFleetJson"], {"type": "string", "default": ""})
+                    self.assertEqual(declared["lidarEnabled"], {"type": "boolean", "default": True})
+                    self.assertEqual(declared["lidarDefaultsJson"], {"type": "string", "default": "{}"})
                     continue
                 flags = args[0::2]
                 values = args[1::2]
@@ -193,17 +205,24 @@ class ProcessDefinitionTest(unittest.TestCase):
         for path in DEFINITION_FILES:
             with self.subTest(definition=path.stem):
                 definition = load(path)
-                (service,) = definition["services"]
-                self.assertEqual(set(service), {"service", "api_version", "profile", "endpointParameter"})
-                socket = definition["parameters"]["properties"][service["endpointParameter"]]
-                self.assertEqual(socket, {"type": "string", "fixedOnly": True})
-                self.assertEqual(
-                    service["profile"],
-                    "http.v1" if path.stem in {"xgc2-ros1-tools-adapter", "xgc2-ros1-scene-adapter"} else "grpc.v1",
-                )
+                endpoints = set()
+                for service in definition["services"]:
+                    self.assertEqual(set(service), {"service", "api_version", "profile", "endpointParameter"})
+                    self.assertNotIn(service["endpointParameter"], endpoints)
+                    endpoints.add(service["endpointParameter"])
+                    socket = definition["parameters"]["properties"][service["endpointParameter"]]
+                    self.assertEqual(socket, {"type": "string", "fixedOnly": True})
+                    self.assertEqual(
+                        service["profile"],
+                        "http.v1" if path.stem in {"xgc2-ros1-tools-adapter", "xgc2-ros1-scene-adapter"} else "grpc.v1",
+                    )
                 if path.stem == "xgc2-ros1-scene-adapter":
-                    self.assertEqual(service["service"], "xgc2.scene.authoring")
-                    self.assertEqual(service["api_version"], "1")
+                    self.assertEqual(definition["services"], [
+                        {"service": "xgc2.scene.authoring", "api_version": "1", "profile": "http.v1", "endpointParameter": "socketPath"},
+                        {"service": "xgc2.sensor.lidar", "api_version": "1", "profile": "http.v1", "endpointParameter": "lidarSocketPath"},
+                    ])
+                else:
+                    self.assertEqual(len(definition["services"]), 1)
 
     def test_stopping_asks_the_server_to_drain_before_the_signal(self):
         for path in DEFINITION_FILES:

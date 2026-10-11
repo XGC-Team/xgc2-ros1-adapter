@@ -518,4 +518,22 @@ TEST(ControlConstructionTest, ExecutorPostFailureReturnsTerminalReceipt) {
   control.Stop();
   EXPECT_FALSE(std::filesystem::exists(socket));
 }
+
+TEST(ControlConstructionTest, DescribeMergesAdditionalFactsAndKeepsTargetIdentity) {
+  Directory directory;
+  const auto socket = directory.path + "/facts.sock";
+  Control control(socket, "fixture", true, [](std::function<void()>) {}, [](bool) {},
+                  Json{{"profile", "gazebo"}, {"sensors", 2}, {"backend", "cpu"}, {"target_id", "other"}});
+  control.SetReady(false);
+  control.Start();
+  HttpClient client(socket);
+  HttpRequest request; request.method = "GET"; request.target = "/v1/describe?wait_ready_ms=0";
+  const auto describe = Json::parse(client.call(request, Clock::now() + 3s).body);
+  EXPECT_FALSE(describe.at("ready"));
+  EXPECT_EQ(describe.at("facts"), (Json{{"target_id", "fixture"}, {"profile", "gazebo"},
+                                       {"sensors", 2}, {"backend", "cpu"}}));
+  control.Stop();
+  EXPECT_THROW((Control(socket, "fixture", true, [](std::function<void()>) {}, [](bool) {}, Json::array())),
+               std::invalid_argument);
+}
 }  // namespace
