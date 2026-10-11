@@ -6,7 +6,12 @@ socket (`~lidar_xrpc_socket`). `xgc2_scene_adapter` publishes scene snapshots,
 state, envelope JSON, markers and TF. Profiles are `gazebo`, `xsim` and `physical`.
 The finite tools are `xgc2-scene-assemble` and `xgc2-scene-prepare`.
 The Gazebo profile hosts the CPU fleet; `xsim` and `physical` host an empty lidar
-service. Both services answer unbound readiness discovery during startup.
+service. Both services answer unbound readiness discovery before the ROS master
+starts, report `ros_master: "waiting"` and wait without a startup deadline.
+Readiness reflects the adapter's own resources. Gazebo world availability, poses,
+scene truth and subscribers are runtime inputs. Edits remain usable during a
+world outage; the client lazily discovers replacement instances and replays the
+latest scene once, with native synchronization reported separately.
 
 [Scene adapter](../../docs/scene-adapter.md) documents the profiles, private ROS
 parameters, topics, TF and CLI usage. The Debian package is

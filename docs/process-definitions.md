@@ -68,8 +68,11 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   parameter. Both Scene socket parameters are required and `fixedOnly`.
 - **Readiness.** Kind `describe`: Core holds one outstanding Describe with `wait_ready_ms`
   (gRPC `Describe`, HTTP `GET /v1/describe?wait_ready_ms=N`). The service answers once its
-  ROS node is registered with the master; Scene also validates its document and profile
-  dependencies. Every declared service must answer Describe before the process
+  ROS node is registered with the master; Scene also loads its document, opens its store
+  and constructs its fleet resources. A world host, poses, scene truth and subscribers
+  do not gate Scene readiness. Both sockets answer `ready:false` with
+  `facts.ros_master: "waiting"` while the adapter waits for a missing master without
+  a startup deadline. Every declared service must answer Describe before the process
   is ready, including Scene's empty lidar service in `xsim` and `physical`.
   `startGraceMs` is the time the process may take
   before a failed connection counts; `timeoutMs` ends the wait.
@@ -107,7 +110,10 @@ carries the frozen Run session facts as one JSON document on stdin. Empty input
 means no fleet; the executable reads only with the flag and validates a present
 document before starting ROS or either socket. `sceneFile` is required;
 the `gazebo` profile also requires a valid
-`simulationServiceRefJson` at startup. The namespace defaults to `/xgc_scene` and the
+`simulationServiceRefJson` at startup; the referenced world host may start later or
+restart. Scene accepts and stores edits while it is absent and lazily re-discovers
+the instance at the original endpoint, replaying the current scene once per instance.
+Synchronization and its reason are reported separately from readiness. The namespace defaults to `/xgc_scene` and the
 node name is `xgc2_scene_adapter`. See [Scene adapter](scene-adapter.md) for the profiles,
 topics, TF and CLI contract. Scene readiness holds the unbound
 `GET /v1/describe?wait_ready_ms=N` on both sockets until ready or the wait ends,

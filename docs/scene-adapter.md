@@ -18,7 +18,7 @@ Describe declares the selected profile and its explicit capabilities.
 
 | Profile | Capabilities | Simulator application |
 |---|---|---|
-| `gazebo` | `scene.read`, `scene.edit`, `scene.motion`, `scene.save`; CPU-only lidar facts | Applies scene and motion through the Gazebo world host's `/v1/extensions/scene/*` routes. Requires `~simulation_service_ref_json`. GPU lidar backends are rejected. |
+| `gazebo` | `scene.read`, `scene.edit`, `scene.motion`, `scene.save`; CPU-only lidar facts | Applies scene and motion asynchronously through the Gazebo world host's `/v1/extensions/scene/*` routes. Requires `~simulation_service_ref_json`; world availability does not gate readiness. GPU lidar backends are rejected. |
 | `xsim` | `scene.read`, `scene.edit`, `scene.save` | The simulator uses its scene fixed at startup; live simulator edits report `unsupported`. |
 | `physical` | Scene authoring and visualization | Reads, edits and saves documents and publishes visualization. |
 
@@ -76,11 +76,47 @@ to the discovered instance. Command identity comes only from `X-Request-ID`.
 The service admits four calls in flight, limits bodies to 8 MiB and responses to
 8 MiB plus 65536 bytes, and has a 60 s call timeout.
 
+Both sockets bind before the ROS master exists. While waiting, both Describe
+responses have `ready: false` and `facts.ros_master: "waiting"`; held discovery
+is released when the adapter is ready. The adapter waits without a startup
+deadline, using one bounded XML-RPC liveness call with exponential full jitter
+from 250 ms to 10 s. SIGTERM during this wait exits successfully. After binding,
+a replaced master ends the process with exit code 3; a master that stops
+answering for 5 s ends it with code 4.
+
+Authoring readiness requires its sockets, registered ROS node, loaded scene and
+open store. A Gazebo world host is a runtime peer. Edits commit and save locally
+while that peer is absent; native application completes asynchronously. The
+scene envelope and Describe facts report `synchronized: false`,
+`syncRetryable: true` and the consumer's reason until native truth is confirmed.
+Command receipts retain the synchronization state at the time of the command.
+
+The simulation client starts its worker when the first scene must be applied.
+One held unbound Describe discovers the instance at the original ServiceRef's
+endpoint. Reconnect uses full jitter from 250 ms to 10 s and one directory
+inotify watch for socket disappearance or appearance. Each peer has one attempt
+in flight, at most 15 failed attempts in a rolling minute, and one latest desired
+scene; reconnect never holds the authoring or lidar locks. A changed instance
+receives the current document, epoch and revision once, followed by its
+play/pause/reset state. Native refusals remain visible until an edit or the
+existing `resync` command supplies a new revision. There are no periodic scene
+replays. Outages log the first failure and at most one suppressed-attempt summary
+per 10 s.
+
+The native motion API cannot restore elapsed scene time. If a restarted world
+reports a different phase, the adapter keeps the scene unsynchronized and lidar
+truth invalid. The existing reset command can return both clocks to zero;
+restoring an arbitrary phase requires a world-host API change.
+
 ## Lidar fleet
 
 The same process hosts `xgc2.sensor.lidar` v1 (`http.v1`) on a second Unix socket
 in every profile. Core waits for unbound Describe on both sockets. Lidar Describe
-facts include `target_id`, `profile`, `sensors` and `backend`. In `gazebo` the
+facts include `target_id`, `profile`, `sensors`, `backend` and `scene_ready`.
+Lidar readiness requires its bound control socket and constructed fleet resources;
+poses, scene truth and topic subscribers are runtime inputs. A ready fleet can
+publish nothing while those inputs are absent, then recover through normal ROS
+subscriber callbacks. In `gazebo` the
 adapter builds the CPU sampled fleet from the frozen session robot roster.
 Default simulator-model lidars remain with the simulator and are excluded from
 this fleet. An empty selection creates no engine. Gazebo declares `backend:
@@ -158,7 +194,7 @@ time drives that timer. The fleet engine owns schedules, its worker pool and
 scan buffers.
 
 Scene truth is tapped inside `SceneNode` at the native application boundary:
-pending apply and `gazeboFailure` invalidate immediately; a completed apply
+pending apply and `gazeboFailure` invalidate immediately; a matching native report
 admits the matching `applied_snapshot_` and state. `applicationView` gates the
 tap against the native report. Math converts `SceneObstacleDescription` to
 obstacles. New documents/epochs, refused geometry, non-world frames and
