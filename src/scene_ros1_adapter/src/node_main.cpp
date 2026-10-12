@@ -1,6 +1,7 @@
 #include "xgc_scene/node.hpp"
 #include "xgc_scene/prepare.hpp"
 #include "xgc_scene/json_io.hpp"
+#include "xgc_scene/fixed_cloud.hpp"
 #include "peer_backoff.hpp"
 #include <xmlrpcpp/XmlRpcValue.h>
 #include "xgc_scene/lidar/control.hpp"
@@ -187,7 +188,7 @@ int main(int argc, char** argv) {
         lidar_values[key] = launchBoolean(key, found->second);
       } else lidar_values[key] = found->second;
     }
-    const auto lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session);
+    auto lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session);
     if (lidar_parameters.socket == options.socket_path)
       throw xgc_scene::SceneError("Lidar parameter ~lidar_xrpc_socket must differ from ~xrpc_socket");
     auto post = [&lane](std::function<void()> fn) {
@@ -270,6 +271,7 @@ int main(int argc, char** argv) {
           }
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply scene parameters");
         }
+        std::optional<sensor_msgs::PointCloud2> fixed_cloud;
         if (session) {
           const auto& facts = session->facts;
           const auto& runtime = facts.at("runtime");
@@ -279,6 +281,13 @@ int main(int argc, char** argv) {
           config.working_file = selected.at("workingFile").get<std::string>();
           config.frozen = selected.at("frozen").get<bool>();
           config.generation_parameters = xgc_scene::parseJson(selected.at("generationParametersJson").get<std::string>());
+          if (selected.contains("pointCloud")) {
+            fixed_cloud = xgc_scene::fixedPointCloud(selected);
+            // The canonical reference topic has one owner. A fixed original
+            // cloud is never replaced by the geometry fleet's surface sample.
+            lidar_parameters.manifest.reference.reset();
+            lidar_parameters.have_fleet = !lidar_parameters.manifest.robots.empty();
+          }
         }
         std::shared_ptr<xgc_scene::SimulationClient> simulation;
         if (config.profile == "gazebo") simulation = std::make_shared<xgc_scene::SimulationClient>(config.simulation_endpoint, config.target_id);
@@ -290,6 +299,7 @@ int main(int argc, char** argv) {
           auto budget = binding.BoundMasterCalls(seconds(5));
           outputs = std::make_shared<xgc_scene::RosPublishers>(handle);
           lidar = std::make_shared<xgc_scene::lidar_ros::Edge>(handle, lidar_parameters);
+          if (fixed_cloud) outputs->fixedCloud(*fixed_cloud);
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not register scene outputs");
         }
         auto tap = std::make_shared<xgc_scene::lidar_ros::SceneTap>(*outputs, lidar->engine(),

@@ -774,6 +774,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   value["mediaFile"] = attachment(directory, manifest.value("media", Json()));
   value["cameraInfoFile"] = attachment(directory, manifest.value("cameraInfo", Json()));
   value["extrinsicFile"] = attachment(directory, manifest.value("extrinsic", Json()));
+  if (manifest.contains("pointCloud")) value["pointCloud"] = manifest.at("pointCloud");
   return value;
 }
 

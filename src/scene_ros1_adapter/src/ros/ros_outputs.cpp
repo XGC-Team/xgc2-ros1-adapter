@@ -10,11 +10,12 @@ namespace xgc_scene {
 class RosPublishers::Impl {
  public:
   explicit Impl(ros::NodeHandle& node)
-      : snapshot(node.advertise<xgc2_geometry_msgs::SceneSnapshot>("snapshot", 1, true)),
+      : handle(node), snapshot(node.advertise<xgc2_geometry_msgs::SceneSnapshot>("snapshot", 1, true)),
         state(node.advertise<xgc2_geometry_msgs::SceneState>("state", 1)),
         document(node.advertise<std_msgs::String>("document", 1, true)),
         markers(node.advertise<visualization_msgs::MarkerArray>("markers", 1, true)) {}
-  ros::Publisher snapshot, state, document, markers;
+  ros::NodeHandle handle;
+  ros::Publisher snapshot, state, document, markers, reference;
   tf2_ros::StaticTransformBroadcaster fixed;
   tf2_ros::TransformBroadcaster moving;
 };
@@ -34,6 +35,10 @@ void RosPublishers::staticTransforms(const std::vector<geometry_msgs::TransformS
 }
 void RosPublishers::dynamicTransforms(const std::vector<geometry_msgs::TransformStamped>& messages) {
   impl_->moving.sendTransform(messages);
+}
+void RosPublishers::fixedCloud(const sensor_msgs::PointCloud2& message) {
+  impl_->reference = impl_->handle.advertise<sensor_msgs::PointCloud2>("/xgc/scene/reference_cloud", 1, true);
+  impl_->reference.publish(message);
 }
 
 }  // namespace xgc_scene

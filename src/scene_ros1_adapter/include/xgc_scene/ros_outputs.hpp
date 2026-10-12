@@ -3,6 +3,7 @@
 #include "xgc_scene/common.hpp"
 
 #include <geometry_msgs/TransformStamped.h>
+#include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <xgc2_geometry_msgs/SceneSnapshot.h>
 #include <xgc2_geometry_msgs/SceneState.h>
@@ -40,6 +41,7 @@ class RosPublishers final : public RosOutputs {
   void markers(const visualization_msgs::MarkerArray& message) override;
   void staticTransforms(const std::vector<geometry_msgs::TransformStamped>& messages) override;
   void dynamicTransforms(const std::vector<geometry_msgs::TransformStamped>& messages) override;
+  void fixedCloud(const sensor_msgs::PointCloud2& message);
 
  private:
   class Impl;
