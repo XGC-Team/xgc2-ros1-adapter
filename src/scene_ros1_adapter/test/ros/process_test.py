@@ -126,6 +126,23 @@ class SimulationHandler(socketserver.StreamRequestHandler):
                           'Content-Length: {}\r\n\r\n'.format(len(payload))).encode() + payload)
 
 
+def scene_session(session, source, root, simulator):
+    asset = root / 'resources' / 'Shared' / 'Scenes' / 'Fixture'
+    asset.mkdir(parents=True, exist_ok=True)
+    document = asset / 'scene.yaml'
+    document.write_bytes(source.read_bytes())
+    (asset / 'manifest.json').write_text(json.dumps({
+        'schemaVersion': 1, 'kind': 'xgc.scene-replay-asset.v1', 'revisionId': 'fixture',
+        'simulators': {simulator: {'geometry': 'document'}},
+        'sceneDocument': {'file': document.name, 'sha256': hashlib.sha256(document.read_bytes()).hexdigest()}}))
+    workspace = root / 'session-workspace'
+    workspace.mkdir(exist_ok=True)
+    session.update({'scene': {'asset': 'Fixture', 'simulator': simulator, 'parameters': {'frozen': False}},
+                    'experimentResourceId': 'fixture-experiment', 'sessionId': 'fixture-session',
+                    'runtime': {'userFilesDir': str(root / 'resources'), 'workspaceDir': str(workspace)}})
+    return session
+
+
 def fleet_process(args, root, node_log, namespace, source):
     """Real adapter timer, both discovery sockets and enable control."""
     import rospy
@@ -153,8 +170,9 @@ def fleet_process(args, root, node_log, namespace, source):
             'enabled': True, 'mode': 'raycast', 'acceleration': 'cpu', 'publishBeams': True,
             'hRes': 1, 'vRes': 1, 'hFovDeg': 90, 'rateHz': 20}}}},
         {'namespace': '/lf_process/B', 'binding': {'simulationSensors': {'simpleLidar': True}}}],
-        'visualizationTopics': [[{'topic': '/xgc/scene/reference_cloud',
-            'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]]}
+        'visualizationTopics': [{'topic': '/xgc/scene/reference_cloud',
+            'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]}
+    scene_session(session, source, root, "gazebo")
     command = [str(args.executable.resolve()), '--socket-path', str(scene_socket), '--target-id', 'fixture',
                '--run-id', 'fleet-smoke', '--node-name', 'scene_fleet_smoke',
                '--ros-master-uri', os.environ['ROS_MASTER_URI'], '--ros-ip', '127.0.0.1',
@@ -239,6 +257,11 @@ def fleet_process(args, root, node_log, namespace, source):
             native.release.set()
             refused = edit.result(timeout=5)
         assert not refused['synchronized']
+        asset = root / 'resources' / 'Shared' / 'Scenes' / 'Fixture'
+        manifest = json.loads((asset / 'manifest.json').read_text())
+        assert hashlib.sha256((asset / 'scene.yaml').read_bytes()).hexdigest() == manifest['sceneDocument']['sha256']
+        assert (root / 'session-workspace' / 'native-scenes' / 'fixture-experiment' / 'Fixture' / 'scene-document.yaml').is_file()
+
         time.sleep(0.1)
         with changed:
             before = dict(counts)
@@ -416,6 +439,7 @@ def main():
             session = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_absent',
                 'binding': {'simulationSensors': {'simpleLidar': {'enabled': True,
                     'mode': 'depth_frustum', 'acceleration': 'cpu'}}}}], 'visualizationTopics': []}
+            scene_session(session, source, root, "xsim")
             with node_log.open('a') as output:
                 node = subprocess.Popen(xsim_command, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             node.stdin.write(json.dumps(session).encode())

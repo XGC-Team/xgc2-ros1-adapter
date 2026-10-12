@@ -33,8 +33,8 @@ SessionInput parseSessionInput(std::string_view text) {
   if (!document.contains("visualizationTopics") ||
       !document["visualizationTopics"].is_array())
     throw SceneError("visualizationTopics must be an array");
-  return {run_mode, std::move(document["robots"]),
-          std::move(document["visualizationTopics"])};
+  return {run_mode, document["robots"], document["visualizationTopics"],
+          std::move(document)};
 }
 
 Json buildFleetJson(const SessionInput &input) {
@@ -125,17 +125,12 @@ Json buildFleetJson(const SessionInput &input) {
     }
   }
   try {
-    for (const auto &layer : input.visualization_topics) {
-      if (!layer.is_array())
-        throw SceneError("visualizationTopics layers must be arrays");
-      for (const auto &topic : layer) {
-        if (topic.at("topic") == "/xgc/scene/reference_cloud" &&
-            topic.at("messageType") == "sensor_msgs/PointCloud2" &&
-            topic.at("role") == "semantic" &&
-            (topic.value("visible3d", false) ||
-             topic.value("visibleAr", false)))
-          fleet["referenceCloud"] = {{"surfaceSpacing", 0.1}};
-      }
+    for (const auto &topic : input.visualization_topics) {
+      if (topic.at("topic") == "/xgc/scene/reference_cloud" &&
+          topic.at("messageType") == "sensor_msgs/PointCloud2" &&
+          topic.at("role") == "semantic" &&
+          (topic.value("visible3d", false) || topic.value("visibleAr", false)))
+        fleet["referenceCloud"] = {{"surfaceSpacing", 0.1}};
     }
   } catch (const Json::exception &error) {
     throw SceneError("visualizationTopics: " + std::string(error.what()));

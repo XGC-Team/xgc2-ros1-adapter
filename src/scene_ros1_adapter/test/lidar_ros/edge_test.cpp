@@ -84,8 +84,8 @@ Json sessionDocument(std::size_t sensors = 1) {
         {"binding", {{"simulationSensors", {{"simpleLidar", {{"enabled", true},
             {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 1}, {"vRes", 1}}}}}}}});
   return {{"runMode", "simulation"}, {"robots", robots},
-      {"visualizationTopics", Json::array({Json::array({{{"topic", "/xgc/scene/reference_cloud"},
-          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})})}};
+      {"visualizationTopics", Json::array({{{"topic", "/xgc/scene/reference_cloud"},
+          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})}};
 }
 
 TEST(LidarSession, StdinEmptyValidSizeJsonRunModesAndReadFailures) {

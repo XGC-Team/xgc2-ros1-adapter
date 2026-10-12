@@ -273,7 +273,7 @@ TEST_P(PrepareReplay, CliSelectionAndMaterialization) {
     const bool document = manifest.at("simulators").at("gazebo").at("geometry") == "document";
     const bool random = manifest.value("obstacleInput", Json::object()).value("mode", Json()) == "random";
     Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}}},
-                 {"experimentResourceId", "experiment1"}, {"openingRunId", "run1"}};
+                 {"experimentResourceId", "experiment1"}, {"openingRunId", "run1"}, {"sessionId", "run1"}};
     if (request.contains("parameters")) context["scene"]["parameters"] = request.at("parameters");
     std::vector<std::string> arguments{"--context-json", context.dump(), "--resource-root", fixture.work.string(),
                                        "--workspace-root", fixture.workspace().string(), "--socket-path", request.at("socket_path").get<std::string>(),
@@ -408,6 +408,16 @@ TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
   EXPECT_EQ(selected.at("generationParametersJson"), "{\"seed\":1.0}");
   EXPECT_EQ(selected.at("frozen"), false); EXPECT_EQ(selected.at("worldFile"), "");
   EXPECT_FALSE(fs::exists(selected.at("workingFile").get<std::string>()));
+  context["scene"]["parameters"]["frozen"] = false;
+  EXPECT_EQ(inputs(context, fixture.work, fixture.workspace()), selected);
+  context["scene"]["parameters"]["frozen"] = true;
+  const auto locked = inputs(context, fixture.work, fixture.workspace());
+  EXPECT_EQ(locked.at("workingFile"), "");
+  EXPECT_EQ(locked.at("frozen"), true);
+  EXPECT_FALSE(locked.at("parameters").contains("frozen"));
+  context["scene"]["parameters"]["frozen"] = "false";
+  EXPECT_THROW(inputs(context, fixture.work, fixture.workspace()), SceneError);
+  context["scene"]["parameters"].erase("frozen");
   const auto result = cli(fixture.temporary.root, {"--context-json=" + context.dump()},
                           {{"XGC_USER_FILES_DIR", fixture.work.string()}, {"XGC_JOB_ARTIFACT_ROOT", fixture.workspace().string()}});
   ASSERT_EQ(result.code, 0) << result.err; same(parseJson(result.out), selected);
@@ -442,7 +452,7 @@ TEST(Prepare, LegacyChassisParameterIsRejectedForXsimSelection) {
 }
 
 TEST(Prepare, RandomArtifactsAreStagedAndExistingResultsAreReused) {
-  Fixture fixture("document-and-media");
+  Fixture fixture("document-and-media", true);
   const auto generator = fixture.fixtures / "generator.py", counter = fixture.fixtures / "counter";
   write(generator, "#!/usr/bin/env python3.8\nimport json\nfrom pathlib import Path\np = Path('" + counter.string() + "')\np.write_text(p.read_text() + 'run\\n' if p.exists() else 'run\\n')\nprint(json.dumps({'scene': {'schema': 'xgc2.scene.v1', 'id': 'generated', 'frame': 'world', 'obstacles': []}, 'producer': 'fixture'}))\n", 0755);
   Json source{{"schema", "xgc2.scene-source.v1"}, {"format", "geometry"}, {"mode", "random"},
@@ -464,6 +474,13 @@ TEST(Prepare, RandomArtifactsAreStagedAndExistingResultsAreReused) {
   EXPECT_EQ(bytes(counter), "run\n");
   EXPECT_EQ(prepare(request).at("writes").size(), 1u);
   EXPECT_EQ(bytes(counter), "run\n");
+  const Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}}},
+                     {"experimentResourceId", "experiment1"}, {"sessionId", "session1"}};
+  const auto selected = inputs(context, fixture.work, fixture.workspace());
+  EXPECT_EQ(selected.at("workingFile"), (fixture.cliOutput(true) / "session1" / "scene-document.yaml").string());
+  EXPECT_EQ(selected.at("sceneFile"), selected.at("workingFile"));
+  EXPECT_EQ(inputs(context, fixture.work, fixture.workspace()), selected);
+  EXPECT_EQ(bytes(counter), "run\nrun\n");
 }
 
 }  // namespace

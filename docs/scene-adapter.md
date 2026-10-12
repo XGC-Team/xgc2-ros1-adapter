@@ -268,3 +268,13 @@ The golden corpus in `test/scene_golden` is the behavioral reference. Core sourc
 and replay tests are globbed by the package CMake. The catkin CI job builds the
 node and both CLIs, runs the catkin tests and the package's CTest suite, packages
 the installed files, and checks the scene package's ownership and library resolution.
+
+
+Session Scene authoring receives the full frozen `$session` on stdin. In simulation
+it resolves the same native input selection as World using `runtime.userFilesDir`
+and `runtime.workspaceDir`, without awaiting a World receipt in Core. The native
+working file is separate from the sealed attachment. `scene.parameters.frozen`
+selects locking and is removed before physics validation; `false` does not make
+native/mixed geometry editable. Random geometry is keyed by the actual `sessionId`
+so concurrent World and Scene processes resolve the same generated document.
+`openingRunId` remains the native World materialization transaction identity.

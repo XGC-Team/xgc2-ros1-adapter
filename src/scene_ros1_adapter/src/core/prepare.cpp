@@ -715,15 +715,21 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
     world = kDefaultWorld;
     if (!fs::is_regular_file(world)) throw SceneError("The provider editable-world template is not installed");
   }
-  const auto authored = selection.value("parameters", Json::object());
+  auto authored = selection.value("parameters", Json::object());
   if (!authored.is_object()) throw SceneError("Scene parameters must be an object");
   if (authored.contains("chassis_robot_ids"))
     throw SceneError("scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic");
+  bool locked = false;
+  if (authored.contains("frozen")) {
+    if (!authored.at("frozen").is_boolean()) throw SceneError("Scene parameter frozen must be a boolean");
+    locked = authored.at("frozen").get<bool>();
+    authored.erase("frozen");
+  }
   const auto physics = simulator == "gazebo" ? parameters(authored, template_world) : authored;
   auto obstacle_input = manifest.value("obstacleInput", Json());
   if (!truth(obstacle_input)) obstacle_input = Json::object();
   const bool random = obstacle_input.value("mode", Json()) == "random";
-  const bool editable = mode == "document" && std::all_of(supports.begin(), supports.end(), [](const auto& support) {
+  const bool editable = !locked && mode == "document" && std::all_of(supports.begin(), supports.end(), [](const auto& support) {
     return support.is_object() && support.value("geometry", Json()) == "document";
   });
   std::string working;
@@ -735,8 +741,8 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
       throw SceneError("An existing provider workspace grant is required");
     auto output = fs::canonical(grant) / "native-scenes" / experiment.get<std::string>() / name.get<std::string>();
     if (random) {
-      const auto run = context.value("openingRunId", Json(""));
-      if (!shortIdentity(run)) throw SceneError("Random geometry requires the actual Session opening Run identity");
+      const auto run = context.value("sessionId", Json(""));
+      if (!shortIdentity(run)) throw SceneError("Random geometry requires the actual Session identity");
       output /= run.get<std::string>();
     }
     workspaceChildren(grant, output);
@@ -745,7 +751,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   if (!scene.empty() && random) scene = resolve(scene, working, authored.value("generation", Json::object()), 8 * 1024 * 1024).second;
   Json value{{"assetDirectory", directory.string()}, {"simulator", simulator}, {"sceneFile", scene}, {"worldFile", world},
              {"worldAttachment", truth(manifest.value("gazeboWorld", Json())) && simulator == "gazebo"},
-             {"projectGeometry", simulator == "gazebo" && mode == "document"}, {"workingFile", working}, {"frozen", working.empty()},
+             {"projectGeometry", simulator == "gazebo" && mode == "document"}, {"workingFile", working}, {"frozen", locked || working.empty()},
              {"parameters", physics}, {"generationParametersJson", ""}};
   // dumpJson supplies Python's number spelling and nonfinite rejection; compact
   // separators are selected without altering spaces inside strings.

@@ -1,4 +1,6 @@
 #include "xgc_scene/node.hpp"
+#include "xgc_scene/prepare.hpp"
+#include "xgc_scene/json_io.hpp"
 #include "peer_backoff.hpp"
 #include <xmlrpcpp/XmlRpcValue.h>
 #include "xgc_scene/lidar/control.hpp"
@@ -267,6 +269,16 @@ int main(int argc, char** argv) {
             return;
           }
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply scene parameters");
+        }
+        if (session && config.profile != "physical") {
+          const auto& facts = session->facts;
+          const auto& runtime = facts.at("runtime");
+          const auto selected = xgc_scene::inputs(facts, runtime.at("userFilesDir").get<std::string>(),
+                                                 runtime.at("workspaceDir").get<std::string>());
+          config.scene_file = selected.at("sceneFile").get<std::string>();
+          config.working_file = selected.at("workingFile").get<std::string>();
+          config.frozen = selected.at("frozen").get<bool>();
+          config.generation_parameters = xgc_scene::parseJson(selected.at("generationParametersJson").get<std::string>());
         }
         std::shared_ptr<xgc_scene::SimulationClient> simulation;
         if (config.profile == "gazebo") simulation = std::make_shared<xgc_scene::SimulationClient>(config.simulation_endpoint, config.target_id);

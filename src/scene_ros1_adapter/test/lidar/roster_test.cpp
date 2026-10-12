@@ -210,40 +210,40 @@ const GoldenCase
              R"json({"runMode":"hybrid","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"physical","simulationSensors":{"simpleLidar":false}},"asset":{}}],"visualizationTopics":[]})json",
              R"json(world lidar supports at most 512 robots)json", true, 513},
             {"reference missing visibility",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic"}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic"}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
             {"reference invisible",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":false,"visibleAr":false}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":false,"visibleAr":false}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
             {"reference visible 3D",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"reference visible AR",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]})json",
              R"json({"schemaVersion":1,"robots":[],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"reference visible both",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true,"visibleAr":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true,"visibleAr":true}]})json",
              R"json({"schemaVersion":1,"robots":[],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"reference wrong role",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"telemetry","visible3d":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"telemetry","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
             {"reference wrong message type",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/LaserScan","role":"semantic","visible3d":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/LaserScan","role":"semantic","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
             {"reference wrong topic",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/other","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/other","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
             {"reference after other layers",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"cpu"}}},"asset":{}}],"visualizationTopics":[[],[{"topic":"/other","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}],[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]]})json",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"cpu"}}},"asset":{}}],"visualizationTopics":[{"topic":"/other","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true},{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"penetrating","rateHz":10,"rangeMeters":20,"hFovDeg":360,"vFovDeg":30,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":false,"headingCrop":false,"headingCosMin":0,"verticalSlabTan":0,"publishBeams":false}],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"reference duplicate declarations",
-             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}],[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]]})json",
+             R"json({"runMode":"simulation","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true},{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]})json",
              R"json({"schemaVersion":1,"robots":[],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"hybrid physical slots can have reference",
-             R"json({"runMode":"hybrid","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"physical","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"gpu"}}},"asset":{}}],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]]})json",
+             R"json({"runMode":"hybrid","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"physical","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"gpu"}}},"asset":{}}],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[],"referenceCloud":{"surfaceSpacing":0.1}})json"},
             {"physical ignores visible reference",
-             R"json({"runMode":"physical","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"cpu"}}},"asset":{}}],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]]})json",
+             R"json({"runMode":"physical","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"cpu"}}},"asset":{}}],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
 };
 
@@ -297,22 +297,12 @@ TEST(Roster, GoldenLegacyPrepare) {
 }
 
 TEST(Roster, ParsePreservesFrozenFacts) {
-  const auto document = Json::parse(R"json({
-    "runMode":"hybrid",
-    "robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen",
-      "name":"Robot","kind":"scout_mini","namespace":"/robot",
-      "profile":{"id":"profile","channels":[{"id":"sensor"}]},
-      "binding":{"hybridSource":"simulation","namespace":"/binding",
-        "simulationSensors":{"simpleLidar":{"enabled":true,
-          "mode":"depth_frustum","acceleration":"cpu"}},"initialPose":{"x":1.25}},
-      "asset":{"name":"Frozen asset","scout":{"lidarSimulationEnabled":true}}}],
-    "visualizationTopics":[[],[{"topic":"/other","messageType":"std_msgs/Bool",
-      "role":"semantic","visibleAr":true}]]
-  })json");
+  const auto document = Json::parse(R"json({"runMode":"hybrid","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{"id":"profile","channels":[{"id":"sensor"}]},"binding":{"hybridSource":"simulation","namespace":"/binding","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu"}},"initialPose":{"x":1.25}},"asset":{"name":"Frozen asset","scout":{"lidarSimulationEnabled":true}}}],"visualizationTopics":[{"topic":"/other","messageType":"std_msgs/Bool","role":"semantic","visibleAr":true}]})json");
   const auto input = parseSessionInput(document.dump());
   EXPECT_EQ("hybrid", input.run_mode);
   EXPECT_EQ(document["robots"], input.robots);
   EXPECT_EQ(document["visualizationTopics"], input.visualization_topics);
+  EXPECT_EQ(document, input.facts);
   const auto before = input.robots;
   const auto fleet = buildFleetJson(input);
   ASSERT_EQ(1u, fleet["robots"].size());
@@ -374,20 +364,7 @@ TEST(Roster, SessionInputByteLimit) {
 }
 
 TEST(Roster, ManifestSensorModelsRatesAndNodeDefaults) {
-  const auto input = parseSessionInput(R"json({
-    "runMode":"simulation","robots":[
-      {"namespace":"/native","binding":{"simulationSensors":{"simpleLidar":true}}},
-      {"namespace":"/rays","binding":{"simulationSensors":{"simpleLidar":{
-        "enabled":true,"mode":"raycast","acceleration":"cpu","publishBeams":true,
-        "rateHz":25,"rangeMeters":12,"hRes":24,"vRes":8}}}},
-      {"namespace":"/samples","binding":{"simulationSensors":{"simpleLidar":{
-        "enabled":true,"preset":"bridge_equivalent","acceleration":"cpu"}}}},
-      {"namespace":"/camera","binding":{"simulationSensors":{"simpleLidar":{
-        "enabled":true,"mode":"depth_frustum","acceleration":"cpu","rateHz":17.5,
-        "hRes":20,"vRes":8}}}}
-    ],"visualizationTopics":[[{"topic":"/xgc/scene/reference_cloud",
-      "messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]]
-  })json");
+  const auto input = parseSessionInput(R"json({"runMode":"simulation","robots":[{"namespace":"/native","binding":{"simulationSensors":{"simpleLidar":true}}},{"namespace":"/rays","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","publishBeams":true,"rateHz":25,"rangeMeters":12,"hRes":24,"vRes":8}}}},{"namespace":"/samples","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"preset":"bridge_equivalent","acceleration":"cpu"}}}},{"namespace":"/camera","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu","rateHz":17.5,"hRes":20,"vRes":8}}}}],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visibleAr":true}]})json");
   SensorConfig defaults;
   defaults.noise_std = 0.02;
   defaults.seed = 37;
@@ -459,10 +436,7 @@ TEST(Roster, EmptyFleetAndReferenceOnly) {
   EXPECT_TRUE(fleet.bodies.empty());
   EXPECT_FALSE(fleet.body_roster);
   EXPECT_FALSE(fleet.reference);
-  const auto reference = buildFleet(parseSessionInput(R"json({
-    "runMode":"hybrid","robots":[],"visualizationTopics":[[{
-      "topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2",
-      "role":"semantic","visible3d":true}]]})json"));
+  const auto reference = buildFleet(parseSessionInput(R"json({"runMode":"hybrid","robots":[],"visualizationTopics":[{"topic":"/xgc/scene/reference_cloud","messageType":"sensor_msgs/PointCloud2","role":"semantic","visible3d":true}]})json"));
   EXPECT_TRUE(reference.robots.empty());
   ASSERT_TRUE(reference.reference);
   EXPECT_EQ(0.1, reference.reference->surface_spacing);

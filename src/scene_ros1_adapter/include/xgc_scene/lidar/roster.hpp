@@ -8,10 +8,10 @@
 
 namespace xgc_scene::lidar {
 
-// The Gazebo profile receives one JSON document on stdin, at most 8388608
-// bytes: {"runMode":"simulation|hybrid|physical", "robots":[RobotFact...],
-// "visualizationTopics":[[topic...], ...]}. These three values are copied
-// unchanged from the frozen $session; Core computes no fleet manifest.
+// The process receives the full frozen $session unchanged on stdin, at most
+// 8388608 bytes. The fleet reads runMode, robots and visualizationTopics; Scene
+// authoring resolves the same native working copy as World from scene/runtime.
+// Core computes neither a fleet manifest nor the native working-copy path.
 // RobotFact.namespace and binding.{hybridSource,simulationSensors.simpleLidar}
 // supply the sensor selection. An absent simpleLidar is off; a boolean selects
 // the simulator's native default model. Asset/profile/identity fields are not
@@ -26,6 +26,7 @@ struct SessionInput {
   std::string run_mode;
   Json robots;
   Json visualization_topics;
+  Json facts = Json::object();
 };
 
 // Requires a JSON object with all three members, a recognized runMode, an
