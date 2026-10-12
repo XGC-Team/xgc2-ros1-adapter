@@ -225,7 +225,7 @@ def normalize_parameters(value, context, preview):
     boundary = p.get("worldBoundary")
     if boundary is not None and not isinstance(boundary, dict) or len(json_bytes(boundary)) > 65536:
         raise ValueError("worldBoundary must preserve the bounded frozen object or null")
-    for name, extensions in (("calibrationFiles", (".yaml", ".yml")), ("algorithmSidecarFiles", (".mat", ".yaml", ".yml"))):
+    for name, extensions in (("calibrationFiles", (".yaml", ".yml")), ("algorithmSidecarFiles", (".mat", ".yaml", ".yml", ".json"))):
         files = p.setdefault(name, [])
         if not isinstance(files, list) or len(files) > 32:
             raise ValueError(name + " exceeds its declared bound")
