@@ -702,10 +702,11 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   const auto directory = checkedPath((root / "Shared" / "Scenes" / name.get<std::string>()).string(), root / "Shared" / "Scenes", true);
   const auto manifest = manifestAt(directory);
   const auto supports = manifest.value("simulators", Json());
-  if (!supports.is_object() || (simulator != "gazebo" && simulator != "xsim") ||
-      !supports.value(simulator.get<std::string>(), Json()).is_object())
+  const bool physical = simulator == "none";
+  if (!supports.is_object() || (!physical && (simulator != "gazebo" && simulator != "xsim")) ||
+      (!physical && !supports.value(simulator.get<std::string>(), Json()).is_object()))
     throw SceneError("The selected simulator is not supported by the asset");
-  const auto mode = supports.at(simulator.get<std::string>()).value("geometry", Json());
+  const auto mode = physical ? Json("document") : supports.at(simulator.get<std::string>()).value("geometry", Json());
   if ((mode != "document" && mode != "native") || (simulator == "xsim" && mode != "document"))
     throw SceneError("Unsupported geometry for the selected simulator");
   auto scene = attachment(directory, manifest.value("sceneDocument", Json()), mode == "document");

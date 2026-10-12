@@ -407,6 +407,12 @@ TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
   EXPECT_EQ(selected.at("workingFile"), (fixture.cliOutput(true) / "scene-document.yaml").string());
   EXPECT_EQ(selected.at("generationParametersJson"), "{\"seed\":1.0}");
   EXPECT_EQ(selected.at("frozen"), false); EXPECT_EQ(selected.at("worldFile"), "");
+  auto physical_context = context;
+  physical_context["scene"]["simulator"] = "none";
+  auto physical_selected = selected;
+  physical_selected["simulator"] = "none";
+  EXPECT_EQ(inputs(physical_context, fixture.work, fixture.workspace()), physical_selected);
+
   EXPECT_FALSE(fs::exists(selected.at("workingFile").get<std::string>()));
   context["scene"]["parameters"]["frozen"] = false;
   EXPECT_EQ(inputs(context, fixture.work, fixture.workspace()), selected);

@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
           }
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not supply scene parameters");
         }
-        if (session && config.profile != "physical") {
+        if (session) {
           const auto& facts = session->facts;
           const auto& runtime = facts.at("runtime");
           const auto selected = xgc_scene::inputs(facts, runtime.at("userFilesDir").get<std::string>(),

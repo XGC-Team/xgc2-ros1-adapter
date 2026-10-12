@@ -131,12 +131,12 @@ explicit CPU acceleration; GPU requests are refused without fallback.
 | `~lidar_enabled` | `lidarEnabled` | Initial enable state, default true. Launch configuration owns initial state. |
 | `~lidar_defaults_json` | `lidarDefaultsJson` | Defaults object, default `{}`. Unknown keys are refused by name. |
 
-Core computes no fleet manifest. The scene workflow copies `$session.runMode`,
-`$session.robots` and `$session.visualizationTopics` unchanged into this string
-expression, interpolating the JSON arrays inline:
+Core computes no fleet manifest. The scene workflow serializes the full frozen
+`$session` unchanged into `sessionJson`. The string expression retains its spaces
+so the workflow evaluator supplies serialized JSON rather than a typed object:
 
-```text
-{"runMode":"{{ $session.runMode }}","robots":{{ $session.robots }},"visualizationTopics":{{ $session.visualizationTopics }}}
+```json
+"sessionJson": " {{ $session }} "
 ```
 
 `command.stdinParameter` names `sessionJson`; the command includes
@@ -270,9 +270,10 @@ node and both CLIs, runs the catkin tests and the package's CTest suite, package
 the installed files, and checks the scene package's ownership and library resolution.
 
 
-Session Scene authoring receives the full frozen `$session` on stdin. In simulation
-it resolves the same native input selection as World using `runtime.userFilesDir`
-and `runtime.workspaceDir`, without awaiting a World receipt in Core. The native
+Session Scene authoring receives the full frozen `$session` on stdin in every
+profile. It resolves the native input selection using `runtime.userFilesDir` and
+`runtime.workspaceDir`, without awaiting a World receipt in Core. Physical
+`scene.simulator=none` selects document geometry without a simulator world. The native
 working file is separate from the sealed attachment. `scene.parameters.frozen`
 selects locking and is removed before physics validation; `false` does not make
 native/mixed geometry editable. Random geometry is keyed by the actual `sessionId`
