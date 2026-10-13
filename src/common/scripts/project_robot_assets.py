@@ -19,7 +19,7 @@ MODELS = {
 
 
 def scalar(value):
-    return format(value, ".15g") if isinstance(value, float) else str(value)
+    return str(int(value)) if isinstance(value, float) and value.is_integer() else repr(value) if isinstance(value, float) else str(value)
 
 
 def project(row, context):
