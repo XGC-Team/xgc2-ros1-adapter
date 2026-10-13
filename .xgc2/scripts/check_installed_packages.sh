@@ -251,8 +251,8 @@ assert set(definition) <= {'id', 'version', 'label', 'description', 'parameters'
 assert definition['id'] == 'xgc2-ros1-scene-adapter'
 assert definition['command']['executable'] == executable
 assert definition['services'] == [
-    {'service': 'xgc2.scene.authoring', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'socketPath'},
-    {'service': 'xgc2.sensor.lidar', 'api_version': '1', 'profile': 'http.v1', 'endpointParameter': 'lidarSocketPath'},
+    {'service': 'xgc2.scene.authoring', 'api_version': 'v1', 'profile': 'http.v1', 'endpointParameter': 'socketPath'},
+    {'service': 'xgc2.sensor.lidar', 'api_version': 'v1', 'profile': 'http.v1', 'endpointParameter': 'lidarSocketPath'},
 ]
 assert set(definition['parameters']) <= {'properties', 'required', 'groups'}
 for parameter in definition['parameters']['properties'].values():
