@@ -1,6 +1,8 @@
 #pragma once
 
 #include "xgc_scene/lidar/manifest.hpp"
+#include "xgc_scene/lidar/gpu.hpp"
+#include <map>
 #include "xgc_scene/lidar/scan_pool.hpp"
 #include "xgc_scene/lidar/scene.hpp"
 
@@ -52,7 +54,7 @@ struct EngineOptions {
 
 // One owner thread calls all methods, including tick; calls must not overlap.
 // The owner supplies simulation nanoseconds, demand and the latest received
-// world-frame samples. No wall timers, observation cache, or ROS types exist.
+// world-frame samples. No wall timers or ROS types exist. Unchanged static observations reuse bytes.
 // The manifest and body membership are frozen for this object's lifetime.
 class Engine {
 public:
@@ -122,7 +124,15 @@ private:
   std::vector<long double> periods_;
   std::vector<std::uint8_t> sensor_enabled_, demand_, pose_valid_, with_bodies_;
   std::vector<xgc2_math::Pose3> poses_;
-  std::vector<std::size_t> active_;
+  std::vector<std::size_t> active_, gpu_active_;
+  std::size_t gpu_count_ = 0;
+  std::vector<std::uint8_t> cpu_fallback_;
+  struct alignas(64) ObservationCache {
+    xgc2_math::Pose3 pose;
+    std::uint64_t generation = 0;
+  };
+  std::vector<ObservationCache> observation_cache_;
+  std::map<std::size_t,std::unique_ptr<GpuMap>> gpu_maps_;
   std::vector<xgc2_math::Pose3> body_poses_;
   std::vector<std::int64_t> body_stamps_;
   std::vector<std::uint8_t> body_valid_;

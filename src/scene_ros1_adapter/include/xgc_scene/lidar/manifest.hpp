@@ -11,6 +11,7 @@
 namespace xgc_scene::lidar {
 
 struct SensorSpec {
+  std::string backend = "cpu";
   std::string name_space;
   std::string pose_topic;
   int body_id = 0;

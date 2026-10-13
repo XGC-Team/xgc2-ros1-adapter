@@ -63,9 +63,7 @@ Json buildFleetJson(const SessionInput &input) {
           !(mode == "penetrating" || mode == "depth_frustum" || publish_beams ||
             (!preset.empty() && mode != "raycast")))
         continue;
-      if (lidar.value("acceleration", std::string{}) != "cpu")
-        throw SceneError("sampled-scene lidar requires an explicit CPU "
-                         "acceleration selection");
+
 
       const auto authored_namespace = robot.at("namespace").get<std::string>();
       const auto start = authored_namespace.find_first_not_of('/');
@@ -76,6 +74,7 @@ Json buildFleetJson(const SessionInput &input) {
           !std::regex_match(name_space, name_pattern))
         throw SceneError("invalid lidar namespace");
       Json sensor = {{"namespace", name_space},
+                     {"backend", lidar.value("acceleration", std::string("auto")).empty() ? "auto" : lidar.value("acceleration", std::string("auto"))},
                      {"mode", "raycast"},
                      {"rateHz", 10},
                      {"rangeMeters", 20},

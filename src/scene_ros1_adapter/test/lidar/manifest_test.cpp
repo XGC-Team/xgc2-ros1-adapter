@@ -69,12 +69,12 @@ TEST(Manifest, DefaultsAndAllSensorFields) {
 TEST(Manifest, OriginalRefusalMessages) {
   auto d = manifest();
   d["backend"] = "gpu";
-  refused(d, "fleet backend must be cpu; GPU is not supported");
+  EXPECT_EQ("gpu", parseManifest(d.dump()).robots[0].backend);
   d["backend"] = "cpu";
   EXPECT_NO_THROW(parseManifest(d.dump()));
   d.erase("backend");
   d["robots"][0]["backend"] = "gpu";
-  refused(d, "fleet backend must be cpu; GPU is not supported");
+  EXPECT_EQ("gpu", parseManifest(d.dump()).robots[0].backend);
   d["robots"][0]["backend"] = "cpu";
   EXPECT_NO_THROW(parseManifest(d.dump()));
   d = manifest();

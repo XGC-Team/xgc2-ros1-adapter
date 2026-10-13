@@ -27,7 +27,7 @@ public:
   using Job = void (*)(void *, std::size_t);
   // All jobs finish even if one throws; the first exception is rethrown on the
   // caller. context remains borrowed only until run() returns.
-  void run(std::size_t count, void *context, Job job);
+  void run(std::size_t count, void *context, Job job, void (*owner_job)(void*) = nullptr);
 
 private:
   void work();

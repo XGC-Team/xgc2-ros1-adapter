@@ -52,7 +52,9 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
       poses_(lidars_.size()), active_(lidars_.size()),
       body_poses_(manifest_.bodies.size()), body_stamps_(body_poses_.size()),
       body_valid_(body_poses_.size()),
-      pool_(threadsFor(lidars_.size(), options.worker_threads)) {
+      pool_(threadsFor(std::count_if(manifest_.robots.begin(), manifest_.robots.end(),
+                                    [](const auto& sensor) { return sensor.backend != "gpu"; }),
+                       options.worker_threads)) {
   if (!std::isfinite(options.pose_timeout) || options.pose_timeout <= 0.0)
     throw std::invalid_argument(
         "world lidar needs frame_id=world and a positive finite pose_timeout");
@@ -62,6 +64,9 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
   const auto body_count =
       manifest_.body_roster ? manifest_.bodies.size() : lidars_.size();
   body_snapshot_.reserve(body_count);
+  gpu_active_.resize(lidars_.size());
+  cpu_fallback_.resize(lidars_.size(), false);
+  observation_cache_.resize(lidars_.size());
   std::vector<std::shared_ptr<const BeamPattern>> patterns;
   for (std::size_t i = 0; i < lidars_.size(); ++i) {
     auto config = manifest_.robots[i].config;
@@ -111,6 +116,7 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
     return false;
   if (!invalidateScene(revision))
     return false;
+  gpu_maps_.clear();
   scenes_.setScene(obstacles, revision);
   ++preparation_generation_;
   pending_sensors_ = lidars_.size();
@@ -259,10 +265,15 @@ std::size_t Engine::tick(std::int64_t now) {
   }
   if (pending_sensors_ != 0)
     prepareSensors(count);
-  pool_.run(count, this, [](void *context, std::size_t job) {
+  std::size_t cpu_count=0;gpu_count_=0;
+  for(std::size_t job=0;job<count;++job){const auto i=active_[job];
+    if(manifest_.robots[i].backend != "cpu" && !cpu_fallback_[i]) gpu_active_[gpu_count_++]=i;
+    else active_[cpu_count++]=i;
+  }
+  pool_.run(cpu_count, this, [](void *context, std::size_t job) {
     auto &engine = *static_cast<Engine *>(context);
     engine.scan(engine.active_[job]);
-  });
+  }, [](void* context){auto& engine=*static_cast<Engine*>(context);for(std::size_t j=0;j<engine.gpu_count_;++j)engine.scan(engine.gpu_active_[j]);});
   return count;
 }
 
@@ -286,6 +297,30 @@ void Engine::scan(std::size_t sensor) {
   if (options_.yaw_only) {
     const Eigen::Vector3d x = q * Eigen::Vector3d::UnitX();
     q = Eigen::AngleAxisd(std::atan2(x.y(), x.x()), Eigen::Vector3d::UnitZ());
+  }
+  const bool reusable = !with_bodies_[sensor] && !manifest_.robots[sensor].publish_beams &&
+      lidars_[sensor]->config().noise_std == 0;
+  auto& cache=observation_cache_[sensor];
+  if(reusable && cache.generation==preparation_generation_ &&
+     (cache.pose.position.array()==p.position.array()).all() &&
+     (cache.pose.orientation.coeffs().array()==q.coeffs().array()).all()) {
+    sink_.onPoints(sensor,{points_[sensor].data(),points_[sensor].size()/12,stamps_[sensor],12,scenes_.revision()});
+    return;
+  }
+  const auto remember=[&]{if(reusable){cache.pose={p.position,q};cache.generation=preparation_generation_;}};
+  const auto& spec=manifest_.robots[sensor];
+  if(spec.backend != "cpu" && !cpu_fallback_[sensor]) {
+    try {
+      if (spec.config.mode == SensorConfig::kDepthFrustum || spec.config.noise_std != 0 ||
+          spec.publish_beams || with_bodies_[sensor])
+        throw std::runtime_error("The GPU point renderer does not implement depth, noise, beams or dynamic bodies");
+      auto& gpu=gpu_maps_[policies_[sensor]];
+      if(!gpu) gpu.reset(new GpuMap(sensorScene(sensor),spec.config));
+      gpu->scan(spec.config,{p.position,q},double(stamps_[sensor])*1e-9,points_[sensor]);
+      remember();
+      sink_.onPoints(sensor,{points_[sensor].data(),points_[sensor].size()/12,stamps_[sensor],12,scenes_.revision()});
+      return;
+    } catch(const std::exception& error) { if(spec.backend != "auto") throw; cpu_fallback_[sensor]=true; }
   }
   auto &others = others_[sensor];
   others.clear();
@@ -340,6 +375,7 @@ void Engine::scan(std::size_t sensor) {
                            scenes_.revision()});
     return;
   }
+  remember();
   sink_.onPoints(
       sensor, {points.data(), count, stamps_[sensor], 12, scenes_.revision()});
 }

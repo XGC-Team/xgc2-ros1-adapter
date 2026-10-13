@@ -235,6 +235,7 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      libxgc2-sensing-dev \
       ros-noetic-xgc2-geometry-msgs)"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
@@ -242,6 +243,7 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      libxgc2-sensing-dev \
       ros-noetic-xgc2-geometry-msgs
     for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
       test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"

@@ -116,6 +116,6 @@ Parameters Parameters::parse(const Json& values, const std::string& profile,
 
 Json Parameters::facts(const std::string& profile) const {
   return {{"profile", profile}, {"sensors", manifest.robots.size()},
-          {"backend", profile == "gazebo" ? "cpu" : "none"}};
+          {"backends", profile == "gazebo" ? Json::array({"auto", "cpu", "gpu"}) : Json::array()}};
 }
 }  // namespace xgc_scene::lidar_ros

@@ -69,13 +69,13 @@ void ScanPool::work() {
   }
 }
 
-void ScanPool::run(std::size_t count, void *context, Job job) {
-  if (count == 0)
-    return;
+void ScanPool::run(std::size_t count, void *context, Job job, void (*owner_job)(void*)) {
+  if (count == 0) { if(owner_job) owner_job(context); return; }
   if (!job)
     throw std::invalid_argument("null scan job");
   if (workers_.empty() || count == 1) {
     std::exception_ptr error;
+    if(owner_job) { try {owner_job(context);} catch(...){error=std::current_exception();} }
     for (std::size_t i = 0; i < count; ++i) {
       try {
         job(context, i);
@@ -99,6 +99,7 @@ void ScanPool::run(std::size_t count, void *context, Job job) {
     ++batch_;
   }
   start_.notify_all();
+  if(owner_job) { try {owner_job(context);} catch(...){std::lock_guard<std::mutex> lock(mutex_);if(!error_)error_=std::current_exception();} }
   drain();
   std::exception_ptr error;
   {

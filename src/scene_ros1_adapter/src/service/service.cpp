@@ -94,9 +94,6 @@ class SceneService::Impl {
     if (current_facts_) facts.update(current_facts_());
     facts["profile"] = profile_;
     facts["scene_application"] = profile_ == "gazebo" ? "native" : profile_ == "xsim" ? "unsupported" : "visualization";
-    if (profile_ == "gazebo") {
-      facts["lidar"] = Json{{"backend", "cpu"}, {"gpu_supported", false}};
-    }
     return Json{{"service_ref", reference_}, {"capabilities", capabilities},
                 {"limits", Json{{"document_bytes", kMaxDocumentBytes}, {"in_flight", 4}, {"request_results", 256}}},
                 {"completion", "The command commits local desired state. Native application completes asynchronously and is reported in the scene envelope; reconnect replays the current scene once per world instance."},
