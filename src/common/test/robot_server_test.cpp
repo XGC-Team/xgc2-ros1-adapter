@@ -534,7 +534,7 @@ TEST_F(ServerLifecycle, DescribeHoldsUntilTheRosNodeIsRegisteredThenReportsTheFa
   ASSERT_TRUE(early.status.ok());
   EXPECT_FALSE(early.response.ready());
   EXPECT_EQ("starting", facts(early.response)["state"]);
-  EXPECT_EQ("xgc2.robot-adapter", early.response.service_ref().service());
+  EXPECT_EQ("xgc.robot.v1.RobotAdapterServerService", early.response.service_ref().service());
   EXPECT_EQ("fake-provider", early.response.provider_definition_id());
 
   std::atomic<bool> answered{false};

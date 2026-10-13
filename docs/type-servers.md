@@ -3,7 +3,7 @@
 One process per robot type and ROS master, started by the experiment workflow of a Run
 and ended with it. It serves every robot of that type in the Run over one gRPC service on a
 Unix socket (`xgc.robot.v1.RobotAdapterServerService`, XRPC grpc.v1, service name
-`xgc2.robot-adapter`). No server outlives its Run and none keeps state from one Run to the
+`xgc.robot.v1.RobotAdapterServerService`). No server outlives its Run and none keeps state from one Run to the
 next: a Run that starts again starts a new process, registers its robots again and gets fresh
 ROS registrations.
 
@@ -83,7 +83,7 @@ the socket over after a restart.
 
 `Describe(wait_ready_ms)` answers `DescribeResponse`:
 
-- `service_ref`: service `xgc2.robot-adapter`, profile `grpc.v1`, the socket as endpoint, the
+- `service_ref`: service `xgc.robot.v1.RobotAdapterServerService`, profile `grpc.v1`, the socket as endpoint, the
   target id and the **instance id**, new for every process start.
 - `provider_definition_id`, and the limits `maximum_robots` (256), `maximum_members` (256),
   `maximum_batch_members` (256) and `maximum_commands_per_robot` (32).

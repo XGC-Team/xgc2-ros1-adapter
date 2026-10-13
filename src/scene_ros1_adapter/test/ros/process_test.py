@@ -131,10 +131,15 @@ def scene_session(session, source, root, simulator):
     asset.mkdir(parents=True, exist_ok=True)
     document = asset / 'scene.yaml'
     document.write_bytes(source.read_bytes())
-    (asset / 'manifest.json').write_text(json.dumps({
+    manifest = {
         'schemaVersion': 1, 'kind': 'xgc.scene-replay-asset.v1', 'revisionId': 'fixture',
         'simulators': {simulator: {'geometry': 'document'}},
-        'sceneDocument': {'file': document.name, 'sha256': hashlib.sha256(document.read_bytes()).hexdigest()}}))
+        'sceneDocument': {'file': document.name, 'sha256': hashlib.sha256(document.read_bytes()).hexdigest()}}
+    if simulator == 'gazebo':
+        world = asset / 'fixture.world'
+        world.write_text('<sdf version="1.7"><world name="fixture"/></sdf>')
+        manifest['gazeboWorld'] = {'file': world.name, 'sha256': hashlib.sha256(world.read_bytes()).hexdigest()}
+    (asset / 'manifest.json').write_text(json.dumps(manifest))
     workspace = root / 'session-workspace'
     workspace.mkdir(exist_ok=True)
     session.update({'scene': {'asset': 'Fixture', 'simulator': simulator, 'parameters': {'frozen': False}},

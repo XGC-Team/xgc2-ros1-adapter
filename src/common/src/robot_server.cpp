@@ -318,7 +318,7 @@ public:
         admission_(xgc2::xrpc::new_instance_id(), grpcLimits()),
         service_(*this) {
     reference_.set_target_id(options_.target_id);
-    reference_.set_service("xgc2.robot-adapter");
+    reference_.set_service("xgc.robot.v1.RobotAdapterServerService");
     reference_.set_api_version("v1");
     reference_.set_instance_id(admission_.instance_id());
     reference_.set_profile("grpc.v1");

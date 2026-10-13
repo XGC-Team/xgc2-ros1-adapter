@@ -131,7 +131,7 @@ assert set(definition) <= {"id", "version", "label", "description", "parameters"
 assert definition["id"] == provider
 assert definition["command"]["executable"] == executable
 assert os.access(executable, os.X_OK)
-assert definition["services"][0]["service"] == "xgc2.robot-adapter"
+assert definition["services"][0]["service"] == "xgc.robot.v1.RobotAdapterServerService"
 assert definition["services"][0]["profile"] == "grpc.v1"
 assert set(definition["services"][0]) == {"service", "api_version", "profile", "endpointParameter"}
 assert set(definition["parameters"]) <= {"properties", "required", "groups"}

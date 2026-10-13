@@ -250,6 +250,9 @@ class ProcessDefinitionTest(unittest.TestCase):
                     ])
                 else:
                     self.assertEqual(len(definition["services"]), 1)
+                    if path.stem != "xgc2-ros1-tools-adapter":
+                        self.assertEqual(definition["services"][0]["service"],
+                                         "xgc.robot.v1.RobotAdapterServerService")
 
     def test_stopping_asks_the_server_to_drain_before_the_signal(self):
         for path in DEFINITION_FILES:

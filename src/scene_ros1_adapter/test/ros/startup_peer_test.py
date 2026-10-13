@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from process_test import http_call, stop, wait_socket
+from process_test import http_call, scene_session, stop, wait_socket
 
 
 def until(predicate, timeout=15):
@@ -158,6 +158,7 @@ def main():
             if profile == 'gazebo':
                 document = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_start_order',
                     'binding': {'simulationSensors': {'simpleLidar': {'enabled': True, 'mode': 'depth_frustum', 'acceleration': 'cpu', 'hRes': 1, 'vRes': 1}}}}], 'visualizationTopics': []}
+                scene_session(document, source, root, profile)
                 process.stdin.write(json.dumps(document).encode())
             process.stdin.close()
             wait_socket(str(scene_socket), process, unix=True)

@@ -10,8 +10,8 @@ it serves every robot of that type in the Run.
 
 | Process | Executable | Process definitions | Service |
 |---|---|---|---|
-| PX4 multirotor type server | `xgc_px4_multirotor_ros1_adapter_node` | `xgc2-px4-multirotor-ros1-adapter` | `xgc2.robot-adapter`, grpc.v1 |
-| Scout Mini and Mecanum UGV type servers | `xgc_ugv_ros1_adapter_node` | `xgc2-scout-mini-ros1-adapter`, `xgc2-mecanum-ugv-ros1-adapter` | `xgc2.robot-adapter`, grpc.v1 |
+| PX4 multirotor type server | `xgc_px4_multirotor_ros1_adapter_node` | `xgc2-px4-multirotor-ros1-adapter` | `xgc.robot.v1.RobotAdapterServerService`, grpc.v1 |
+| Scout Mini and Mecanum UGV type servers | `xgc_ugv_ros1_adapter_node` | `xgc2-scout-mini-ros1-adapter`, `xgc2-mecanum-ugv-ros1-adapter` | `xgc.robot.v1.RobotAdapterServerService`, grpc.v1 |
 | ROS1 Tools | `xgc_ros1_tools_adapter_node` | `xgc2-ros1-tools-adapter` | `ros1.tools`, http.v1 |
 | ROS1 Scene | `xgc2_scene_adapter` | `xgc2-ros1-scene-adapter` | `xgc2.scene.authoring` v1, http.v1 |
 

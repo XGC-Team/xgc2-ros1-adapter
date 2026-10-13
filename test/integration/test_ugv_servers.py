@@ -96,7 +96,7 @@ class UgvServerTests:
         self.assertEqual(facts["state"], "ready")
         self.assertEqual(facts["members"], 0)
         reference = description["service_ref"]
-        self.assertEqual(reference["service"], "xgc2.robot-adapter")
+        self.assertEqual(reference["service"], "xgc.robot.v1.RobotAdapterServerService")
         self.assertEqual(reference["profile"], "grpc.v1")
         self.assertEqual(reference["endpoint"]["address"], str(server.socket))
         self.assertTrue(reference["instance_id"])

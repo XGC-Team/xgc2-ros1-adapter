@@ -46,7 +46,7 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
                "--provider", "xgc2-scout-mini-ros1-adapter", "--target-id", "${targetId}",
                "--ros-master-uri", "${rosMasterUri}", "--ros-ip", "${rosIp}"]
     },
-    "services": [{"service": "xgc2.robot-adapter", "profile": "grpc.v1",
+    "services": [{"service": "xgc.robot.v1.RobotAdapterServerService", "profile": "grpc.v1",
                   "endpointParameter": "socketPath", "api_version": "v1"}],
     "readiness": {"kind": "describe", "startGraceMs": 15000, "timeoutMs": 30000},
     "stop": {"graceMs": 25000, "rpc": "Shutdown"}
@@ -64,7 +64,7 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   The type servers and Tools can start before that master exists. They bind their own
   socket immediately, wait for the master without a startup deadline, and connect to robot
   topics, subscribers and service providers at run time. Data peers never gate readiness.
-- **Services.** The type servers expose `xgc2.robot-adapter` with `grpc.v1`; Tools
+- **Services.** The type servers expose `xgc.robot.v1.RobotAdapterServerService` with `grpc.v1`; Tools
   exposes `ros1.tools` with `http.v1`. Scene exposes `xgc2.scene.authoring` v1 on
   `socketPath` and `xgc2.sensor.lidar` v1 on `lidarSocketPath`, both with `http.v1`
   in every profile. Each service needs a unique, non-sensitive string endpoint
