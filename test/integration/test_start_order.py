@@ -66,7 +66,16 @@ class StartOrderTest(unittest.TestCase):
                 self.assertTrue(body["ready"], body)
                 facts = body.get("facts") or json.loads(body["facts_json"])
                 self.assertEqual(facts["ros_master_pid"], self.roscore.pid())
-                self.assertEqual(facts["ros_master_run_id"], self.roscore.run_id())
+                # roscore publishes /run_id after opening its master socket;
+                # readiness pins the PID first and the watcher adopts that ID.
+                expected_run_id = self.roscore.run_id()
+                def adopted_run_id():
+                    current = self.describe(server)
+                    current_facts = current.get("facts") or json.loads(current["facts_json"])
+                    return current_facts["ros_master_run_id"] == expected_run_id
+                wait_until(adopted_run_id, 10, message="master run ID adoption")
+                self.assertEqual((self.describe(server).get("facts") or
+                                  json.loads(self.describe(server)["facts_json"]))["ros_master_run_id"], expected_run_id)
                 server.signal(signal.SIGTERM)
                 self.assertEqual(server.wait(10), EXIT_OK, server.output())
 

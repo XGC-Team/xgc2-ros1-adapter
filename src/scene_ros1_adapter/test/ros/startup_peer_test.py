@@ -144,7 +144,9 @@ def main():
         subscribers = []
         def start_master():
             with (root / 'master.log').open('a') as output:
-                process = subprocess.Popen(['roscore', '-p', str(port)], env=env, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                # This test replaces the master itself. Avoid roslaunch/rosout
+                # shutdown/startup work consuming the 5-second liveness budget.
+                process = subprocess.Popen(['rosmaster', '--core', '-p', str(port)], env=env, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             wait_socket(('127.0.0.1', port), process)
             return process
         def start_node(profile):
