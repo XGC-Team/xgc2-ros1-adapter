@@ -67,6 +67,7 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
   gpu_active_.resize(lidars_.size());
   cpu_fallback_.resize(lidars_.size(), false);
   observation_cache_.resize(lidars_.size());
+  point_scratch_.resize(lidars_.size());
   std::vector<std::shared_ptr<const BeamPattern>> patterns;
   for (std::size_t i = 0; i < lidars_.size(); ++i) {
     auto config = manifest_.robots[i].config;
@@ -110,6 +111,11 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
   }
 }
 
+bool Engine::setPointCloud(const std::vector<std::uint8_t>& xyz, std::uint64_t revision) {
+  point_map_ = std::make_shared<PointMap>(xyz);
+  return setScene({}, revision);
+}
+
 bool Engine::setScene(const std::vector<Obstacle> &obstacles,
                       std::uint64_t revision) {
   if (scenes_.ready() && revision == scenes_.revision())
@@ -117,7 +123,7 @@ bool Engine::setScene(const std::vector<Obstacle> &obstacles,
   if (!invalidateScene(revision))
     return false;
   gpu_maps_.clear();
-  scenes_.setScene(obstacles, revision);
+  scenes_.setScene(point_map_ ? std::vector<Obstacle>{} : obstacles, revision);
   ++preparation_generation_;
   pending_sensors_ = lidars_.size();
   if (manifest_.reference) {
@@ -315,12 +321,22 @@ void Engine::scan(std::size_t sensor) {
           spec.publish_beams || with_bodies_[sensor])
         throw std::runtime_error("The GPU point renderer does not implement depth, noise, beams or dynamic bodies");
       auto& gpu=gpu_maps_[policies_[sensor]];
-      if(!gpu) gpu.reset(new GpuMap(sensorScene(sensor),spec.config));
+      if(!gpu) {
+        if (point_map_) gpu.reset(new GpuMap(point_map_->xyz(),spec.config));
+        else gpu.reset(new GpuMap(sensorScene(sensor),spec.config));
+      }
       gpu->scan(spec.config,{p.position,q},double(stamps_[sensor])*1e-9,points_[sensor]);
       remember();
       sink_.onPoints(sensor,{points_[sensor].data(),points_[sensor].size()/12,stamps_[sensor],12,scenes_.revision()});
       return;
     } catch(const std::exception& error) { if(spec.backend != "auto") throw; cpu_fallback_[sensor]=true; }
+  }
+  if (point_map_) {
+    point_map_->scan(spec.config, p.position, q, point_scratch_[sensor], points_[sensor]);
+    remember();
+    sink_.onPoints(sensor, {points_[sensor].data(), points_[sensor].size()/12,
+                           stamps_[sensor], 12, scenes_.revision()});
+    return;
   }
   auto &others = others_[sensor];
   others.clear();

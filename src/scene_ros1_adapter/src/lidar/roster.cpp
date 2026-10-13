@@ -37,7 +37,7 @@ SessionInput parseSessionInput(std::string_view text) {
           std::move(document)};
 }
 
-Json buildFleetJson(const SessionInput &input) {
+Json buildFleetJson(const SessionInput &input, bool point_cloud) {
   if (input.robots.size() > kMaxFleetMembers)
     throw SceneError("world lidar supports at most 512 robots");
   Json fleet = {{"schemaVersion", 1}, {"robots", Json::array()}};
@@ -60,7 +60,7 @@ Json buildFleetJson(const SessionInput &input) {
       const auto preset = lidar.value("preset", std::string{});
       const bool publish_beams = lidar.value("publishBeams", false);
       if (!lidar.value("enabled", false) ||
-          !(mode == "penetrating" || mode == "depth_frustum" || publish_beams ||
+          !(point_cloud || mode == "penetrating" || mode == "depth_frustum" || publish_beams ||
             (!preset.empty() && mode != "raycast")))
         continue;
 
@@ -140,8 +140,8 @@ Json buildFleetJson(const SessionInput &input) {
 }
 
 FleetManifest buildFleet(const SessionInput &input,
-                         const xgc2_math::scene::SensorConfig &defaults) {
-  const auto fleet = buildFleetJson(input);
+                         const xgc2_math::scene::SensorConfig &defaults, bool point_cloud) {
+  const auto fleet = buildFleetJson(input, point_cloud);
   if (fleet["robots"].empty() && !fleet.contains("referenceCloud"))
     return {};
   return parseManifest(fleet.dump(), defaults);

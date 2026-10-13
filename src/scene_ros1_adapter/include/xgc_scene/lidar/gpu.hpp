@@ -9,6 +9,7 @@ class GpuMap {
 public:
   explicit GpuMap(const std::shared_ptr<const xgc2_math::scene::LidarScene>& scene,
                   const xgc2_math::scene::SensorConfig& config);
+  GpuMap(const std::vector<float>& xyz, const xgc2_math::scene::SensorConfig& config);
   ~GpuMap();
   void scan(const xgc2_math::scene::SensorConfig&,const xgc2_math::Pose3&,double stamp,
             std::vector<std::uint8_t>& xyz);

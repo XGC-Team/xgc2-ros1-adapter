@@ -283,6 +283,7 @@ int main(int argc, char** argv) {
           config.generation_parameters = xgc_scene::parseJson(selected.at("generationParametersJson").get<std::string>());
           if (selected.contains("pointCloud")) {
             fixed_cloud = xgc_scene::fixedPointCloud(selected);
+            lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session, true);
             // The canonical reference topic has one owner. A fixed original
             // cloud is never replaced by the geometry fleet's surface sample.
             lidar_parameters.manifest.reference.reset();
@@ -299,7 +300,10 @@ int main(int argc, char** argv) {
           auto budget = binding.BoundMasterCalls(seconds(5));
           outputs = std::make_shared<xgc_scene::RosPublishers>(handle);
           lidar = std::make_shared<xgc_scene::lidar_ros::Edge>(handle, lidar_parameters);
-          if (fixed_cloud) outputs->fixedCloud(*fixed_cloud);
+          if (fixed_cloud) {
+            outputs->fixedCloud(*fixed_cloud);
+            if (lidar->engine()) lidar->engine()->setPointCloud(fixed_cloud->data, 0);
+          }
           if (budget->failed()) throw xgc_scene::SceneError("ROS master did not register scene outputs");
         }
         auto tap = std::make_shared<xgc_scene::lidar_ros::SceneTap>(*outputs, lidar->engine(),

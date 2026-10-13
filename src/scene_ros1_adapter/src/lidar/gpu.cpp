@@ -24,6 +24,14 @@ GpuMap::GpuMap(const std::shared_ptr<const xgc2_math::scene::LidarScene>& scene,
   if(!state_->renderer) throw std::runtime_error(error);
   state_->xyzi.reserve(scene->sampleCount()*16);
 }
+GpuMap::GpuMap(const std::vector<float>& xyz,
+               const xgc2_math::scene::SensorConfig& config):state_(new State) {
+  state_->api=&xgc2_sensing::gpuLibrary();
+  auto params=projection(config);char error[512]={};
+  state_->renderer=state_->api->create(xyz.data(),xyz.size()/3,&params,error,sizeof(error));
+  if(!state_->renderer) throw std::runtime_error(error);
+  state_->xyzi.reserve(xyz.size()/3*16);
+}
 GpuMap::~GpuMap()=default;
 void GpuMap::scan(const xgc2_math::scene::SensorConfig& config,const xgc2_math::Pose3& pose,
                   double stamp,std::vector<std::uint8_t>& xyz) {

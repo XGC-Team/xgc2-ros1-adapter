@@ -19,7 +19,7 @@ struct Parameters {
   lidar::EngineOptions options;
   bool have_fleet = false;
   static Parameters parse(const Json& values, const std::string& profile,
-                          const std::optional<lidar::SessionInput>& session = std::nullopt);
+                          const std::optional<lidar::SessionInput>& session = std::nullopt, bool point_cloud = false);
   Json facts(const std::string& profile) const;
 };
 

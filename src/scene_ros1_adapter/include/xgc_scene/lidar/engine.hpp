@@ -2,6 +2,7 @@
 
 #include "xgc_scene/lidar/manifest.hpp"
 #include "xgc_scene/lidar/gpu.hpp"
+#include "xgc_scene/lidar/point_map.hpp"
 #include <map>
 #include "xgc_scene/lidar/scan_pool.hpp"
 #include "xgc_scene/lidar/scene.hpp"
@@ -67,6 +68,7 @@ public:
   bool sceneReady() const { return scenes_.ready(); }
   // Compiles shared geometry immediately. Sensor scratch and output buffers
   // are prepared only when that sensor next has a due, demanded scan.
+  bool setPointCloud(const std::vector<std::uint8_t>& xyz, std::uint64_t revision);
   bool setScene(const std::vector<xgc2_math::scene::Obstacle> &obstacles,
                 std::uint64_t revision);
   // Waiting for truth or a refused/removed source invalidates observations.
@@ -132,6 +134,8 @@ private:
     std::uint64_t generation = 0;
   };
   std::vector<ObservationCache> observation_cache_;
+  std::shared_ptr<const PointMap> point_map_;
+  std::vector<PointMap::Scratch> point_scratch_;
   std::map<std::size_t,std::unique_ptr<GpuMap>> gpu_maps_;
   std::vector<xgc2_math::Pose3> body_poses_;
   std::vector<std::int64_t> body_stamps_;

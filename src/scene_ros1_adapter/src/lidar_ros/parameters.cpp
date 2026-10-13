@@ -44,7 +44,7 @@ std::optional<lidar::SessionInput> readSessionInput(std::istream& input) {
 }
 
 Parameters Parameters::parse(const Json& values, const std::string& profile,
-                             const std::optional<lidar::SessionInput>& session) {
+                             const std::optional<lidar::SessionInput>& session, bool point_cloud) {
   Parameters result;
   result.socket = text(values, "lidar_xrpc_socket", "");
   if (result.socket.empty() || result.socket.front() != '/' || result.socket.find('\0') != std::string::npos)
@@ -104,8 +104,8 @@ Parameters Parameters::parse(const Json& values, const std::string& profile,
     if (result.options.vehicle_bodies && !(result.options.vehicle_body_radius > 0))
       throw SceneError("vehicle_body_radius must be > 0");
   } catch (const std::exception& e) { error("lidar_defaults_json", e.what()); }
-  if (profile == "gazebo" && session) {
-    try { result.manifest = lidar::buildFleet(*session, defaults); }
+  if ((profile == "gazebo" || point_cloud) && session) {
+    try { result.manifest = lidar::buildFleet(*session, defaults, point_cloud); }
     catch (const std::exception& e) {
       throw SceneError(std::string("Session input --session-stdin: ") + e.what());
     }

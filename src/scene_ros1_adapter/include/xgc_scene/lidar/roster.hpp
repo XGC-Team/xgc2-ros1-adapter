@@ -41,12 +41,12 @@ SessionInput parseSessionInput(std::string_view text);
 // Presets, defaults, positive numeric overrides, namespace normalization and
 // refusal texts follow prepare_fleet.py. The dumped manifest is <= 1048576
 // bytes; no body roster or asset-derived sensor fields are added.
-Json buildFleetJson(const SessionInput &input);
+Json buildFleetJson(const SessionInput &input, bool point_cloud = false);
 
 // Non-empty output passes through parseManifest with the supplied node
 // defaults. Empty output returns an empty FleetManifest because parseManifest
 // requires at least one sensor or a reference cloud.
 FleetManifest buildFleet(const SessionInput &input,
-                         const xgc2_math::scene::SensorConfig &defaults = {});
+                         const xgc2_math::scene::SensorConfig &defaults = {}, bool point_cloud = false);
 
 } // namespace xgc_scene::lidar
