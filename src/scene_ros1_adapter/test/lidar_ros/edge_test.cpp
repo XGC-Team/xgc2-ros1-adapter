@@ -135,7 +135,7 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
   auto values = parameters();
   auto empty = Parameters::parse(values, "gazebo");
   EXPECT_FALSE(empty.have_fleet);
-  EXPECT_EQ(empty.facts("gazebo"), (Json{{"profile", "gazebo"}, {"sensors", 0}, {"backend", "cpu"}}));
+  EXPECT_EQ(empty.facts("gazebo"), (Json{{"profile", "gazebo"}, {"sensors", 0}, {"backends", Json::array({"auto", "cpu", "gpu"})}}));
   const auto session = lidar::parseSessionInput(sessionDocument().dump());
   values["lidar_enabled"] = false;
   values["lidar_defaults_json"] = Json{{"min_range", 0.2}, {"noise_std", 0.01}, {"seed", 42},
@@ -156,7 +156,7 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
     const auto absent = Parameters::parse(values, profile, session);
     EXPECT_FALSE(absent.have_fleet);
     EXPECT_TRUE(absent.manifest.robots.empty());
-    EXPECT_EQ(absent.facts(profile), (Json{{"profile", profile}, {"sensors", 0}, {"backend", "none"}}));
+    EXPECT_EQ(absent.facts(profile), (Json{{"profile", profile}, {"sensors", 0}, {"backends", Json::array()}}));
   }
   EXPECT_TRUE(Parameters::parse(values, "gazebo", lidar::parseSessionInput(sessionDocument(0).dump())).have_fleet);
   auto no_sensors = sessionDocument(0);
@@ -176,11 +176,19 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
   values["lidar_defaults_json"] = "{\"typo\":1}";
   try { Parameters::parse(values, "gazebo"); FAIL(); }
   catch (const SceneError& error) { EXPECT_NE(std::string(error.what()).find("unknown key 'typo'"), std::string::npos); }
+  for (const auto* backend : {"auto", "cpu", "gpu"}) {
+    auto accepted = sessionDocument();
+    accepted["robots"][0]["binding"]["simulationSensors"]["simpleLidar"]["acceleration"] = backend;
+    const auto input = lidar::parseSessionInput(accepted.dump());
+    const auto configured = Parameters::parse(parameters(), "gazebo", input);
+    ASSERT_EQ(configured.manifest.robots.size(), 1u);
+    EXPECT_EQ(configured.manifest.robots[0].backend, backend);
+  }
   for (int refusal = 0; refusal < 3; ++refusal) {
     auto invalid = sessionDocument();
     auto& sensor = invalid["robots"][0]["binding"]["simulationSensors"]["simpleLidar"];
     const char* message;
-    if (refusal == 0) { sensor["acceleration"] = "gpu"; message = "explicit CPU acceleration"; }
+    if (refusal == 0) { sensor["acceleration"] = "invalid-backend"; message = "sensor backend must be auto, cpu or gpu"; }
     else if (refusal == 1) { invalid["robots"][0]["namespace"] = "invalid namespace"; message = "invalid lidar namespace"; }
     else { sensor["mode"] = "penetrating"; sensor["publishBeams"] = true; message = "penetrating sampled clouds have no beams"; }
     const auto input = lidar::parseSessionInput(invalid.dump());

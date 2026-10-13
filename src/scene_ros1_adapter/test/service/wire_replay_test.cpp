@@ -183,8 +183,7 @@ TEST(SceneWire, ReplaysEveryGoldenRouteAndEnvelope) {
         EXPECT_EQ(body.at("api_version"), "v1");
         EXPECT_EQ(body.at("instance_id"), instance);
         EXPECT_EQ(body.at("ready"), true);
-        EXPECT_EQ(body.at("facts").at("profile"), "gazebo");
-        EXPECT_EQ(body.at("facts").at("lidar"), (Json{{"backend", "cpu"}, {"gpu_supported", false}}));
+        EXPECT_EQ(body.at("facts"), (Json{{"profile", "gazebo"}, {"scene_application", "native"}}));
         // F10 commits local desired state while native application is asynchronous.
         const std::string completion = "The command commits local desired state. Native application completes asynchronously and is reported in the scene envelope; reconnect replays the current scene once per world instance.";
         EXPECT_EQ(body.at("completion"), completion);
