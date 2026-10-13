@@ -30,6 +30,23 @@ def recipe_script():
 SCRIPT = recipe_script()
 RUNTIME_SCRIPT = SCRIPT[:SCRIPT.index('try:\n    if sys.argv[1:] == ["--prepare"]:')] + SCRIPT[SCRIPT.index('\ndef require_archive_path'):]
 
+# These recipe tests exercise recording facts and archive finalization, not the
+# SDK transport. Keep that boundary explicit, like the ROS and rosbag stubs.
+RECORDER_TRANSPORT_STUB = '''
+import sys, types
+from unittest.mock import Mock
+xrpc = types.ModuleType("xgc2_xrpc")
+xrpc.Endpoint = lambda kind, address: types.SimpleNamespace(kind=kind, address=address)
+xrpc.ServiceRef = lambda target, service, version, instance, protocol, endpoint: types.SimpleNamespace(
+    target_id=target, service=service, api_version=version, instance_id=instance,
+    protocol=protocol, endpoint=endpoint)
+xrpc.Fault = RuntimeError
+xrpc.Runtime = Mock(return_value=Mock(spec=["close"]))
+xrpc.Host = Mock(return_value=Mock(spec=["start", "close"]))
+xrpc.Host.return_value.start.return_value = xrpc.Host.return_value
+sys.modules["xgc2_xrpc"] = xrpc
+'''
+
 module = ast.parse(SCRIPT)
 namespace = {}
 # Compile production imports/class without launching the recorder at import.
@@ -318,7 +335,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
                     "factSources": {"calibrationFiles": [{"role": "calibration", "path": str(source)}]}}
         directory = self.directory / "Experiments" / "Data"
         prefix = directory / "record"
-        command = [sys.executable, "-c", setup + RUNTIME_SCRIPT, str(root), str(prefix), json.dumps(topics),
+        command = [sys.executable, "-c", RECORDER_TRANSPORT_STUB + setup + RUNTIME_SCRIPT, str(root), str(prefix), json.dumps(topics),
                    "64", "1", "1", "none", "true", "1", "0", "1", json.dumps(manifest)]
         result = subprocess.run(command, text=True, capture_output=True, timeout=10,
                                 env=dict(os.environ, FACT_TEST_FILE=str(source),
