@@ -560,6 +560,7 @@ class ToolsServer(Server):
             "--ros-master-uri", self.roscore.uri,
             "--ros-ip", "127.0.0.1",
             "--ros-hostname", "",
+            "--publishers", "[]",
         ]
 
     def connect(self):
