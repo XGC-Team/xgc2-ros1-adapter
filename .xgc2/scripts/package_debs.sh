@@ -214,6 +214,7 @@ package_common() {
     "XGC2 ROS1 robot type server libraries" \
     "Shared server core and ROS1 binding of the XGC2 robot type servers."
   build_deb "${pkg_root}" "${COMMON_PACKAGE}"
+  chmod 0755 "${pkg_root}${PREFIX}/lib/${COMMON_ROS_PACKAGE}/xgc2-project-robot-assets"
   fakeroot dpkg-deb --build "${pkg_root}" \
     "${OUTPUT_DIR}/${COMMON_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
 }
