@@ -147,4 +147,4 @@ release:
     libxgc2-math-dev: rebuild
     xgc2-ros-msgs: rebuild
   apt_versions:
-    focal: 0.7.0-3
+    focal: 0.7.0-4
