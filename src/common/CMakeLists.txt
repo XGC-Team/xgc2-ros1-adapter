@@ -131,6 +131,9 @@ install(TARGETS xgc2_robot_server xgc2_robot_server_ros1
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
 install(DIRECTORY include/ DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}
   FILES_MATCHING PATTERN "*.hpp")
+install(PROGRAMS scripts/project_robot_assets.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  RENAME xgc2-project-robot-assets)
 install(DIRECTORY "${proto_dir}/"
   DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/xgc_ros1_adapter_common/proto
   FILES_MATCHING PATTERN "*.h")

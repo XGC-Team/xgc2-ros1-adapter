@@ -275,6 +275,7 @@ docker exec "${container_name}" bash -lc '
       -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
 
     python3 -m unittest discover -s /tmp/ros1-adapter/src/ros1_tools_adapter/test -p "test_*.py"
+    python3 -m unittest discover -s /tmp/ros1-adapter/src/common/test -p "test_asset_projection.py"
     catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" run_tests
     catkin_test_results --verbose build/test_results
     cmake --build build --target xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare \

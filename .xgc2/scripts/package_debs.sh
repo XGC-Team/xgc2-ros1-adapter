@@ -188,6 +188,7 @@ package_common() {
   local path
   mkdir -p "${pkg_root}"
   copy_path "${PREFIX_ROOT}/share/${COMMON_ROS_PACKAGE}" "${pkg_root}"
+  copy_path "${PREFIX_ROOT}/lib/${COMMON_ROS_PACKAGE}" "${pkg_root}"
   for library in xgc2_robot_server xgc2_robot_server_ros1; do
     # lib<name>.so is a development symlink and stays out of the package
     for path in "${PREFIX_ROOT}/lib/lib${library}.so."*; do
@@ -209,7 +210,7 @@ package_common() {
     "${pkg_root}${PREFIX}/lib/libxgc2_robot_server.so.0" \
     "${pkg_root}${PREFIX}/lib/libxgc2_robot_server_ros1.so.0")"
   write_control "${pkg_root}" "${COMMON_PACKAGE}" \
-    "${shlibs_depends}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp" \
+    "${shlibs_depends}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, python3" \
     "XGC2 ROS1 robot type server libraries" \
     "Shared server core and ROS1 binding of the XGC2 robot type servers."
   build_deb "${pkg_root}" "${COMMON_PACKAGE}"

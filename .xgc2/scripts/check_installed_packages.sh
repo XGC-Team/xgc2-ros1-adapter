@@ -26,6 +26,8 @@ for package in "${COMMON_PACKAGE}" "${PX4_PACKAGE}" "${UGV_PACKAGE}" "${TOOLS_PA
   test "$(dpkg-query -W -f='${Version}' "${package}")" = "${EXPECTED_PRODUCT_VERSION}"
 done
 test -f "${PROTOBUF_REGISTRY}"
+test -x "${PREFIX}/lib/${COMMON_ROS_PACKAGE}/xgc2-project-robot-assets"
+test "$(printf '%s' '{"context":{},"robots":[]}' | "${PREFIX}/lib/${COMMON_ROS_PACKAGE}/xgc2-project-robot-assets")" = '[]'
 # Scout Mini and Mecanum share one executable and one package now; the
 # earlier per-type packages and the generic adapter must be gone.
 for removed in \
