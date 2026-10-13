@@ -71,7 +71,10 @@ def project(row, context):
     if simulated and simulator == "xsim":
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
         params["localization_twist_topic"] = binding["namespace"] + "/twist"
-    return dict(slotId=binding["id"], profileId=profile, parameters=params, derived=derived)
+    cameras = []
+    if binding.get(arm, {}).get("imageSimulationEnabled"):
+        cameras.append(dict(id="robot:" + binding["id"], kind="robot", robotSlotId=binding["id"]))
+    return dict(slotId=binding["id"], profileId=profile, parameters=params, derived=derived, cameras=cameras)
 
 
 def project_batch(request):
