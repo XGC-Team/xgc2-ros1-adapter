@@ -322,13 +322,13 @@ int main(int argc, char** argv) {
           facts["ros_master"] = "bound";
           lidar_control->SetFacts(facts, [lidar] { return lidar->peerFacts(); });
           lidar_control->SetReady(true);
+          service->facts({{"run_id", options.run_id}, {"target_id", options.target_id}, {"profile", config.profile},
+              {"ros_master", "bound"}, {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid},
+              {"ros_master_run_id", master.run_id}, {"ros_node", ros::this_node::getName()}}, [node] { return node->peerFacts(); });
           service->ready(std::make_shared<LaneAuthoring>(node, post, stopping), xgc_scene::Json{{"run_id", options.run_id}, {"target_id", options.target_id},
             {"profile", config.profile},
             {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid}, {"ros_master_run_id", master.run_id},
             {"ros_node", ros::this_node::getName()}, {"ros_master", "bound"}});
-          service->facts({{"run_id", options.run_id}, {"target_id", options.target_id}, {"profile", config.profile},
-              {"ros_master", "bound"}, {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid},
-              {"ros_master_run_id", master.run_id}, {"ros_node", ros::this_node::getName()}}, [node] { return node->peerFacts(); });
         }
         auto timer = handle.createTimer(ros::Duration(1.0 / 30.0), [node](const ros::TimerEvent&) { node->tick(); });
         callbacks = std::thread([&] {

@@ -425,6 +425,34 @@ TEST(SceneNode, ParsesPrivateParametersAndRequiresSimulationOnlyForGazebo) {
   EXPECT_THROW(SceneParameters::parse(parameters), SceneError);
 }
 
+TEST(SceneNode, ReadinessFactsExposeSourceAndWorkingPathsForEveryProfile) {
+  char pattern[] = "/tmp/xgc-scene-facts-XXXXXX";
+  const auto directory = ::mkdtemp(pattern);
+  ASSERT_NE(directory, nullptr);
+  const auto source = std::filesystem::path(directory) / "source.yaml";
+  const auto working = std::filesystem::path(directory) / "working.yaml";
+  { std::ofstream stream(source); stream << dumpYaml(scene(1)); }
+  for (const bool exists : {false, true}) {
+    if (exists) { std::ofstream stream(working); stream << dumpYaml(scene(2)); }
+    for (const auto* profile : {"physical", "xsim", "gazebo"}) {
+      Outputs outputs;
+      SceneParameters config;
+      config.profile = profile;
+      config.scene_file = source;
+      config.working_file = working;
+      std::shared_ptr<Simulation> simulation;
+      if (config.profile == "gazebo") simulation = std::make_shared<FakeSimulation>();
+      SceneNode node(config, "/run/", outputs, [] { return 100.0; }, simulation);
+      const auto facts = node.peerFacts();
+      EXPECT_EQ(facts.at("scene_file"), source.string());
+      EXPECT_EQ(facts.at("working_file"), working.string());
+      EXPECT_EQ(node.envelope().at("document").at("obstacles").size(), exists ? 2u : 1u);
+      EXPECT_EQ(facts.contains("world_host"), config.profile == "gazebo");
+    }
+  }
+  std::filesystem::remove_all(directory);
+}
+
 TEST(SceneNode, ShutdownPublishesOfflineOnceAndStopsFurtherTicks) {
   Outputs outputs;
   auto simulation = std::make_shared<FakeSimulation>();

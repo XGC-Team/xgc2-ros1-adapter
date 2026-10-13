@@ -130,9 +130,10 @@ void SceneNode::receiveSimulation() {
 }
 Json SceneNode::peerFacts() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (parameters_.profile != "gazebo") return Json::object();
+  Json result{{"scene_file", parameters_.scene_file.string()}, {"working_file", parameters_.working_file.string()}};
+  if (parameters_.profile != "gazebo") return result;
   const auto status = store_->status();
-  auto result = applicationView(status.at("epoch").get<std::string>(), status.at("revision").get<std::uint64_t>());
+  result.update(applicationView(status.at("epoch").get<std::string>(), status.at("revision").get<std::uint64_t>()));
   result["world_host"] = result.at("synchronized") == true ? "connected" : "waiting";
   return result;
 }
