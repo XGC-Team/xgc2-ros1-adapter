@@ -132,9 +132,24 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertIn("--session-stdin", args)
                     self.assertEqual(args.count("--session-stdin"), 1)
                     remappings = dict(argument.split(":=", 1) for argument in args if ":=" in argument)
-                    self.assertEqual(len(remappings) + 1, len(args))
+                    native_args = [argument for argument in args
+                                   if ":=" not in argument and argument != "--session-stdin"]
+                    self.assertEqual(len(remappings) + len(native_args) + 1, len(args))
+                    self.assertEqual(len(native_args) % 2, 0)
+                    self.assertEqual(len(native_args[0::2]), len(set(native_args[0::2])))
+                    self.assertEqual(set(native_args[0::2]), robot_flags - {"--provider"})
+                    self.assertEqual(dict(zip(native_args[0::2], native_args[1::2])), {
+                        "--socket-path": "${socketPath}",
+                        "--target-id": "${targetId}",
+                        "--run-id": "${runId}",
+                        "--node-name": "xgc_scene_${runId}",
+                        "--ros-master-uri": "${rosMasterUri}",
+                        "--ros-ip": "${rosIp}",
+                    })
+                    scene_main = (SOURCES / "scene_ros1_adapter" / "src" / "node_main.cpp").read_text(encoding="utf-8")
+                    self.assertIn('args.insert(args.end(), {"--provider", "xgc2-scene-adapter"});', scene_main)
+                    self.assertIn("adapter::ParseServerOptions(", scene_main)
                     self.assertEqual(remappings, {
-                        "__name": "xgc2_scene_adapter",
                         "__ns": "${namespace}",
                         "__master": "${rosMasterUri}",
                         "__ip": "${rosIp}",
@@ -161,11 +176,11 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertEqual(used, set(declared))
                     self.assertEqual(
                         set(definition["parameters"]["required"]),
-                        {"socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "sceneFile"},
+                        {"socketPath", "runId", "lidarSocketPath", "targetId", "rosMasterUri", "sceneFile"},
                     )
                     self.assertEqual(declared["profile"]["enum"], ["gazebo", "xsim", "physical"])
                     self.assertEqual(set(declared), {
-                        "socketPath", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
+                        "socketPath", "runId", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
                         "sceneFile", "workingFile", "generationParametersJson", "saveDirectory", "frozen",
                         "profile", "simulationEndpoint", "sessionJson", "lidarEnabled", "lidarDefaultsJson",
                     })
@@ -230,8 +245,8 @@ class ProcessDefinitionTest(unittest.TestCase):
                     )
                 if path.stem == "xgc2-ros1-scene-adapter":
                     self.assertEqual(definition["services"], [
-                        {"service": "xgc2.scene.authoring", "api_version": "1", "profile": "http.v1", "endpointParameter": "socketPath"},
-                        {"service": "xgc2.sensor.lidar", "api_version": "1", "profile": "http.v1", "endpointParameter": "lidarSocketPath"},
+                        {"service": "xgc2.scene.authoring", "api_version": "v1", "profile": "http.v1", "endpointParameter": "socketPath"},
+                        {"service": "xgc2.sensor.lidar", "api_version": "v1", "profile": "http.v1", "endpointParameter": "lidarSocketPath"},
                     ])
                 else:
                     self.assertEqual(len(definition["services"]), 1)
