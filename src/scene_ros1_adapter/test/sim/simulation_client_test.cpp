@@ -34,8 +34,8 @@ class World {
         bool hold_discovery = false) {
     server_ = std::make_unique<xgc2::xrpc::HttpServer>(xgc2::xrpc::UnixOptions{path.string()},
       [this, instance, handler, hold_discovery](HttpRequest request, HttpReply reply) {
-        if (request.method == "GET") {
-          EXPECT_EQ(request.target, "/v1/describe?wait_ready_ms=30000");
+        if (request.target == "/v1/describe?wait_ready_ms=30000") {
+          EXPECT_EQ(request.method, "GET");
           ++describes;
           if (hold_discovery) handler(std::move(request), std::move(reply));
           else answer(reply, {{"service", "xgc2.simulation"}, {"api_version", "v1"},
@@ -132,6 +132,72 @@ TEST(SimulationClient, AcceptedOperationUsesOneWaitAndDistinctTransportIdentity)
   EXPECT_EQ(parseJson(calls[0].body).at("operation_timeout_ms"), 2000);
   EXPECT_EQ(parseJson(calls[1].body), Json::object());
   EXPECT_LT(calls[1].deadline, calls[0].deadline + milliseconds(2));
+}
+TEST(SimulationClient, LostCommittedReplyReadsTheOriginalFencedReceiptWithoutResubmitting) {
+  for (const bool lose_wait_reply : {false, true}) {
+    SCOPED_TRACE(lose_wait_reply ? "lost wait reply" : "lost mutation reply");
+    Directory root;
+    std::atomic<int> applies{0}, receipts{0}, waits{0};
+    std::string operation;
+    Json terminal;
+    xgc2::xrpc::Clock::time_point submitted_deadline, observation_deadline;
+    World world(root.path / "world.sock", "world", [&](HttpRequest request, HttpReply reply) {
+      if (request.target == "/v1/extensions/scene/apply") {
+        ++applies;
+        operation = request.request_id;
+        submitted_deadline = request.deadline;
+        const auto payload = parseJson(request.body);
+        EXPECT_EQ(payload.at("operation_timeout_ms"), 50);
+        terminal = {{"id", operation}, {"state", "succeeded"},
+                    {"result", {{"epoch", payload.at("epoch")}, {"revision", payload.at("revision")}}}};
+        if (lose_wait_reply) answer(reply, {{"id", operation}, {"state", "accepted"}});
+        // The mutation committed. Withhold its acknowledgement until the caller's budget expires.
+      } else if (request.target == "/v1/operations/" + operation + "/wait") {
+        ++waits;
+        if (lose_wait_reply) {
+          // The original wait acknowledgement is lost after completion.
+          EXPECT_LT(request.deadline, submitted_deadline + milliseconds(2));
+        } else {
+          // Receipt lookup and recovery wait share the same observation budget.
+          EXPECT_GT(request.deadline, observation_deadline - milliseconds(2));
+          EXPECT_LT(request.deadline, observation_deadline + milliseconds(2));
+          answer(reply, terminal);
+        }
+      } else if (request.target == "/v1/operations/" + operation) {
+        ++receipts;
+        EXPECT_EQ(request.method, "GET");
+        EXPECT_TRUE(request.body.empty());
+        EXPECT_NE(request.request_id, operation);
+        EXPECT_GT(request.deadline, submitted_deadline);
+        EXPECT_LE(request.deadline, xgc2::xrpc::Clock::now() + milliseconds(52));
+        observation_deadline = request.deadline;
+        bool fenced = false;
+        for (const auto& header : request.headers)
+          if (header.first == "X-Xrpc-Instance-ID" || header.first == "x-xrpc-instance-id") {
+            EXPECT_EQ(header.second, "world");
+            fenced = true;
+          }
+        EXPECT_TRUE(fenced);
+        if (lose_wait_reply) answer(reply, terminal);
+        else {
+          // Consume part of the budget so a restarted wait deadline is observable.
+          std::this_thread::sleep_for(milliseconds(10));
+          answer(reply, {{"id", operation}, {"state", "running"}});
+        }
+      } else completed(std::move(request), std::move(reply));
+    });
+    SimulationClient client((root.path / "world.sock").string(), "fixture", milliseconds(50));
+    client.update(Json::object(), "epoch", 6, {{"playing", false}});
+    const auto applied = report(client, true, seconds(2));
+    client.close();
+    ASSERT_TRUE(applied);
+    EXPECT_EQ(applied->at("instance_id"), "world");
+    EXPECT_EQ(applied->at("revision"), 6);
+    EXPECT_EQ(applies.load(), 1);
+    EXPECT_EQ(receipts.load(), 1);
+    EXPECT_EQ(waits.load(), 1);
+    EXPECT_EQ(world.describes.load(), 1);
+  }
 }
 TEST(SimulationClient, RefusedAndMismatchedApplicationsNeverAuthorizeOrLoop) {
   for (int fault = 0; fault < 3; ++fault) {

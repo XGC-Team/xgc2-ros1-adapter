@@ -114,7 +114,7 @@ class SimulationClient::Impl {
     request.method = method;
     request.target = route;
     request.request_id = request_id;
-    request.body = dumpJson(value);
+    if (method != "GET") request.body = dumpJson(value);
     request.headers = {{"Content-Type", "application/json"}};
     const auto response = client_->call(std::move(request), deadline);
     xgc2::xrpc::Json parsed;
@@ -138,15 +138,27 @@ class SimulationClient::Impl {
     Json payload = value;
     payload["operation_timeout_ms"] = timeout_.count();
     try {
-      auto result = call(route, payload, method, request_id, deadline);
-      if (result.value("id", Json()) != request_id)
-        throw SceneError("Simulation returned a different operation identity");
-      const auto state = result.value("state", Json());
-      if (state == "accepted" || state == "running") {
-        // One notification-driven wait, with a distinct transport request ID.
-        // There is no entity probe and neither submission nor wait is replayed.
-        result = call("/v1/operations/" + request_id + "/wait", Json::object(), "POST",
-                      xgc2::xrpc::new_instance_id(), deadline);
+      const auto wait_pending = [&](Json result, xgc2::xrpc::Clock::time_point wait_deadline) {
+        if (result.value("id", Json()) != request_id)
+          throw SceneError("Simulation returned a different operation identity");
+        const auto state = result.value("state", Json());
+        if (state == "accepted" || state == "running")
+          result = call("/v1/operations/" + request_id + "/wait", Json::object(), "POST",
+                        xgc2::xrpc::new_instance_id(), wait_deadline);
+        return result;
+      };
+      Json result;
+      try {
+        result = wait_pending(call(route, payload, method, request_id, deadline), deadline);
+      } catch (const xgc2::xrpc::HttpCallError& error) {
+        if (error.delivery != xgc2::xrpc::Delivery::OutcomeUnknown) throw;
+        // Read the retained result on the same instance-fenced client. This is
+        // a new bounded observation, not a replay or extension of the mutation.
+        const auto observation_deadline = xgc2::xrpc::Clock::now() + timeout_;
+        result = call("/v1/operations/" + request_id, Json::object(), "GET",
+                      xgc2::xrpc::new_instance_id(), observation_deadline);
+        result = wait_pending(std::move(result), observation_deadline);
+        // Recovery failures propagate; neither the GET nor its wait is retried.
       }
       if (result.value("id", Json()) != request_id || result.value("state", Json()) != "succeeded") {
         const auto error = result.value("error", Json());
