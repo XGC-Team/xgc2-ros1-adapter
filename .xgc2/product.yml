@@ -115,6 +115,7 @@ ownership:
   - /opt/ros/noetic/lib/libxgc2_robot_server_ros1.so.0
   - /opt/ros/noetic/lib/libxgc2_robot_server_ros1.so.0.6.0
   - /opt/ros/noetic/share/xgc_ros1_adapter_common
+  - /opt/ros/noetic/lib/xgc_ros1_adapter_common
   - /opt/ros/noetic/share/xgc_px4_multirotor_ros1_adapter
   - /opt/ros/noetic/lib/xgc_px4_multirotor_ros1_adapter
   - /opt/ros/noetic/share/xgc_ugv_ros1_adapter
