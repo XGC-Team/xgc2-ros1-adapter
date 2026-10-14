@@ -312,7 +312,7 @@ package_scene() {
   local scene_depends
   scene_depends="$(binary_dependencies "${binaries[@]}")"
   write_control "${scene_root}" "${SCENE_PACKAGE}" \
-    "${scene_depends}, libxgc2-xrpc2 (>= 0.2.0-1~focal), libxgc2-math-dev (>= 0.6.0-1~focal), python3, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-visualization-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-geometry-msgs" \
+    "${scene_depends}, libxgc2-xrpc2 (>= 0.2.0-1~focal), libxgc2-math-dev (>= 0.6.0-2~focal), python3, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-visualization-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-geometry-msgs" \
     "XGC2 ROS1 scene authoring service and finite scene tools" \
     "Run-owned scene authoring, visualization and simulator application over XRPC http.v1."
   build_deb "${scene_root}" "${SCENE_PACKAGE}"

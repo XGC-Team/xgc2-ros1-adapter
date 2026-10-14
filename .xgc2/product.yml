@@ -40,7 +40,7 @@ apt:
   - ros-noetic-sensor-msgs
   - ros-noetic-std-msgs
   - libxgc2-xrpc2 (>= 0.2.0-1~focal)
-  - libxgc2-math-dev (>= 0.6.0-1~focal)
+  - libxgc2-math-dev (>= 0.6.0-2~focal)
   - libyaml-cpp0.6
   - libssl1.1
   - ros-noetic-tf2-ros
