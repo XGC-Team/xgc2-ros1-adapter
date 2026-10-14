@@ -392,6 +392,9 @@ TEST(Prepare, NativeWorldAcceptsCoreEmptyDocumentAttachment) {
   write(fixture.asset() / "manifest.json", manifest.dump());
   auto request = fixture.bind(fixture.scenario.at("steps").at(0).at("request"));
   EXPECT_EQ(prepare(request).at("sceneFile"), "");
+  const auto selected = prepare(request);
+  request["parameters"]["lidar"] = Json{{"scope", "global"}, {"settings", {{"enabled", true}, {"mode", "penetrating"}, {"acceleration", "gpu"}}}};
+  EXPECT_EQ(prepare(request), selected);
   EXPECT_EQ(attachment(fixture.asset(), manifest["sceneDocument"]), "");
   EXPECT_THROW(attachment(fixture.asset(), manifest["sceneDocument"], true), SceneError);
 }
@@ -407,6 +410,9 @@ TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
   EXPECT_EQ(selected.at("workingFile"), (fixture.cliOutput(true) / "scene-document.yaml").string());
   EXPECT_EQ(selected.at("generationParametersJson"), "{\"seed\":1.0}");
   EXPECT_EQ(selected.at("frozen"), false); EXPECT_EQ(selected.at("worldFile"), "");
+  context["scene"]["parameters"]["lidar"] = Json{{"scope", "global"}, {"settings", {{"enabled", true}, {"mode", "penetrating"}, {"acceleration", "gpu"}}}};
+  EXPECT_EQ(inputs(context, fixture.work, fixture.workspace()), selected);
+  context["scene"]["parameters"].erase("lidar");
   auto physical_context = context;
   physical_context["scene"]["simulator"] = "none";
   auto physical_selected = selected;

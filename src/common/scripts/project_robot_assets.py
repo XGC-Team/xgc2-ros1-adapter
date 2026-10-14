@@ -4,6 +4,7 @@
 This finite, side-effect-free native entry point owns robot transport, source
 selection and model facts. Core supplies pinned documents and freezes the result.
 """
+import copy
 import json
 import sys
 
@@ -22,8 +23,21 @@ def scalar(value):
     return str(int(value)) if isinstance(value, float) and value.is_integer() else repr(value) if isinstance(value, float) else str(value)
 
 
+def effective_binding(binding, scene):
+    result = copy.deepcopy(binding)
+    lidar = (scene or {}).get("parameters", {}).get("lidar")
+    if lidar is None:
+        return result
+    if lidar["scope"] not in ("global", "individual"):
+        raise ValueError("Scene lidar scope must be global or individual")
+    if lidar["scope"] == "global":
+        result.setdefault("simulationSensors", {})["simpleLidar"] = copy.deepcopy(lidar["settings"])
+    return result
+
+
 def project(row, context):
-    asset, binding = row["asset"], row["binding"]
+    asset = row["asset"]
+    binding = effective_binding(row["binding"], context.get("scene"))
     arm, prefix, scene, package, description, visuals = MODELS[asset["kind"]]
     spec = asset[arm]
     params = {"mocap_rigid_body": spec["mocapRigidBodyName"],
@@ -74,7 +88,7 @@ def project(row, context):
     cameras = []
     if binding.get(arm, {}).get("imageSimulationEnabled"):
         cameras.append(dict(id="robot:" + binding["id"], kind="robot", robotSlotId=binding["id"]))
-    return dict(slotId=binding["id"], profileId=profile, parameters=params, derived=derived, cameras=cameras)
+    return dict(slotId=binding["id"], binding=binding, profileId=profile, parameters=params, derived=derived, cameras=cameras)
 
 
 def project_batch(request):

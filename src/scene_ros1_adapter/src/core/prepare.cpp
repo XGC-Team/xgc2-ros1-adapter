@@ -492,10 +492,12 @@ std::string attachment(const fs::path& directory, const Json& value, bool requir
 Json parameters(const Json& value, bool template_world) {
   if (value.contains("chassis_robot_ids"))
     throw SceneError("scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic");
-  fields(value, {"overrideWorldPhysicsTiming", "maxStepSize", "realTimeUpdateRate", "generation",
+  auto world_parameters = value;
+  world_parameters.erase("lidar");
+  fields(world_parameters, {"overrideWorldPhysicsTiming", "maxStepSize", "realTimeUpdateRate", "generation",
                  "required_components", "clock_rate_hz"});
   Json result{{"overrideWorldPhysicsTiming", template_world}, {"maxStepSize", .004}, {"realTimeUpdateRate", 250}};
-  result.update(value);
+  result.update(world_parameters);
   const auto rate = result.value("clock_rate_hz", Json(0));
   if (!finite(rate) || rate.get<double>() < 0 || rate.get<double>() > 1e6)
     throw SceneError("clock_rate_hz must be finite in [0, 1000000]");
@@ -718,6 +720,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   }
   auto authored = selection.value("parameters", Json::object());
   if (!authored.is_object()) throw SceneError("Scene parameters must be an object");
+  authored.erase("lidar");
   if (authored.contains("chassis_robot_ids"))
     throw SceneError("scene parameter chassis_robot_ids is no longer accepted; the Gazebo chassis HOLD roster is dynamic");
   bool locked = false;
