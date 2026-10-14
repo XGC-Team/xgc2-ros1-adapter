@@ -262,7 +262,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
       {"robots", Json::array({{{"namespace", clock_ns}, {"binding", {{"simulationSensors", {{"simpleLidar",
           {{"enabled", true}, {"mode", "depth_frustum"}, {"acceleration", "cpu"},
            {"hRes", 1}, {"vRes", 1}, {"rateHz", 10}}}}}}}}})}, {"visualizationTopics", Json::array()}}.dump());
-  const auto clock_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-clock.sock"}}, "gazebo", clock_session);
+  const auto clock_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-clock.sock"}}, "xsim", clock_session, true);
   Edge clock_edge(handle, clock_config);
   clock_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
   unsigned clock_deliveries = 0;

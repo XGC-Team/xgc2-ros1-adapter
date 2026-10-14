@@ -44,7 +44,7 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
       policies_(lidars_.size()), body_point_bounds_(lidars_.size()),
       prepared_generation_(lidars_.size()), points_(lidars_.size()),
       beams_(lidars_.size()), beam_scans_(lidars_.size()),
-      others_(lidars_.size()), next_due_(lidars_.size(), -1),
+      others_(lidars_.size()), body_cloud_scratch_(lidars_.size()), next_due_(lidars_.size(), -1),
       schedule_epoch_(lidars_.size()), stamps_(lidars_.size()),
       schedule_index_(lidars_.size()), periods_(lidars_.size()),
       sensor_enabled_(lidars_.size(), 1), demand_(lidars_.size()),
@@ -113,6 +113,21 @@ Engine::Engine(FleetManifest manifest, Sink &sink, EngineOptions options)
 
 bool Engine::setPointCloud(const std::vector<std::uint8_t>& xyz, std::uint64_t revision) {
   point_map_ = std::make_shared<PointMap>(xyz);
+  // Saved-cloud targets opt in independently of their own lidar and backend.
+  // Legacy sensor-wide body options do not override this per-target contract.
+  for (std::size_t i = 0; i < lidars_.size(); ++i) {
+    with_bodies_[i] = std::any_of(manifest_.bodies.begin(), manifest_.bodies.end(),
+        [&](const BodySpec& body) { return body.body_returns && body.id != manifest_.robots[i].body_id; });
+    if (lidars_[i]->config().mode == SensorConfig::kPenetrating) {
+      body_point_bounds_[i] = 0;
+      for (const auto& body : manifest_.bodies)
+        if (body.body_returns && body.id != manifest_.robots[i].body_id)
+          body_point_bounds_[i] += sampleSurface(
+              Obstacle::sphere(Eigen::Vector3d::Zero(), body.radius),
+              lidars_[i]->config().surface_spacing).size();
+    }
+    observation_cache_[i].generation = 0;
+  }
   return setScene({}, revision);
 }
 
@@ -246,14 +261,18 @@ std::size_t Engine::tick(std::int64_t now) {
   body_snapshot_.clear();
   if (manifest_.body_roster) {
     for (std::size_t i = 0; i < body_poses_.size(); ++i) {
+      if (point_map_ && !manifest_.bodies[i].body_returns) continue;
       if (!body_valid_[i] || !fresh(body_stamps_[i], now)) {
+        if (point_map_) {
+          continue;
+        }
         body_truth_ready = false;
         break;
       }
       body_snapshot_.push_back({manifest_.bodies[i].id, body_poses_[i].position,
                                 manifest_.bodies[i].radius});
     }
-  } else if (options_.vehicle_bodies) {
+  } else if (!point_map_ && options_.vehicle_bodies) {
     for (std::size_t i = 0; i < poses_.size(); ++i)
       if (pose_valid_[i] && fresh(stamps_[i], now))
         body_snapshot_.push_back({manifest_.robots[i].body_id,
@@ -315,10 +334,15 @@ void Engine::scan(std::size_t sensor) {
   }
   const auto remember=[&]{if(reusable){cache.pose={p.position,q};cache.generation=preparation_generation_;}};
   const auto& spec=manifest_.robots[sensor];
+  auto &others = others_[sensor];
+  others.clear();
+  if (with_bodies_[sensor])
+    for (const auto &body : body_snapshot_)
+      if (body.id != spec.body_id) others.push_back(body);
   if(spec.backend != "cpu" && !cpu_fallback_[sensor]) {
     try {
       if (spec.config.mode == SensorConfig::kDepthFrustum || spec.config.noise_std != 0 ||
-          spec.publish_beams || with_bodies_[sensor])
+          spec.publish_beams || (with_bodies_[sensor] && !point_map_))
         throw std::runtime_error("The GPU point renderer does not implement depth, noise, beams or dynamic bodies");
       auto& gpu=gpu_maps_[policies_[sensor]];
       if(!gpu) {
@@ -326,6 +350,7 @@ void Engine::scan(std::size_t sensor) {
         else gpu.reset(new GpuMap(sensorScene(sensor),spec.config));
       }
       gpu->scan(spec.config,{p.position,q},double(stamps_[sensor])*1e-9,points_[sensor]);
+      if (point_map_) composeBodyCloud(sensor, {p.position, q}, true);
       remember();
       sink_.onPoints(sensor,{points_[sensor].data(),points_[sensor].size()/12,stamps_[sensor],12,scenes_.revision()});
       return;
@@ -333,17 +358,12 @@ void Engine::scan(std::size_t sensor) {
   }
   if (point_map_) {
     point_map_->scan(spec.config, p.position, q, point_scratch_[sensor], points_[sensor]);
+    composeBodyCloud(sensor, {p.position, q}, false);
     remember();
     sink_.onPoints(sensor, {points_[sensor].data(), points_[sensor].size()/12,
                            stamps_[sensor], 12, scenes_.revision()});
     return;
   }
-  auto &others = others_[sensor];
-  others.clear();
-  if (with_bodies_[sensor])
-    for (const auto &body : body_snapshot_)
-      if (body.id != manifest_.robots[sensor].body_id)
-        others.push_back(body);
   auto &points = points_[sensor];
   std::size_t count = 0;
   if (!manifest_.robots[sensor].publish_beams ||
@@ -394,6 +414,88 @@ void Engine::scan(std::size_t sensor) {
   remember();
   sink_.onPoints(
       sensor, {points.data(), count, stamps_[sensor], 12, scenes_.revision()});
+}
+
+void Engine::composeBodyCloud(std::size_t sensor, const xgc2_math::Pose3& pose, bool gpu) {
+  const auto& bodies = others_[sensor];
+  if (bodies.empty()) return;
+  const auto& config = lidars_[sensor]->config();
+  auto& points = points_[sensor];
+  if (config.mode == SensorConfig::kPenetrating) {
+    struct Append {
+      std::vector<std::uint8_t>& bytes;
+      void push(const Eigen::Vector3d& point, int) {
+        const auto offset = bytes.size();
+        bytes.resize(offset + 12);
+        packPoint(point, bytes.data() + offset);
+      }
+    } sink{points};
+    sampleBodyReturns(config, pose.position, pose.orientation, bodies, sink);
+    return;
+  }
+  if (gpu) {
+    auto& work = body_cloud_scratch_[sensor];
+    work.static_points.resize(points.size() / 12);
+    for (std::size_t i = 0; i < work.static_points.size(); ++i) {
+      float xyz[3];
+      std::memcpy(xyz, points.data() + i * 12, sizeof xyz);
+      work.static_points[i] = {{xyz[0], xyz[1], xyz[2]}, -1};
+    }
+    mergeGpuBodyCloud(config, pose.position, pose.orientation, bodies,
+                      work.static_points, &work.merged, &work.gpu);
+    points.resize(work.merged.size() * 12);
+    for (std::size_t i = 0; i < work.merged.size(); ++i)
+      packPoint(work.merged[i].point, points.data() + i * 12);
+    return;
+  }
+  // CPU PointMap retains all of its sampled static points, including multiple
+  // returns per angular cell. Only a closer selected body removes a return.
+  std::size_t kept = 0;
+  for (std::size_t i = 0; i < points.size() / 12; ++i) {
+    float xyz[3];
+    std::memcpy(xyz, points.data() + i * 12, sizeof xyz);
+    const Eigen::Vector3d point(xyz[0], xyz[1], xyz[2]);
+    const auto offset = point - pose.position;
+    const double distance = offset.norm();
+    const auto hit = nearestBody(pose.position, offset / distance, distance, bodies);
+    if (hit.vehicle_id < 0 || hit.range >= distance)
+      packPoint(point, points.data() + kept++ * 12);
+  }
+  points.resize(kept * 12);
+  // Existing PointMap depth coverage supplies static occlusion; Math owns
+  // sphere intersection and the native CPU beam grid supplies empty rays.
+  auto& scan = beam_scans_[sensor].scan;
+  scan.origin = pose.position;
+  const auto& directions = beamPattern(sensor)->directions();
+  scan.direction.resize(directions.size());
+  scan.range.assign(directions.size(), config.range);
+  scan.hit.assign(directions.size(), 0);
+  scan.vehicle_id.assign(directions.size(), -1);
+  constexpr double pi = 3.14159265358979323846;
+  const double half_h = config.h_fov_deg * pi / 360;
+  const double half_v = config.v_fov_deg * pi / 360;
+  const auto rotation = pose.orientation.normalized().toRotationMatrix();
+  const auto& depth = point_scratch_[sensor].depth;
+  for (std::size_t i = 0; i < directions.size(); ++i) {
+    const auto& d = directions[i];
+    scan.direction[i] = rotation * d;
+    const double azimuth = std::atan2(d.y(), d.x());
+    const double elevation = std::atan2(d.z(), std::hypot(d.x(), d.y()));
+    const int h = std::clamp(int((azimuth + half_h) / (2 * half_h) * config.h_res), 0, config.h_res - 1);
+    const int v = half_v > 0 ? std::clamp(int((elevation + half_v) / (2 * half_v) * config.v_res), 0, config.v_res - 1) : 0;
+    const auto cell = std::size_t(v) * config.h_res + h;
+    if (cell < depth.size() && depth[cell] < config.range) {
+      scan.hit[i] = 1;
+      scan.range[i] = depth[cell];
+    }
+  }
+  mergeBodyRays(config, bodies, &scan);
+  for (std::size_t i = 0; i < scan.size(); ++i)
+    if (scan.hit[i] && scan.vehicle_id[i] >= 0) {
+      const auto offset = points.size();
+      points.resize(offset + 12);
+      packPoint(scan.point(i), points.data() + offset);
+    }
 }
 
 } // namespace xgc_scene::lidar

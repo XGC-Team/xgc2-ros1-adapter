@@ -40,7 +40,10 @@ SessionInput parseSessionInput(std::string_view text);
 // referenceCloud. Empty output is {"schemaVersion":1,"robots":[]}.
 // Presets, defaults, positive numeric overrides, namespace normalization and
 // refusal texts follow prepare_fleet.py. The dumped manifest is <= 1048576
-// bytes; no body roster or asset-derived sensor fields are added.
+// bytes. For XSim saved clouds only, simpleLidar.bodyReturns selects target
+// spheres independently of sensor enabled/backend; absent/false selects none.
+// Target poses use canonical namespace/pose and Math's existing body radius.
+// Other providers retain their native observation ownership.
 Json buildFleetJson(const SessionInput &input, bool point_cloud = false);
 
 // Non-empty output passes through parseManifest with the supplied node

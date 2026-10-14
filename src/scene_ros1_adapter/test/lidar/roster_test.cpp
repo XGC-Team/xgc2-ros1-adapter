@@ -369,7 +369,7 @@ TEST(Roster, ManifestSensorModelsRatesAndNodeDefaults) {
   EXPECT_EQ(0.1, fleet.reference->surface_spacing);
   const auto &rays = fleet.robots[0];
   EXPECT_EQ("/rays", rays.name_space);
-  EXPECT_EQ("/vrpn_client_node/rays/pose", rays.pose_topic);
+  EXPECT_EQ("/rays/pose", rays.pose_topic);
   EXPECT_EQ(1, rays.body_id);
   EXPECT_EQ(SensorConfig::kRaycast, rays.config.mode);
   EXPECT_EQ(25.0, rays.rate_hz);
@@ -397,6 +397,44 @@ TEST(Roster, ManifestSensorModelsRatesAndNodeDefaults) {
     EXPECT_EQ(37u, sensor.config.seed);
     EXPECT_EQ(0.05, sensor.config.min_range);
   }
+}
+
+TEST(Roster, SavedXsimCloudTargetsOptInEvenWithoutAnEnabledLidar) {
+  const std::string text = R"json({"runMode":"simulation","scene":{"simulator":"xsim"},"robots":[
+    {"namespace":"/scanner","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"gpu"}}}},
+    {"namespace":"/body","binding":{"simulationSensors":{"simpleLidar":{"enabled":false,"bodyReturns":true}}}},
+    {"namespace":"/off","binding":{"simulationSensors":{"simpleLidar":{"enabled":false,"bodyReturns":false}}}}
+  ],"visualizationTopics":[]})json";
+  auto input = parseSessionInput(text);
+  const auto before = input.facts;
+  const auto json = buildFleetJson(input, true);
+  ASSERT_EQ(1u, json["robots"].size());
+  ASSERT_EQ(1u, json["bodies"].size());
+  EXPECT_EQ("/body", json["bodies"][0]["namespace"]);
+  EXPECT_EQ("/body/pose", json["bodies"][0]["poseTopic"]);
+  EXPECT_EQ(2, json["bodies"][0]["id"]);
+  EXPECT_TRUE(json["bodies"][0]["bodyReturns"]);
+  EXPECT_EQ(1, json["robots"][0]["bodyId"]);
+  const auto fleet = buildFleet(input, {}, true);
+  EXPECT_TRUE(fleet.bodies[0].body_returns);
+  EXPECT_EQ("gpu", fleet.robots[0].backend);
+  EXPECT_EQ(before, input.facts);
+  input.facts["scene"]["simulator"] = "gazebo";
+  EXPECT_FALSE(buildFleetJson(input, true).contains("bodies"));
+  input.facts["scene"]["simulator"] = "xsim";
+  EXPECT_FALSE(buildFleetJson(input, false).contains("bodies"));
+}
+
+TEST(Roster, SavedCloudDefaultFalseHasNoBodyRoster) {
+  auto input = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
+    "robots":[{"namespace":"/A","binding":{"simulationSensors":{"simpleLidar":true}}},
+      {"namespace":"/B","binding":{"simulationSensors":{"simpleLidar":{"enabled":false,"bodyReturns":false}}}}],
+    "visualizationTopics":[]})json");
+  const auto json = buildFleetJson(input, true);
+  EXPECT_FALSE(json.contains("bodies"));
+  const auto fleet = buildFleet(input, {}, true);
+  EXPECT_TRUE(fleet.bodies.empty());
+  EXPECT_EQ("auto", fleet.robots[0].backend);
 }
 
 TEST(Roster, CropFloatRoundTripsExactlyLikePython) {

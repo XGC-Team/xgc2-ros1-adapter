@@ -159,6 +159,9 @@ TEST(Manifest, BodyRosterIdentityGeometryAndPoseSources) {
         {"geometry", {{"type", "sphere"}, {"radiusMeters", 0.3}}}}});
   auto f = parseManifest(d.dump());
   EXPECT_TRUE(f.body_roster);
+  EXPECT_FALSE(f.bodies[0].body_returns);
+  d["bodies"][0]["bodyReturns"] = true;
+  EXPECT_TRUE(parseManifest(d.dump()).bodies[0].body_returns);
   EXPECT_EQ(41, f.robots[0].body_id);
   EXPECT_EQ("/truth/A", f.robots[0].pose_topic);
   d["robots"][0]["poseTopic"] = "/measurement/A";
@@ -172,7 +175,10 @@ TEST(Manifest, BodyRosterIdentityGeometryAndPoseSources) {
   refused(d, "sensor bodyId disagrees with its world member");
   d["robots"][0].erase("bodyId");
   d["robots"][0]["namespace"] = "/missing";
-  refused(d, "sensor namespace is not a world body member");
+  EXPECT_EQ("/missing/pose", parseManifest(d.dump()).robots[0].pose_topic);
+  d["bodies"][0].erase("bodyReturns");
+  EXPECT_EQ("/missing/pose", parseManifest(d.dump()).robots[0].pose_topic);
+  d["bodies"][0]["bodyReturns"] = true;
   d["robots"][0]["namespace"] = "/A";
   const auto original = d;
   for (const auto &change :

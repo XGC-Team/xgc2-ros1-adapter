@@ -41,6 +41,7 @@ FleetManifest parseManifest(std::string_view text,
       body.name_space = spec.get<std::string>("namespace");
       body.pose_topic = spec.get<std::string>("poseTopic");
       body.radius = spec.get<double>("geometry.radiusMeters");
+      body.body_returns = spec.get<bool>("bodyReturns", false);
       if (body.id < 0 || !ids.insert(body.id).second ||
           !std::regex_match(body.name_space, name_pattern) ||
           !namespaces.insert(body.name_space).second ||
@@ -81,14 +82,11 @@ FleetManifest parseManifest(std::string_view text,
       const auto body = std::find_if(
           result.bodies.begin(), result.bodies.end(),
           [&](const BodySpec &b) { return b.name_space == sensor.name_space; });
-      if (body == result.bodies.end())
-        throw std::invalid_argument(
-            "sensor namespace is not a world body member");
-      sensor.body_id = spec.get<int>("bodyId", body->id);
-      if (sensor.body_id != body->id)
+      sensor.body_id = spec.get<int>("bodyId", body == result.bodies.end() ? sensor.body_id : body->id);
+      if (body != result.bodies.end() && sensor.body_id != body->id)
         throw std::invalid_argument(
             "sensor bodyId disagrees with its world member");
-      if (spec.get<std::string>("mode", "raycast") != "penetrating")
+      if (body != result.bodies.end() && spec.get<std::string>("mode", "raycast") != "penetrating")
         sensor.pose_topic = body->pose_topic;
     }
     sensor.pose_topic = spec.get<std::string>("poseTopic", sensor.pose_topic);

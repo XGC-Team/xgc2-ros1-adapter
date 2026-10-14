@@ -88,6 +88,12 @@ float firstX(const Record &record) {
   std::memcpy(&x, record.bytes.data(), sizeof x);
   return x;
 }
+std::vector<std::uint8_t> savedPoints(std::initializer_list<float> values) {
+  const std::vector<float> points(values);
+  std::vector<std::uint8_t> bytes(points.size() * sizeof(float));
+  std::memcpy(bytes.data(), points.data(), bytes.size());
+  return bytes;
+}
 std::vector<std::uint8_t> packedBeams(const BeamScan &scan) {
   std::vector<std::uint8_t> bytes(32 * scan.size());
   for (std::size_t i = 0; i < scan.size(); ++i) {
@@ -105,6 +111,101 @@ std::vector<std::uint8_t> packedBeams(const BeamScan &scan) {
   return bytes;
 }
 } // namespace
+
+TEST(Engine, SavedCloudDefaultOffDoesNotRequireAnyBodyPose) {
+  auto manifest = fleet(1, "penetrating");
+  manifest.body_roster = true;
+  manifest.bodies = {{21, "/disabled", "/disabled/pose", .4, false}};
+  EngineOptions options;
+  options.vehicle_bodies = true;
+  Capture sink(1);
+  Engine engine(manifest, sink, options);
+  const auto static_points = savedPoints({4, 0, 1, 4, .1f, 1});
+  engine.setPointCloud(static_points, 1);
+  engine.setDemand(0, true);
+  engine.setPose(0, pose(), second);
+  ASSERT_EQ(1u, engine.tick(second));
+  EXPECT_EQ(static_points, sink.points[0].back().bytes);
+  engine.setBodyPose(0, pose(2), second + second / 10);
+  ASSERT_EQ(1u, engine.tick(second + second / 10));
+  EXPECT_EQ(static_points, sink.points[0].back().bytes);
+}
+
+TEST(Engine, SavedCloudSeesOptedTargetWithItsLidarDisabled) {
+  auto manifest = fleet(2, "penetrating");
+  manifest.body_roster = true;
+  manifest.bodies = {{1, "/robot0", "/robot0/pose", .4, true},
+                     {2, "/robot1", "/robot1/pose", .4, true},
+                     {3, "/unrelated", "/unrelated/pose", .4, false}};
+  Capture sink(2);
+  Engine engine(manifest, sink);
+  const auto static_points = savedPoints({4, 0, 1});
+  engine.setPointCloud(static_points, 1);
+  engine.setDemand(0, true);
+  engine.setEnabled(1, false);
+  engine.setPose(0, pose(), second);
+  // Self truth is absent; only the other selected target is required.
+  engine.setBodyPose(1, pose(3), second);
+  ASSERT_EQ(1u, engine.tick(second));
+  const auto& first = sink.points[0].back();
+  EXPECT_GT(first.count, 1u);
+  EXPECT_EQ(4.0f, firstX(first));
+  EXPECT_TRUE(sink.points[1].empty());
+  engine.setBodyPose(1, pose(3, 0, 7), second + second / 10);
+  ASSERT_EQ(1u, engine.tick(second + second / 10));
+  EXPECT_EQ(static_points, sink.points[0].back().bytes);
+  engine.setPose(0, pose(), 2 * second);
+  ASSERT_EQ(1u, engine.tick(2 * second)); // stale target is omitted, static stays live.
+  EXPECT_EQ(static_points, sink.points[0].back().bytes);
+}
+
+TEST(Engine, SavedCloudMissingEnabledBodyPoseKeepsStaticScanning) {
+  auto manifest = fleet();
+  manifest.body_roster = true;
+  manifest.bodies = {{2, "/missing", "/missing/pose", .4, true}};
+  Capture sink(1);
+  Engine engine(manifest, sink);
+  const auto wall = savedPoints({4, 0, 1});
+  engine.setPointCloud(wall, 1);
+  engine.setDemand(0, true);
+  engine.setPose(0, pose(), second);
+  ASSERT_EQ(1u, engine.tick(second));
+  EXPECT_EQ(wall, sink.points[0].back().bytes);
+}
+
+TEST(Engine, SavedCloudRayBodiesAndStaticOcclusionBothRemain) {
+  auto manifest = fleet();
+  manifest.body_roster = true;
+  manifest.bodies = {{2, "/target", "/target/pose", .4, true}};
+  Capture sink(1);
+  Engine engine(manifest, sink);
+  const auto wall = savedPoints({4, 0, 1});
+  engine.setPointCloud(wall, 1);
+  engine.setDemand(0, true);
+  engine.setPose(0, pose(), second);
+  engine.setBodyPose(0, pose(3), second);
+  ASSERT_EQ(1u, engine.tick(second));
+  ASSERT_EQ(1u, sink.points[0].back().count);
+  EXPECT_FLOAT_EQ(2.6f, firstX(sink.points[0].back()));
+  engine.setBodyPose(0, pose(6), second + second / 10);
+  ASSERT_EQ(1u, engine.tick(second + second / 10));
+  EXPECT_EQ(wall, sink.points[0].back().bytes);
+}
+
+TEST(Engine, SavedCloudBodyCompositionRetainsMultipleStaticSamplesPerCell) {
+  auto manifest = fleet();
+  manifest.body_roster = true;
+  manifest.bodies = {{2, "/target", "/target/pose", .2, true}};
+  Capture sink(1);
+  Engine engine(manifest, sink);
+  const auto wall = savedPoints({4, 0, 1, 4, .05f, 1});
+  engine.setPointCloud(wall, 1);
+  engine.setDemand(0, true);
+  engine.setPose(0, pose(), second);
+  engine.setBodyPose(0, pose(-3), second);
+  ASSERT_EQ(1u, engine.tick(second));
+  EXPECT_EQ(wall, sink.points[0].back().bytes);
+}
 
 TEST(Engine, SharedScenesPatternsAndSerialScanIntoByteEquality) {
   const auto default_threads =

@@ -8,6 +8,7 @@
 #include "xgc_scene/lidar/scene.hpp"
 
 #include <xgc2_math/scene/world_lidar.hpp>
+#include <xgc2_math/scene/body_returns.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -96,6 +97,7 @@ public:
 private:
   void prepareSensors(std::size_t count);
   void scan(std::size_t sensor);
+  void composeBodyCloud(std::size_t sensor, const xgc2_math::Pose3& pose, bool gpu);
   void advance(std::size_t sensor, std::int64_t now);
   bool fresh(std::int64_t stamp, std::int64_t now) const;
   void deliverReference(std::int64_t now);
@@ -119,6 +121,11 @@ private:
   };
   std::vector<SensorBeams> beam_scans_;
   std::vector<std::vector<xgc2_math::scene::VehicleBody>> others_;
+  struct BodyCloudScratch {
+    std::vector<xgc2_math::scene::TaggedPoint> static_points, merged;
+    xgc2_math::scene::GpuBodyMergeScratch gpu;
+  };
+  std::vector<BodyCloudScratch> body_cloud_scratch_;
 
   // Hot fields are separate contiguous arrays; tick never grows these arrays.
   std::vector<std::int64_t> next_due_, schedule_epoch_, stamps_;

@@ -105,7 +105,11 @@ Parameters Parameters::parse(const Json& values, const std::string& profile,
       throw SceneError("vehicle_body_radius must be > 0");
   } catch (const std::exception& e) { error("lidar_defaults_json", e.what()); }
   if ((profile == "gazebo" || point_cloud) && session) {
-    try { result.manifest = lidar::buildFleet(*session, defaults, point_cloud); }
+    // Gazebo owns robot raycasts natively. Scene retains only its reference
+    // layer; saved-cloud robot consumers remain available to XSim.
+    auto input = *session;
+    if (profile == "gazebo") input.robots = Json::array();
+    try { result.manifest = lidar::buildFleet(input, defaults, point_cloud); }
     catch (const std::exception& e) {
       throw SceneError(std::string("Session input --session-stdin: ") + e.what());
     }

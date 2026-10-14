@@ -46,7 +46,11 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
 
   const std::regex name_pattern(
       "/[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*");
+  const bool xsim_cloud = point_cloud &&
+      input.facts.value("scene", Json::object()).value("simulator", std::string{}) == "xsim";
+  std::size_t slot = 0;
   for (const auto &robot : input.robots) {
+    const int body_id = static_cast<int>(++slot);
     try {
       const auto binding = robot.value("binding", Json::object());
       if (input.run_mode == "hybrid" &&
@@ -59,6 +63,17 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
       const auto mode = lidar.value("mode", std::string{});
       const auto preset = lidar.value("preset", std::string{});
       const bool publish_beams = lidar.value("publishBeams", false);
+      if (xsim_cloud && lidar.value("bodyReturns", false)) {
+        const auto authored = robot.at("namespace").get<std::string>();
+        const auto first = authored.find_first_not_of('/');
+        const auto ns = "/" + (first == std::string::npos ? std::string{} : authored.substr(first));
+        if (ns.size() > 160 || !std::regex_match(ns, name_pattern))
+          throw SceneError("invalid lidar namespace");
+        if (!fleet.contains("bodies")) fleet["bodies"] = Json::array();
+        fleet["bodies"].push_back({{"id", body_id}, {"namespace", ns},
+            {"poseTopic", ns + "/pose"}, {"bodyReturns", true},
+            {"geometry", {{"type", "sphere"}, {"radiusMeters", xgc2_math::scene::VehicleBody{}.radius}}}});
+      }
       if (!lidar.value("enabled", false) ||
           !(point_cloud || mode == "penetrating" || mode == "depth_frustum" || publish_beams ||
             (!preset.empty() && mode != "raycast")))
@@ -116,6 +131,7 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
       }
       if (sensor["mode"] == "penetrating" && publish_beams)
         throw SceneError("penetrating sampled clouds have no beams");
+      if (xsim_cloud) sensor["bodyId"] = body_id;
       fleet["robots"].push_back(std::move(sensor));
     } catch (const Json::exception &error) {
       throw SceneError(

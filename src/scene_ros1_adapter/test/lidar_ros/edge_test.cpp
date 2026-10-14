@@ -141,7 +141,7 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
   values["lidar_defaults_json"] = Json{{"min_range", 0.2}, {"noise_std", 0.01}, {"seed", 42},
       {"yaw_only", true}, {"pose_timeout", 0.8}, {"worker_threads", 2}, {"vehicle_bodies", true},
       {"vehicle_body_radius", 0.4}}.dump();
-  const auto fleet = Parameters::parse(values, "gazebo", session);
+  const auto fleet = Parameters::parse(values, "xsim", session, true);
   ASSERT_EQ(fleet.manifest.robots.size(), 1u);
   EXPECT_FALSE(fleet.enabled);
   EXPECT_EQ(fleet.manifest.robots[0].config.min_range, 0.2);
@@ -180,9 +180,10 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
     auto accepted = sessionDocument();
     accepted["robots"][0]["binding"]["simulationSensors"]["simpleLidar"]["acceleration"] = backend;
     const auto input = lidar::parseSessionInput(accepted.dump());
-    const auto configured = Parameters::parse(parameters(), "gazebo", input);
+    const auto configured = Parameters::parse(parameters(), "xsim", input, true);
     ASSERT_EQ(configured.manifest.robots.size(), 1u);
     EXPECT_EQ(configured.manifest.robots[0].backend, backend);
+    EXPECT_TRUE(Parameters::parse(parameters(), "gazebo", input).manifest.robots.empty());
   }
   for (int refusal = 0; refusal < 3; ++refusal) {
     auto invalid = sessionDocument();
@@ -192,8 +193,9 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
     else if (refusal == 1) { invalid["robots"][0]["namespace"] = "invalid namespace"; message = "invalid lidar namespace"; }
     else { sensor["mode"] = "penetrating"; sensor["publishBeams"] = true; message = "penetrating sampled clouds have no beams"; }
     const auto input = lidar::parseSessionInput(invalid.dump());
-    try { Parameters::parse(parameters(), "gazebo", input); FAIL(); }
+    try { Parameters::parse(parameters(), "xsim", input, true); FAIL(); }
     catch (const SceneError& error) { EXPECT_NE(std::string(error.what()).find(message), std::string::npos); }
+    EXPECT_TRUE(Parameters::parse(parameters(), "gazebo", input).manifest.robots.empty());
     EXPECT_FALSE(Parameters::parse(parameters(), "xsim", input).have_fleet);
   }
 }

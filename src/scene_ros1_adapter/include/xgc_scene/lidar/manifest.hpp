@@ -25,6 +25,7 @@ struct BodySpec {
   std::string name_space;
   std::string pose_topic;
   double radius = 0.0;
+  bool body_returns = false;
 };
 
 struct ReferenceSpec {

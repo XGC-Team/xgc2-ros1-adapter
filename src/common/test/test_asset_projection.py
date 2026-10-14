@@ -9,6 +9,20 @@ spec.loader.exec_module(projection)
 
 
 class AssetProjectionTest(unittest.TestCase):
+    def test_body_returns_follows_scope_independently_of_sensor_enabled(self):
+        local = {"enabled": True, "bodyReturns": False}
+        binding = {"id": "slot", "simulationSensors": {"simpleLidar": local}}
+        for enabled in (False, True):
+            for body_returns in (False, True):
+                with self.subTest(enabled=enabled, body_returns=body_returns):
+                    settings = {"enabled": enabled, "bodyReturns": body_returns}
+                    scene = {"parameters": {"lidar": {"scope": "global", "settings": settings}}}
+                    projected = projection.effective_binding(binding, scene)
+                    self.assertEqual(projected["simulationSensors"]["simpleLidar"], settings)
+                    scene["parameters"]["lidar"]["scope"] = "individual"
+                    self.assertEqual(projection.effective_binding(binding, scene), binding)
+                    self.assertEqual(binding["simulationSensors"]["simpleLidar"], local)
+
     def test_global_lidar_overrides_effective_binding_and_individual_values_survive(self):
         asset = dict(kind="scout_mini", profileId="scout-mini.physical.vrpn", scout=dict(
             mocapRigidBodyName="tracked", positioningFrameNumber=5,
