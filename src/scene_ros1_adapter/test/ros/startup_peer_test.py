@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import traceback
 from process_test import http_call, scene_session, stop, wait_socket
 
 
@@ -61,17 +62,24 @@ class World(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.instance = instance
         self.applies = []
         self.motions = []
+        self.operations = {}
+        self.errors = []
         self.describes = 0
         self.refuse = refuse
         super().__init__(str(path), Handler)
         self.owner = threading.Thread(target=self.serve_forever, kwargs={'poll_interval': 0.05})
         self.owner.start()
 
+    def handle_error(self, request, client_address):
+        self.errors.append(traceback.format_exc())
+        super().handle_error(request, client_address)
+
     def close(self):
         self.shutdown()
         self.owner.join()
         self.server_close()
         self.path.unlink(missing_ok=True)
+        assert not self.errors, self.errors
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -90,15 +98,20 @@ class Handler(socketserver.StreamRequestHandler):
         text = self.rfile.read(int(headers.get('content-length', 0)))
         body = json.loads(text) if text else None
         world = self.server
-        if method == 'GET':
-            assert route == '/v1/describe?wait_ready_ms=30000'
+        if method == 'GET' and route == '/v1/describe?wait_ready_ms=30000':
             assert 'x-xrpc-instance-id' not in headers
             world.describes += 1
             value = {'service': 'xgc2.simulation', 'api_version': 'v1', 'ready': True, 'instance_id': world.instance,
                      'service_ref': {'target_id': 'fixture'}}
         else:
+            assert method == 'POST' or (method == 'GET' and route.startswith('/v1/operations/')), (method, route)
             if headers['x-xrpc-instance-id'] != world.instance:
                 value = {'error': {'code': 'conflict', 'message': 'service instance identity mismatch'}}
+            elif method == 'GET':
+                operation = route[len('/v1/operations/'):]
+                assert operation and '/' not in operation, route
+                value = world.operations.get((world.instance, operation),
+                    {'error': {'code': 'not_found', 'message': 'operation not found'}})
             else:
                 if route == '/v1/extensions/scene/apply':
                     world.applies.append(body)
@@ -109,8 +122,11 @@ class Handler(socketserver.StreamRequestHandler):
                          'result': {'epoch': body['epoch'], 'revision': body['revision'], 'scene_time': 0, 'playing': False}}
                 if world.refuse and route.endswith('/apply'):
                     value = {'id': headers['x-request-id'], 'state': 'failed', 'error': 'stale epoch/revision conflict'}
+                world.operations[(world.instance, headers['x-request-id'])] = value
         payload = json.dumps(value).encode()
-        status = '409 Conflict' if 'error' in value and 'id' not in value else '200 OK'
+        status = '200 OK'
+        if 'error' in value and 'id' not in value:
+            status = '404 Not Found' if value['error']['code'] == 'not_found' else '409 Conflict'
         self.wfile.write(('HTTP/1.1 ' + status + '\r\nContent-Type: application/json\r\nConnection: close\r\n'
             'X-Xrpc-Instance-ID: ' + world.instance + '\r\nX-Request-ID: ' + headers['x-request-id'] + '\r\n' +
             'Content-Length: {}\r\n\r\n'.format(len(payload))).encode() + payload)
@@ -158,8 +174,11 @@ def main():
             with log.open('a') as output:
                 process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             if profile == 'gazebo':
+                # Gazebo owns robot scans. Scene owns only the reference layer.
                 document = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_start_order',
-                    'binding': {'simulationSensors': {'simpleLidar': {'enabled': True, 'mode': 'depth_frustum', 'acceleration': 'cpu', 'hRes': 1, 'vRes': 1}}}}], 'visualizationTopics': []}
+                    'binding': {'simulationSensors': {'simpleLidar': {'enabled': True, 'mode': 'raycast', 'acceleration': 'cpu', 'hRes': 1, 'vRes': 1}}}}],
+                    'visualizationTopics': [{'topic': '/xgc/scene/reference_cloud',
+                        'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]}
                 scene_session(document, source, root, profile)
                 process.stdin.write(json.dumps(document).encode())
             process.stdin.close()
@@ -210,7 +229,8 @@ def main():
                 node = start_node('gazebo')
                 scene = http_call(scene_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'ready')
                 lidar = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'lidar-ready')
-                assert scene['ready'] and lidar['ready'] and lidar['facts']['sensors'] == 1
+                assert scene['ready'] and lidar['ready'], (scene, lidar)
+                assert lidar['facts']['sensors'] == 0, lidar
                 assert not lidar['facts']['scene_ready']
                 if not args.long:
                     assert not world_socket.exists(), 'Readiness required the world socket'
@@ -250,27 +270,27 @@ def main():
                 os.environ.update(ROS_MASTER_URI=env['ROS_MASTER_URI'], ROS_HOME=env['ROS_HOME'], ROS_IP='127.0.0.1')
                 rospy.init_node('lf_start_order_observer', anonymous=True, disable_signals=True)
                 clouds = []
-                subscribers.append(rospy.Subscriber('/lf_start_order/simple_lidar/points', PointCloud2, clouds.append, queue_size=1))
+                subscribers.append(rospy.Subscriber('/xgc/scene/reference_cloud', PointCloud2, clouds.append, queue_size=1))
                 pose = rospy.Publisher('/lf_start_order/pose', PoseStamped, queue_size=1)
-                until(lambda: pose.get_num_connections() > 0)
-                time.sleep(0.3)
-                assert not clouds, 'Fleet published without poses'
-                def send():
-                    sample = PoseStamped()
-                    sample.header.frame_id = 'world'
-                    sample.header.stamp = rospy.Time.now()
-                    sample.pose.orientation.w = 1
-                    pose.publish(sample)
-                    return bool(clouds)
-                until(send)
-                assert clouds[-1].width > 0
+                until(lambda: clouds and clouds[-1].width > 0)
+                assert clouds[-1].header.frame_id == 'world'
+                assert pose.get_num_connections() == 0, 'Scene subscribed to a native robot sensor pose'
+                sample = PoseStamped()
+                sample.header.frame_id = 'world'
+                sample.header.stamp = rospy.Time.now()
+                sample.pose.orientation.w = 1
+                pose.publish(sample)
+                assert not any(topic.startswith('/lf_start_order/simple_lidar/')
+                    for topic, _ in rospy.get_published_topics()), 'Scene advertised native robot scans'
                 world.close()
                 world = None
                 until(lambda: not envelope()['synchronized'])
                 assert http_call(scene_socket, 'GET', '/v1/describe', 'peer-down')['ready']
                 until(lambda: not http_call(lidar_socket, 'GET', '/v1/describe', 'lidar-down')['facts']['scene_ready'])
+                until(lambda: clouds and clouds[-1].width == 0)
                 world = World(world_socket, 'world-second')
                 until(lambda: envelope()['synchronized'])
+                until(lambda: clouds and clouds[-1].width > 0)
                 assert len(world.applies) == 1 and world.applies[0]['document'] == current['document']
                 assert world.applies[0]['epoch'] == current['epoch'] and world.applies[0]['revision'] == current['revision']
                 assert envelope()['consumers'][0]['instance_id'] == 'world-second'
@@ -290,16 +310,22 @@ def main():
                 world = World(world_socket, 'world-conflict', refuse=True)
                 until(lambda: any('stale epoch' in value['message'] for value in envelope()['consumers']))
                 assert http_call(scene_socket, 'GET', '/v1/describe', 'conflict')['ready']
+                until(lambda: not http_call(lidar_socket, 'GET', '/v1/describe', 'lidar-conflict')['facts']['scene_ready'])
+                until(lambda: clouds and clouds[-1].width == 0)
                 world.refuse = False
                 current = envelope()
                 receipt = http_call(scene_socket, 'POST', '/v1/commands', 'resync-conflict', instance,
                     {'operation': 'resync', 'expectedEpoch': current['epoch'], 'expectedRevision': current['revision']})
                 assert receipt['success']
                 until(lambda: envelope()['synchronized'])
+                until(lambda: clouds and clouds[-1].width > 0)
                 assert len(world.applies) == 2 and world.applies[0]['revision'] != world.applies[1]['revision']
+                assert pose.get_num_connections() == 0
+                assert not any(topic.startswith('/lf_start_order/simple_lidar/')
+                    for topic, _ in rospy.get_published_topics()), 'Scene advertised native robot scans'
                 stop(node, signal.SIGTERM)
                 assert node.returncode == 0
-                print('PASS: late world, offline edits, new-instance replay, conflict resync, no-pose silence and pose recovery', flush=True)
+                print('PASS: late world, offline edits, new-instance replay, conflict resync, reference clear/recovery and native robot sensor ownership', flush=True)
         except BaseException:
             print(log.read_text() if log.exists() else 'No node log', flush=True)
             raise
