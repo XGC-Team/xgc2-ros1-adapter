@@ -636,7 +636,7 @@ bool BuildNativeProfileConfig(
                        "geometry_msgs/TwistStamped",
                        &candidate.canonical_velocity_endpoint, error)) ||
       (!canonical_input && !resolveEndpoint(config, "state.mocap.acceleration", input, "acceleration",
-                       "geometry_msgs/AccelStamped",
+                       "geometry_msgs/TwistStamped",
                        &candidate.mocap_acceleration_endpoint, error)) ||
       (!canonical_input && !resolveEndpoint(config, "state.mocap.acceleration", output_kind, "output",
                        "geometry_msgs/AccelStamped",
@@ -1129,11 +1129,13 @@ bool RobotRuntime::installPx4(std::string *error) {
         "state.mocap.acceleration",
         channelStaleAfterSeconds(profile_id_, "state.mocap.acceleration"));
     mocap_acceleration_subscriber_ =
-        node_handle_.subscribe<geometry_msgs::AccelStamped>(
+        node_handle_.subscribe<geometry_msgs::TwistStamped>(
             mocap_acceleration_endpoint_, 20,
-            [weak_self](const geometry_msgs::AccelStamped::ConstPtr &message) {
+            [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
               if (const auto self = weak_self.lock())
-                self->mocapAccelerationCallback(message);
+                self->mocapAccelerationCallback(
+                    geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
+                        xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
             }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
     if (!requireRosRegistration(mocap_acceleration_subscriber_,
                                 mocap_acceleration_endpoint_, error))

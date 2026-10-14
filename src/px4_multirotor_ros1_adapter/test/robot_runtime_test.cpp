@@ -136,6 +136,30 @@ TEST(PositioningLiveness, ValidatesTheXgc1AssetParameterBounds) {
       {5u, 1.0e-10, 0.0}, &error));
 }
 
+TEST(InstalledProfile, RawVrpnAccelerationUsesTwistAndCanonicalUsesAccel) {
+  for (const char *profile : {"px4-multirotor.physical.vrpn",
+                              "px4-multirotor.gazebo.vrpn"}) {
+    SCOPED_TRACE(profile);
+    contract::ChannelMetadata acceleration{};
+    ASSERT_TRUE(InstalledContract().channelMetadata(
+        profile, "state.mocap.acceleration", &acceleration));
+    const auto *input = contract::channelEndpoint(
+        acceleration, contract::EndpointKind::kInput, "acceleration");
+    const auto *output = contract::channelEndpoint(
+        acceleration, contract::EndpointKind::kOutput, "output");
+    ASSERT_NE(nullptr, input);
+    ASSERT_NE(nullptr, output);
+    EXPECT_STREQ("geometry_msgs/TwistStamped", input->ros_type);
+    EXPECT_STREQ("geometry_msgs/AccelStamped", output->ros_type);
+
+    auto config = makeProfileConfig();
+    config.profile_id = profile;
+    NativeProfileConfig native;
+    std::string error;
+    EXPECT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  }
+}
+
 TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   NativeProfileConfig native;
   std::string error;

@@ -166,7 +166,7 @@ channels:
   inputs:
     acceleration:
       name: '{mocap_rigid_body}/accel'
-      type: geometry_msgs/AccelStamped
+      type: geometry_msgs/TwistStamped
       scope: global
   output:
     name: accel

@@ -148,12 +148,12 @@ class ContractGeneratorTest(unittest.TestCase):
 
 
 
-    def test_ugv_adapter_owns_raw_and_canonical_accel_stamped(self):
+    def test_ugv_adapter_owns_raw_twist_and_canonical_acceleration(self):
         expected_endpoint = {
             "kind": "input",
             "role": "acceleration",
             "name_template": "{mocap_rigid_body}/accel",
-            "ros_type": "geometry_msgs/AccelStamped",
+            "ros_type": "geometry_msgs/TwistStamped",
             "scope": "global",
         }
         expected_output = {
@@ -175,13 +175,13 @@ class ContractGeneratorTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn(converter_signature, runtime)
         self.assertIn(converter_fields, runtime)
-        self.assertIn("subscribe<geometry_msgs::AccelStamped>", runtime)
+        self.assertIn("subscribe<geometry_msgs::TwistStamped>", runtime)
         accel_binding = re.search(
             r'\{"vrpn\.acceleration".*?false\},', runtime, re.DOTALL
         )
         self.assertIsNotNone(accel_binding)
-        self.assertIn("geometry_msgs/AccelStamped", accel_binding.group(0))
-        self.assertNotIn("TwistStamped", accel_binding.group(0))
+        self.assertIn("geometry_msgs/TwistStamped", accel_binding.group(0))
+        self.assertNotIn("AccelStamped", accel_binding.group(0))
         test_source = (
             REPOSITORY_ROOT / "src" / "ugv_ros1_adapter" / "test" / "robot_runtime_test.cpp"
         ).read_text(encoding="utf-8")
@@ -205,7 +205,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     accel["inputs"]["acceleration"]["type"],
-                    "geometry_msgs/AccelStamped",
+                    "geometry_msgs/TwistStamped",
                 )
                 loaded = GENERATOR.load_profile(
                     profile_path, SCHEMA_PATH, self.messages
@@ -232,7 +232,7 @@ class ContractGeneratorTest(unittest.TestCase):
                 self.assertIn("namespace {} {{".format(namespace), header)
                 self.assertIn(
                     'EndpointKind::kInput, "acceleration", "{mocap_rigid_body}/accel", '
-                    '"geometry_msgs/AccelStamped"',
+                    '"geometry_msgs/TwistStamped"',
                     header,
                 )
 

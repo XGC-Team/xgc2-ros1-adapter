@@ -25,7 +25,7 @@ TEST(Manifest, DefaultsAndAllSensorFields) {
   auto doc = manifest();
   auto fleet = parseManifest(doc.dump());
   ASSERT_EQ(1u, fleet.robots.size());
-  EXPECT_EQ("/vrpn_client_node/A/pose", fleet.robots[0].pose_topic);
+  EXPECT_EQ("/A/pose", fleet.robots[0].pose_topic);
   EXPECT_EQ(1, fleet.robots[0].body_id);
   EXPECT_EQ(10.0, fleet.robots[0].rate_hz);
   EXPECT_FALSE(fleet.body_roster);
@@ -166,7 +166,7 @@ TEST(Manifest, BodyRosterIdentityGeometryAndPoseSources) {
   d["robots"][0]["mode"] = "penetrating";
   EXPECT_EQ("/measurement/A", parseManifest(d.dump()).robots[0].pose_topic);
   d["robots"][0].erase("poseTopic");
-  EXPECT_EQ("/vrpn_client_node/A/pose",
+  EXPECT_EQ("/A/pose",
             parseManifest(d.dump()).robots[0].pose_topic);
   d["robots"][0]["bodyId"] = 7;
   refused(d, "sensor bodyId disagrees with its world member");

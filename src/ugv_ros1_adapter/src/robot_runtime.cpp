@@ -101,7 +101,7 @@ std::vector<NativeChannelBinding> nativeBindings(const UgvVariant &variant) {
        "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.VelocityEstimate",
        false},
       {"vrpn.acceleration", prefix + ".vrpn-acceleration", "acceleration",
-       "geometry_msgs/AccelStamped",
+       "geometry_msgs/TwistStamped",
        "xgc.semantic.common.v1.AccelerationEstimate", false},
       {"vrpn.speed", prefix + ".vrpn-speed", "velocity",
        "geometry_msgs/TwistStamped", "xgc.semantic.common.v1.SpeedEstimate",
@@ -581,11 +581,13 @@ bool validateNativeProfileContract(const UgvVariant &variant,
                                binding.channel_id);
       }
       if (localization_projection) {
+        const char *projection_ros_type = channel_id == "vrpn.acceleration"
+            ? "geometry_msgs/AccelStamped" : binding.ros_type;
         const auto *projection_output = contract::channelEndpoint(
             channel, contract::EndpointKind::kOutput, "output");
         if (projection_output == nullptr ||
             projection_output->scope != contract::EndpointScope::kRobotNamespace ||
-            std::string(projection_output->ros_type) != binding.ros_type) {
+            std::string(projection_output->ros_type) != projection_ros_type) {
           return fail(error, name + " localization output binding drifted");
         }
       }
@@ -1046,11 +1048,13 @@ bool RobotRuntime::install(std::string *error) {
           "vrpn.acceleration",
           channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.acceleration"));
       vrpn_acceleration_subscriber_ =
-          node_handle_.subscribe<geometry_msgs::AccelStamped>(
+          node_handle_.subscribe<geometry_msgs::TwistStamped>(
               vrpn_acceleration_endpoint_, 20,
-              [weak_self](const geometry_msgs::AccelStamped::ConstPtr &message) {
+              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
                 if (const auto self = weak_self.lock()) {
-                  self->vrpnAccelerationCallback(message);
+                  self->vrpnAccelerationCallback(
+                      geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
+                          xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
                 }
               }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(vrpn_acceleration_subscriber_,

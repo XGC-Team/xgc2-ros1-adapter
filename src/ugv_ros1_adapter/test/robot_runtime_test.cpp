@@ -547,6 +547,25 @@ TEST_P(EveryUgv, OffersExactlyTheMotionOperationsAndNoPx4Ones) {
   EXPECT_FALSE(variant().contract.channelMetadata(profile, "operation.arm", &unknown));
 }
 
+TEST_P(EveryUgv, RawVrpnAccelerationUsesTwistAndCanonicalUsesAccel) {
+  for (const char *suffix : {"physical.vrpn", "gazebo.vrpn"}) {
+    const std::string profile =
+        std::string(variant().processor_prefix) + "." + suffix;
+    SCOPED_TRACE(profile);
+    contract::ChannelMetadata acceleration{};
+    ASSERT_TRUE(variant().contract.channelMetadata(
+        profile, "vrpn.acceleration", &acceleration));
+    const auto *input = contract::channelEndpoint(
+        acceleration, contract::EndpointKind::kInput, "acceleration");
+    const auto *output = contract::channelEndpoint(
+        acceleration, contract::EndpointKind::kOutput, "output");
+    ASSERT_NE(nullptr, input);
+    ASSERT_NE(nullptr, output);
+    EXPECT_STREQ("geometry_msgs/TwistStamped", input->ros_type);
+    EXPECT_STREQ("geometry_msgs/AccelStamped", output->ros_type);
+  }
+}
+
 TEST_P(EveryUgv, StreamsPositionVelocityAccelerationAndSpeedFromTheMocapSource) {
   const std::string profile = physicalProfile(variant());
   contract::ChannelMetadata position, velocity, acceleration, speed, command;
@@ -564,12 +583,13 @@ TEST_P(EveryUgv, StreamsPositionVelocityAccelerationAndSpeedFromTheMocapSource) 
       acceleration, contract::EndpointKind::kInput, "acceleration");
   ASSERT_NE(nullptr, accel_endpoint);
   EXPECT_EQ("{mocap_rigid_body}/accel", std::string(accel_endpoint->name_template));
-  EXPECT_EQ("geometry_msgs/AccelStamped", std::string(accel_endpoint->ros_type));
+  EXPECT_EQ("geometry_msgs/TwistStamped", std::string(accel_endpoint->ros_type));
   EXPECT_EQ(contract::EndpointScope::kGlobal, accel_endpoint->scope);
   const auto *canonical_accel = contract::channelEndpoint(
       acceleration, contract::EndpointKind::kOutput, "output");
   ASSERT_NE(nullptr, canonical_accel);
   EXPECT_EQ("accel", std::string(canonical_accel->name_template));
+  EXPECT_EQ("geometry_msgs/AccelStamped", std::string(canonical_accel->ros_type));
   EXPECT_EQ(contract::EndpointScope::kRobotNamespace, canonical_accel->scope);
 
   contract::ChannelMetadata diagnostics, controller;

@@ -99,6 +99,15 @@ bool validLocalizationTwist(const geometry_msgs::TwistStamped &source) {
   return finiteVector(source.twist.linear) && finiteVector(source.twist.angular);
 }
 
+geometry_msgs::AccelStamped
+projectVrpnAcceleration(const geometry_msgs::TwistStamped &source) {
+  geometry_msgs::AccelStamped output;
+  output.header = source.header;
+  output.accel.linear = source.twist.linear;
+  output.accel.angular = source.twist.angular;
+  return output;
+}
+
 bool validLocalizationAcceleration(const geometry_msgs::AccelStamped &source) {
   return finiteVector(source.accel.linear) && finiteVector(source.accel.angular);
 }

@@ -75,7 +75,7 @@ FleetManifest parseManifest(std::string_view text,
     if (!std::regex_match(sensor.name_space, name_pattern) ||
         !namespaces.insert(sensor.name_space).second)
       throw std::invalid_argument("invalid or duplicated fleet namespace");
-    sensor.pose_topic = "/vrpn_client_node" + sensor.name_space + "/pose";
+    sensor.pose_topic = sensor.name_space + "/pose";
     sensor.body_id = static_cast<int>(result.robots.size() + 1);
     if (result.body_roster) {
       const auto body = std::find_if(

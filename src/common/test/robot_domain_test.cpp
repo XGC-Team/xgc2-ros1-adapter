@@ -38,6 +38,40 @@ TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   EXPECT_EQ(projected.pose.orientation, source.pose.orientation);
 }
 
+TEST(LocalizationProjection, MapsRawVrpnAccelerationWithoutChangingFields) {
+  geometry_msgs::TwistStamped source;
+  source.header.seq = 42;
+  source.header.frame_id = "world";
+  source.header.stamp = ros::Time(7, 8);
+  source.twist.linear.x = 1.25;
+  source.twist.linear.y = -2.5;
+  source.twist.linear.z = 3.75;
+  source.twist.angular.x = -4.25;
+  source.twist.angular.y = 5.5;
+  source.twist.angular.z = -6.75;
+
+  const auto projected = projectVrpnAcceleration(source);
+  EXPECT_EQ(source.header, projected.header);
+  EXPECT_EQ(source.twist.linear, projected.accel.linear);
+  EXPECT_EQ(source.twist.angular, projected.accel.angular);
+  EXPECT_TRUE(validLocalizationAcceleration(projected));
+}
+
+TEST(LocalizationProjection, RawVrpnAccelerationKeepsTheExistingFiniteCheck) {
+  for (std::size_t component = 0; component < 6u; ++component) {
+    for (const double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                                 std::numeric_limits<double>::infinity()}) {
+      geometry_msgs::TwistStamped source;
+      double *fields[] = {&source.twist.linear.x, &source.twist.linear.y,
+                          &source.twist.linear.z, &source.twist.angular.x,
+                          &source.twist.angular.y, &source.twist.angular.z};
+      *fields[component] = invalid;
+      EXPECT_FALSE(validLocalizationAcceleration(projectVrpnAcceleration(source)))
+          << "component " << component;
+    }
+  }
+}
+
 TEST(LocalizationProjection, ParsesStrictRunScopedParameters) {
   std::map<std::string, std::string> parameters{
       {"mocap_source_root", "/vrpn_client_node_simulation"},

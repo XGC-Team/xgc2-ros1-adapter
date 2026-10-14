@@ -271,7 +271,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
         ++clock_deliveries;
         EXPECT_EQ(cloud->header.stamp, ros::Time(100));
       });
-  auto clock_pose = handle.advertise<geometry_msgs::PoseStamped>("/vrpn_client_node" + clock_ns + "/pose", 1);
+  auto clock_pose = handle.advertise<geometry_msgs::PoseStamped>(clock_ns + "/pose", 1);
   ASSERT_TRUE(pump([&] { return clock_pose.getNumSubscribers() > 0; }));
   geometry_msgs::PoseStamped clock_sample;
   clock_sample.header.frame_id = "world";
@@ -295,8 +295,8 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   late_sub.shutdown();
   reference.reset();
   const auto reference_session = lidar::parseSessionInput(Json{{"runMode", "simulation"}, {"robots", Json::array()},
-      {"visualizationTopics", Json::array({Json::array({{{"topic", "/xgc/scene/reference_cloud"},
-          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})})}}.dump());
+      {"visualizationTopics", Json::array({{{"topic", "/xgc/scene/reference_cloud"},
+          {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})}}.dump());
   const auto reference_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-reference.sock"}}, "gazebo", reference_session);
   Edge reference_edge(handle, reference_config);
   reference_edge.stopTimer();
@@ -327,15 +327,18 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   const auto roster_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-roster.sock"}},
       "gazebo", readSessionInput(session_stream));
   ASSERT_EQ(roster_config.manifest.robots.size(), 1u);
-  EXPECT_EQ(roster_config.manifest.robots[0].pose_topic, "/vrpn_client_node" + sampled_ns + "/pose");
+  EXPECT_EQ(roster_config.manifest.robots[0].pose_topic, sampled_ns + "/pose");
   Edge roster_edge(handle, roster_config);
   roster_edge.stopTimer();
   roster_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
   sensor_msgs::PointCloud2::ConstPtr roster_cloud;
   auto roster_sub = handle.subscribe<sensor_msgs::PointCloud2>(sampled_ns + "/simple_lidar/points", 1,
       [&](const sensor_msgs::PointCloud2::ConstPtr& cloud) { roster_cloud = cloud; });
-  auto roster_pose = handle.advertise<geometry_msgs::PoseStamped>("/vrpn_client_node" + sampled_ns + "/pose", 1);
+  auto roster_pose = handle.advertise<geometry_msgs::PoseStamped>(sampled_ns + "/pose", 1);
+  auto retired_roster_pose = handle.advertise<geometry_msgs::PoseStamped>(
+      "/vrpn_client_node" + sampled_ns + "/pose", 1);
   ASSERT_TRUE(pump([&] { return roster_pose.getNumSubscribers() > 0; }));
+  EXPECT_EQ(retired_roster_pose.getNumSubscribers(), 0u);
   clock_sample.header.stamp = ros::Time::now();
   roster_pose.publish(clock_sample);
   ASSERT_TRUE(pump([&] {

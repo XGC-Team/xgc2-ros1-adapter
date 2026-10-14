@@ -251,7 +251,7 @@ def main():
                 rospy.init_node('lf_start_order_observer', anonymous=True, disable_signals=True)
                 clouds = []
                 subscribers.append(rospy.Subscriber('/lf_start_order/simple_lidar/points', PointCloud2, clouds.append, queue_size=1))
-                pose = rospy.Publisher('/vrpn_client_node/lf_start_order/pose', PoseStamped, queue_size=1)
+                pose = rospy.Publisher('/lf_start_order/pose', PoseStamped, queue_size=1)
                 until(lambda: pose.get_num_connections() > 0)
                 time.sleep(0.3)
                 assert not clouds, 'Fleet published without poses'
