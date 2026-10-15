@@ -33,53 +33,13 @@ def resolve_recording_topics(document):
         topics.update(namespace + "/" + topic for topic in parameters.get("robotTopics") or [])
     if parameters.get("includeMotionCapture"):
         added = False
-        mode, simulator = document["runMode"], document["simulator"]
         for robot in selected:
             if robot.get("extension") is not None and not any(robot.get(kind) for kind in ("px4", "scout", "mecanum")):
                 continue
-            if mode not in ("physical", "simulation", "hybrid"):
-                raise ValueError("runMode %r is unsupported by Adapter localization" % mode)
-            source = robot.get("hybridSource", "")
-            if mode == "hybrid" and source not in ("physical", "simulation"):
-                raise ValueError("hybridSource %r is unsupported" % source)
-            profile = robot["profileId"]
-            for kind in ("px4-multirotor", "scout-mini", "mecanum-ugv"):
-                if profile in (kind + ".physical.vrpn", kind + ".gazebo.vrpn", kind + ".xsim.ros"):
-                    if mode == "physical" or mode == "hybrid" and source == "physical":
-                        profile = kind + ".physical.vrpn"
-                    else:
-                        profile = kind + (".xsim.ros" if simulator == "xsim" else ".gazebo.vrpn")
-                    break
-            runtime = dict(robot.get("runtimeParameters") or {})
-            if robot.get("simulationPoseTopic"):
-                runtime["localization_pose_topic"] = robot["simulationPoseTopic"]
-            if robot.get("simulationTwistTopic"):
-                runtime["localization_twist_topic"] = robot["simulationTwistTopic"]
-            if profile in ("px4-multirotor.xsim.ros", "scout-mini.xsim.ros", "mecanum-ugv.xsim.ros"):
-                pose = runtime.get("localization_pose_topic") or robot["namespace"].rstrip("/") + "/pose"
-                twist = runtime.get("localization_twist_topic") or robot["namespace"].rstrip("/") + "/twist"
-            else:
-                root = "/vrpn_client_node"
-                if profile in ("px4-multirotor.gazebo.vrpn", "scout-mini.gazebo.vrpn", "mecanum-ugv.gazebo.vrpn"):
-                    body = robot["namespace"].lstrip("/")
-                elif profile in ("px4-multirotor.physical.vrpn", "scout-mini.physical.vrpn", "mecanum-ugv.physical.vrpn", "px4.mocap-rotor.ros1.v1"):
-                    body = runtime.get("mocap_rigid_body", "")
-                    if "mocap_rigid_body" not in runtime:
-                        # Preview carries the same frozen asset, before private
-                        # delivery parameters are projected for a target.
-                        for kind in ("px4", "scout", "mecanum"):
-                            if robot.get(kind) is not None:
-                                body = robot[kind].get("mocapRigidBodyName", "")
-                                break
-                else:
-                    raise ValueError("Profile %r has no robot measurement projection" % profile)
-                if not body or "/" in body:
-                    raise ValueError("robot %s has no valid measurement rigid body" % robot["id"])
-                if mode == "hybrid":
-                    root += "_" + source
-                pose, twist = root + "/" + body + "/pose", root + "/" + body + "/twist"
-            if not measurement_topic.fullmatch(pose) or not measurement_topic.fullmatch(twist):
-                raise ValueError("robot %s has invalid localization topics" % robot["id"])
+            runtime = robot.get("runtimeParameters") or {}
+            pose, twist = runtime.get("localization_pose_topic"), runtime.get("localization_twist_topic")
+            if any(not isinstance(topic, str) or not measurement_topic.fullmatch(topic) for topic in (pose, twist)):
+                raise ValueError("robot %s requires explicit frozen localization topics" % robot["id"])
             topics.update((pose, twist))
             added = True
         if not added:
@@ -107,7 +67,7 @@ def json_bytes(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
-def read_request():
+def read_document():
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -118,7 +78,22 @@ def read_request():
     data = sys.stdin.buffer.read((16 << 20) + 1)
     if len(data) > 16 << 20:
         raise ValueError("frozen recorder request exceeds 16 MiB")
-    document = json.loads(data, object_pairs_hook=unique)
+    return json.loads(data, object_pairs_hook=unique)
+
+
+def read_preview_request():
+    document = read_document()
+    if not isinstance(document, dict) or set(document) != {"parameters", "robots", "context"}:
+        raise ValueError("recorder preview requires parameters, frozen Robot selection and context")
+    if not all(isinstance(document[key], dict) for key in document):
+        raise ValueError("recorder preview fields must be objects")
+    if not isinstance(document["robots"].get("robots"), list):
+        raise ValueError("recorder preview requires a frozen Robot selection")
+    return document
+
+
+def read_record_request():
+    document = read_document()
     if not isinstance(document, dict) or set(document) != {"parameters", "context"}:
         raise ValueError("recorder request requires parameters and frozen Session context")
     if not all(isinstance(document[key], dict) for key in document):
@@ -149,6 +124,8 @@ def normalize_parameters(value, context, preview):
             if name in p and p[name] != context[name]:
                 raise ValueError(name + " disagrees with the frozen Session context")
             p[name] = copy.deepcopy(context[name])
+    if not preview and not context.get("rosMasterUri"):
+        raise ValueError("recording requires an explicit frozen Session rosMasterUri")
     for name in ("rosInstallPath", "rosMasterUri", "rosIp", "rosHostname", "compression", "recordingProfile", "sessionId", "experimentResourceId", "experimentCommitId"):
         if name in p:
             if not isinstance(p[name], str):
@@ -159,8 +136,8 @@ def normalize_parameters(value, context, preview):
         raise ValueError("recordingProfile must be general or camera_scientific")
     p["recordingProfile"] = profile
     scientific = profile == "camera_scientific"
-    for name, default in (("splitSizeMiB", 5120 if scientific else 1024), ("maxSplits", 2 if scientific else 10), ("minFreeSpaceGiB", 2), ("expectedDurationMinutes", 60), ("estimatedVideoBitrateMbps", 24 if scientific else 0), ("capacitySafetyFactor", 1.25), ("compression", "none" if scientific else "lz4"), ("repeatLatched", True), ("recordAllTopics", False), ("includeMotionCapture", False), ("rosInstallPath", "/opt/ros/noetic"), ("rosMasterUri", "http://127.0.0.1:11311"), ("rosIp", ""), ("rosHostname", "")):
-        if name not in p or name in ("splitSizeMiB", "maxSplits", "minFreeSpaceGiB", "expectedDurationMinutes", "estimatedVideoBitrateMbps", "capacitySafetyFactor", "compression", "rosInstallPath", "rosMasterUri") and p[name] in (0, ""):
+    for name, default in (("splitSizeMiB", 5120 if scientific else 1024), ("maxSplits", 2 if scientific else 10), ("minFreeSpaceGiB", 2), ("expectedDurationMinutes", 60), ("estimatedVideoBitrateMbps", 24 if scientific else 0), ("capacitySafetyFactor", 1.25), ("compression", "none" if scientific else "lz4"), ("repeatLatched", True), ("recordAllTopics", False), ("includeMotionCapture", False), ("rosInstallPath", "/opt/ros/noetic"), ("rosIp", ""), ("rosHostname", "")):
+        if name not in p or name in ("splitSizeMiB", "maxSplits", "minFreeSpaceGiB", "expectedDurationMinutes", "estimatedVideoBitrateMbps", "capacitySafetyFactor", "compression", "rosInstallPath") and p[name] in (0, ""):
             p[name] = default
     for name in ("recordAllTopics", "includeMotionCapture", "repeatLatched"):
         if not isinstance(p[name], bool):
@@ -177,9 +154,10 @@ def normalize_parameters(value, context, preview):
     if not os.path.isabs(p["rosInstallPath"]) or os.path.normpath(p["rosInstallPath"]) != p["rosInstallPath"] or "\x00" in p["rosInstallPath"]:
         raise ValueError("rosInstallPath must be a clean absolute path")
     import urllib.parse
-    uri = urllib.parse.urlsplit(p["rosMasterUri"])
-    if uri.scheme not in ("http", "https") or not uri.hostname or uri.username or uri.password or uri.query or uri.fragment:
-        raise ValueError("rosMasterUri must be an explicit ROS master URL")
+    if not preview or "rosMasterUri" in p:
+        uri = urllib.parse.urlsplit(p.get("rosMasterUri", ""))
+        if uri.scheme not in ("http", "https") or not uri.hostname or uri.username or uri.password or uri.query or uri.fragment:
+            raise ValueError("rosMasterUri must be an explicit ROS master URL")
     if p["rosIp"] and p["rosHostname"]:
         raise ValueError("ROS_IP and ROS_HOSTNAME are mutually exclusive")
     absolute = re.compile(r"/[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*")
@@ -319,12 +297,12 @@ def record_arguments(document):
 
 try:
     if sys.argv[1:] == ["--prepare"]:
-        _, resolved, manifest = prepare(read_request(), preview=True)
+        _, resolved, manifest = prepare(read_preview_request(), preview=True)
         sys.stdout.buffer.write(json_bytes(dict(resolved, estimatedBytes=manifest["estimatedBytes"])))
         raise SystemExit(0)
     if sys.argv[1:] != ["--record"]:
         raise ValueError("usage: xgc_ros1_tools_adapter_rosbag_recorder --prepare|--record")
-    sys.argv = record_arguments(read_request())
+    sys.argv = record_arguments(read_record_request())
 except (ValueError, TypeError, KeyError) as error:
     sys.stderr.write(str(error) + "\n")
     raise SystemExit(2)
@@ -1074,10 +1052,15 @@ child = None
 forwarded_signal = None
 signal_delivered = False
 capacity_limit_reached = False
+stop_deadline = None
+NATIVE_STOP_GRACE_SECONDS = 5.0
+NATIVE_KILL_WAIT_SECONDS = 1.0
 
 def forward(signum, _frame):
-    global forwarded_signal, signal_delivered
+    global forwarded_signal, signal_delivered, stop_deadline
     forwarded_signal = signum
+    if stop_deadline is None:
+        stop_deadline = time.monotonic() + NATIVE_STOP_GRACE_SECONDS
     if child is not None and child.poll() is None:
         try:
             child.send_signal(signum)
@@ -1105,7 +1088,7 @@ def start_recorder_service():
         call.check_cancelled()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
-                "ready": child is not None and child.poll() is None and manifest["firstBagObservedAt"] is not None,
+                "ready": child is not None and child.poll() is None,
                 "facts": {"path": output_prefix + ".bag", "recordingId": recording_id,
                           "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
                           "startedAt": manifest["recordingStartedAt"],
@@ -1117,6 +1100,7 @@ def start_recorder_service():
 rpc_runtime, rpc_host = start_recorder_service()
 try:
     child = subprocess.Popen(arguments)
+    recorder_ready.set()
     if forwarded_signal is not None and not signal_delivered and child.poll() is None:
         child.send_signal(forwarded_signal)
         signal_delivered = True
@@ -1124,7 +1108,6 @@ try:
         changed = facts.snapshot(manifest)
         if manifest["firstBagObservedAt"] is None and recorded_paths():
             manifest["firstBagObservedAt"] = facts.clock()
-            recorder_ready.set()
             changed = True
         if changed:
             write_manifest(manifest)
@@ -1132,13 +1115,15 @@ try:
             exit_code = child.returncode
             break
         if not signal_delivered and recorded_bytes() >= stop_limit_bytes:
+            forward(signal.SIGTERM, None)
+            capacity_limit_reached = True
+        if stop_deadline is not None and time.monotonic() >= stop_deadline:
             try:
-                child.send_signal(signal.SIGTERM)
-                signal_delivered = True
-                forwarded_signal = signal.SIGTERM
-                capacity_limit_reached = True
+                child.kill()
             except ProcessLookupError:
                 pass
+            exit_code = child.wait(timeout=NATIVE_KILL_WAIT_SECONDS)
+            break
         try:
             exit_code = child.wait(timeout=0.25)
             break
@@ -1149,6 +1134,12 @@ finally:
     rpc_host.close()
     rpc_runtime.close()
     facts.finish(manifest)
+    if child is not None and child.poll() is None:
+        manifest["status"] = "failed"
+        manifest["archiveFinalizationState"] = "pending"
+        manifest["archiveFinalizationError"] = "native recorder has not exited; files retained"
+        write_manifest(manifest)
+        raise RuntimeError("native recorder did not exit after SIGKILL")
     manifest["recordingEndedAt"] = utc_now()
     manifest["recorderExitCode"] = exit_code
     manifest["terminationSignal"] = forwarded_signal

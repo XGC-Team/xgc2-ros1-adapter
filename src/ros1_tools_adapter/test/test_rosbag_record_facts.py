@@ -292,6 +292,34 @@ class RecordFactsTests(unittest.TestCase):
     def test_native_recipe_still_finalizes_its_existing_record_identity(self):
         self.run_native_recipe()
 
+    def test_recorder_ready_releases_held_describe_before_any_bag_exists(self):
+        # The recorder child waits for describe to return before creating its
+        # first bag. Readiness therefore cannot depend on incoming topic data.
+        setup = '''
+import json, threading, types
+from pathlib import Path
+def readiness_host(_address, routes, **kwargs):
+    host = types.SimpleNamespace(close=lambda: None)
+    def probe():
+        call = types.SimpleNamespace(query="wait_ready_ms=30000", remaining=lambda: 3.0,
+                                     check_cancelled=lambda: None)
+        reply = routes[("GET", "/v1/describe")](call, None)
+        reply["firstBagObservedAt"] = manifest["firstBagObservedAt"]
+        reply["archiveExists"] = Path(manifest_path).is_file()
+        Path(os.environ["RECORDER_READY_RESULT"]).write_text(json.dumps(reply))
+    def start():
+        threading.Thread(target=probe, daemon=True).start()
+        return host
+    host.start = start
+    return host
+xrpc.Host = readiness_host
+'''
+        self.run_native_recipe(setup, wait_for_ready=True)
+        reply = json.loads((self.directory / "ready.json").read_text())
+        self.assertTrue(reply["ready"])
+        self.assertTrue(reply["archiveExists"])
+        self.assertIsNone(reply["firstBagObservedAt"])
+
     def test_blocked_ros_registration_and_shutdown_do_not_hold_the_recorder(self):
         # The callback crosses the real observer process pipe. Both registration
         # and its shutdown hook then hang, as rospy can do after losing a master.
@@ -318,7 +346,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         self.assertEqual(len(producers), 1)
         self.assertEqual(json.loads(self.body(producers[0], self.directory / "Experiments" / "Data")), applied())
 
-    def run_native_recipe(self, setup=""):
+    def run_native_recipe(self, setup="", wait_for_ready=False):
         if "sys.argv[1:]" not in SCRIPT:
             self.skipTest("standalone fragment run; full recipe exercised in isolated checkout")
         root = self.directory / "ros"
@@ -327,6 +355,19 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         source = self.directory / "calibration.yaml"
         source.write_text("K: 1\n")
         native.write_text("#!/usr/bin/env python3\nimport os,sys,time\nfrom pathlib import Path\na=sys.argv\np=Path(a[a.index('--output-name')+1]+'_0.bag.active')\np.write_bytes(b'bag-stub')\ntime.sleep(1.4)\nPath(os.environ['FACT_TEST_FILE']).write_text('K: 2\\n')\ntime.sleep(1.4)\np.rename(str(p)[:-7])\n")
+        if wait_for_ready:
+            body = native.read_text()
+            body = body.replace("p.write_bytes(b'bag-stub')", """deadline=time.monotonic()+4
+ready=Path(os.environ['RECORDER_READY_RESULT'])
+while not ready.exists() and time.monotonic()<deadline:
+    time.sleep(.01)
+if not ready.exists():
+    raise SystemExit('describe did not release before first bag')
+import json
+if not json.loads(ready.read_text())['ready']:
+    raise SystemExit('recorder not ready before first bag')
+p.write_bytes(b'bag-stub')""")
+            native.write_text(body)
         native.chmod(0o700)
         topics = ["/xgc/record_facts", "/tf"]
         manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "recordingId": "a" * 32,
@@ -340,6 +381,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         result = subprocess.run(command, text=True, capture_output=True, timeout=10,
                                 env=dict(os.environ, FACT_TEST_FILE=str(source),
                                          XGC_USER_FILES_DIR=str(self.directory), XGC_RECORDER_RUN_ID="facts-test",
+                                         RECORDER_READY_RESULT=str(self.directory / "ready.json"),
                                          XGC_RECORDER_SOCKET=str(self.directory / "rpc.sock")))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((directory / "session-manifest.json").read_text())
