@@ -1,6 +1,7 @@
 #pragma once
 
 #include "xgc_scene/store.hpp"
+#include "xgc_scene/command_dispatch.hpp"
 
 #include <xgc2/xrpc/http.hpp>
 
@@ -18,7 +19,7 @@ class AuthoringNode {
   virtual ~AuthoringNode() = default;
   virtual bool online() const = 0;
   virtual Json envelope() = 0;
-  virtual Json commandValue(const Json& command) = 0;
+  virtual Json commandValue(const Json& command, CommandContext context = {}) = 0;
   virtual std::optional<Json> requestResult(const std::string& request_id) = 0;
 };
 

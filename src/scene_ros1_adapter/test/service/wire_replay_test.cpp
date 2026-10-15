@@ -29,7 +29,7 @@ class StoreNode final : public AuthoringNode {
   explicit StoreNode(const Json& initial = empty) : store(initial, {}, {}, {}, [] { return 100.0; }) {}
   bool online() const override { return is_online.load(); }
   Json envelope() override { return store.envelope(); }
-  Json commandValue(const Json& value) override { ++commands; return store.command(value); }
+  Json commandValue(const Json& value, CommandContext = {}) override { ++commands; return store.command(value); }
   std::optional<Json> requestResult(const std::string& id) override { return store.requestResult(id); }
   SceneStore store;
   std::atomic<bool> is_online{true};

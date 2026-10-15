@@ -79,19 +79,12 @@ class LaneAuthoring final : public xgc_scene::AuthoringNode {
   bool online() const override { return node_->online(); }
   xgc_scene::Json envelope() override { return node_->envelope(); }
   std::optional<xgc_scene::Json> requestResult(const std::string& id) override { return node_->requestResult(id); }
-  xgc_scene::Json commandValue(const xgc_scene::Json& command) override {
-    auto result = std::make_shared<std::promise<xgc_scene::Json>>();
-    auto future = result->get_future();
-    post_([node = node_, result, command, stopping = &stopping_] {
-      try {
-        if (stopping->load()) throw xgc_scene::SceneError("Scene process is stopping");
-        result->set_value(node->commandValue(command));
-      } catch (...) { result->set_exception(std::current_exception()); }
-    });
-    while (future.wait_for(milliseconds(100)) != std::future_status::ready)
-      if (stopping_.load()) throw xgc_scene::SceneError("Scene process is stopping");
-    return future.get();
+  xgc_scene::Json commandValue(const xgc_scene::Json& command, xgc_scene::CommandContext context = {}) override {
+    return xgc_scene::dispatchCommand(post_, [node = node_, command, context] {
+      return node->commandValue(command, context);
+    }, context, stopping_);
   }
+
  private:
   std::shared_ptr<xgc_scene::SceneNode> node_;
   std::function<void(std::function<void()>)> post_;
@@ -334,7 +327,7 @@ int main(int argc, char** argv) {
             {"ros_master_uri", master.uri}, {"ros_master_pid", master.pid}, {"ros_master_run_id", master.run_id},
             {"ros_node", ros::this_node::getName()}, {"ros_master", "bound"}});
         }
-        auto timer = handle.createTimer(ros::Duration(1.0 / 30.0), [node](const ros::TimerEvent&) { node->tick(); });
+        auto timer = handle.createWallTimer(ros::WallDuration(1.0 / 30.0), [node](const ros::WallTimerEvent&) { node->tick(); });
         callbacks = std::thread([&] {
           try {
             while (!stopping.load() && binding.Running()) binding.PumpLane(0, milliseconds(100));

@@ -20,7 +20,8 @@ class Control {
   Control& operator=(const Control&) = delete;
 
   void Start();
-  // Stop joins the HTTP owner and waits for any active apply call. Queued
+  // Stop joins the HTTP owner and bounds an active apply by its admitted
+  // operation deadline. An owner that hangs past that bound ends the process. Queued
   // executor callbacks become inert and may safely run after destruction.
   void Stop();
   // The service is ready on listening by default. An owner with an additional

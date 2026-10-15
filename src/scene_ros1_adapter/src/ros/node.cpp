@@ -167,8 +167,9 @@ Json SceneNode::envelope() {
   return result;
 }
 
-Json SceneNode::commandValue(const Json& command) {
+Json SceneNode::commandValue(const Json& command, CommandContext context) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (context.expired()) throw CommandExpired();
   const auto previous = store_->status().at("revision");
   const auto rid = command.is_object() ? command.value("requestId", Json()) : Json();
   const auto id = rid.is_string() ? rid.get<std::string>() : std::string();

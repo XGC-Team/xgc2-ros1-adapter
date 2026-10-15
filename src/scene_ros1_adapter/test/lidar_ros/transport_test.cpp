@@ -253,15 +253,15 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   EXPECT_EQ(edge.engine()->tick(now), 0u);
   control.Stop();
 
-  // The production timer follows ROS simulated time and cannot advance with
-  // wall time while the simulation clock is paused.
+  // Wall scheduling consumes the first observation with a paused ROS clock;
+  // sample stamps and scan cadence still follow that unchanged clock.
   ros::Time::setNow(ros::Time(100));
   EXPECT_TRUE(ros::Time::isSimTime());
   const auto clock_ns = prefix + "/clock_sensor";
   const auto clock_session = lidar::parseSessionInput(Json{{"runMode", "simulation"},
       {"robots", Json::array({{{"namespace", clock_ns}, {"binding", {{"simulationSensors", {{"simpleLidar",
           {{"enabled", true}, {"mode", "depth_frustum"}, {"acceleration", "cpu"},
-           {"hRes", 1}, {"vRes", 1}, {"rateHz", 10}}}}}}}}})}, {"visualizationTopics", Json::array()}}.dump());
+           {"hRes", 3}, {"vRes", 3}, {"rateHz", 10}}}}}}}}})}, {"visualizationTopics", Json::array()}}.dump());
   const auto clock_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-clock.sock"}}, "xsim", clock_session, true);
   Edge clock_edge(handle, clock_config);
   clock_edge.engine()->setScene({xgc2_math::scene::Obstacle::box({4, 0, 0}, {1, 4, 2})}, 1);
@@ -278,14 +278,12 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   clock_sample.header.stamp = ros::Time(100);
   clock_sample.pose.orientation.w = 1;
   clock_pose.publish(clock_sample);
-  queue.callAvailable(ros::WallDuration(0.1));
-  EXPECT_EQ(clock_deliveries, 0u);
-  ros::Time::setNow(ros::Time(100, 100000000));
   ASSERT_TRUE(pump([&] { return clock_deliveries == 1; }));
+  EXPECT_EQ(ros::Time::now(), ros::Time(100));
   const auto paused_until = std::chrono::steady_clock::now() + 200ms;
   while (std::chrono::steady_clock::now() < paused_until) queue.callAvailable(ros::WallDuration(0.01));
   EXPECT_EQ(clock_deliveries, 1u);
-  ros::Time::setNow(ros::Time(100, 200000000));
+  ros::Time::setNow(ros::Time(100, 100000000));
   ASSERT_TRUE(pump([&] { return clock_deliveries == 2; }));
   clock_edge.stopTimer();
   clock_edge.shutdown();
@@ -320,12 +318,20 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   const auto native_ns = prefix + "/native";
   const auto roster = Json{{"runMode", "simulation"}, {"robots", Json::array({
       {{"namespace", sampled_ns}, {"binding", {{"simulationSensors", {{"simpleLidar", {{"enabled", true},
-          {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 1}, {"vRes", 1}}}}}}}},
+          {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 3}, {"vRes", 3}}}}}}}},
       {{"namespace", native_ns}, {"binding", {{"simulationSensors", {{"simpleLidar", true}}}}}}
       })}, {"visualizationTopics", Json::array()}};
   std::istringstream session_stream(roster.dump());
-  const auto roster_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-roster.sock"}},
+  const auto native_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-roster.sock"}},
       "gazebo", readSessionInput(session_stream));
+  EXPECT_TRUE(native_config.manifest.robots.empty());
+  EXPECT_FALSE(native_config.have_fleet);
+  // Saved-cloud XSim owns its enabled observations through the shared fleet.
+  // Keep the other slot disabled in this consumer fixture.
+  auto saved_roster = roster;
+  saved_roster["robots"][1]["binding"]["simulationSensors"]["simpleLidar"] = false;
+  const auto roster_config = Parameters::parse({{"lidar_xrpc_socket", "/tmp/unused-roster.sock"}},
+      "xsim", lidar::parseSessionInput(saved_roster.dump()), true);
   ASSERT_EQ(roster_config.manifest.robots.size(), 1u);
   EXPECT_EQ(roster_config.manifest.robots[0].pose_topic, sampled_ns + "/pose");
   Edge roster_edge(handle, roster_config);

@@ -52,8 +52,7 @@ def project(row, context):
                    "simulation_local_port": "simulationLocalPort", "simulation_remote_port": "simulationRemotePort"}
         params.update({key: scalar(spec[field]) for key, field in mapping.items()})
         params["physical_fcu_url"] = "udp://:%s@%s:%s" % (spec["physicalMavrosLocalPort"], spec["managementIp"], spec["physicalFcuRemotePort"])
-        params["physical_gcs_url"] = "udp://0.0.0.0:%s@127.0.0.1:14550" % (24554 + spec["mavSystemId"])
-        params["simulation_fcu_url"] = "udp://:%s@127.0.0.1:%s" % (spec["simulationLocalPort"], spec["simulationRemotePort"])
+        params["simulation_fcu_url"] = "udp://:%s@%s:%s" % (spec["simulationLocalPort"], context["simulatorHostname"], spec["simulationRemotePort"])
         derived.update(sitlInstanceId=spec["mavSystemId"] - 1, simulationFcuUrl=params["simulation_fcu_url"])
     else:
         params.update({key: scalar(spec[field]) for key, field in {
@@ -85,6 +84,12 @@ def project(row, context):
     if simulated and simulator == "xsim":
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
         params["localization_twist_topic"] = binding["namespace"] + "/twist"
+    else:
+        # The recorder consumes explicit frozen topics, never profile or mode
+        # guesses. These are the same product-owned VRPN topics as localization.
+        root = params["mocap_source_root"].rstrip('/') + '/' + params["mocap_rigid_body"]
+        params["localization_pose_topic"] = root + '/pose'
+        params["localization_twist_topic"] = root + '/twist'
     cameras = []
     if binding.get(arm, {}).get("imageSimulationEnabled"):
         cameras.append(dict(id="robot:" + binding["id"], kind="robot", robotSlotId=binding["id"]))

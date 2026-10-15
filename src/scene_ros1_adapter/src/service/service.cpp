@@ -266,7 +266,7 @@ class SceneService::Impl {
     if (work.cancelled() || Clock::now() >= work.request.deadline)
       return fault(408, "deadline_exceeded", "Scene request was cancelled or expired");
     value["requestId"] = work.request.request_id;
-    return response(work.node->commandValue(value));
+    return response(work.node->commandValue(value, {work.request.deadline, work.cancelled}));
   }
 
   void work() {
@@ -284,6 +284,8 @@ class SceneService::Impl {
       if (work.cancelled()) continue;
       try {
         work.complete(stopping ? fault(503, "unavailable", "Scene authoring is stopping") : execute(work));
+      } catch (const CommandExpired&) {
+        work.complete(fault(408, "deadline_exceeded", "Scene command was cancelled or expired before application"));
       } catch (const std::exception&) {
         work.complete(fault(500, "outcome_unknown", "Scene operation did not produce a known terminal result"));
       }

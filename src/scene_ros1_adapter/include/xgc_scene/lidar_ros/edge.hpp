@@ -32,7 +32,7 @@ class Edge final : public lidar::Sink {
   ros::Publisher reference_;
   sensor_msgs::PointCloud2 reference_message_ = cloudLayout();
   std::size_t reference_demand_ = 0;
-  ros::Timer timer_;
+  ros::WallTimer timer_;
   std::atomic<bool> scene_ready_{false};
   // Explicit shutdown joins the pool before any ROS handles or messages die.
   std::unique_ptr<lidar::Engine> engine_;

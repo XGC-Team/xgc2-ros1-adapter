@@ -32,7 +32,7 @@ class SceneNode final : public AuthoringNode {
   ~SceneNode() override;
   bool online() const override;
   Json envelope() override;
-  Json commandValue(const Json& command) override;
+  Json commandValue(const Json& command, CommandContext context = {}) override;
   std::optional<Json> requestResult(const std::string& request_id) override;
   Json applicationView(const std::string& epoch, std::uint64_t revision);
   Json peerFacts();

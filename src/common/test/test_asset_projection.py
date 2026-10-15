@@ -37,7 +37,7 @@ class AssetProjectionTest(unittest.TestCase):
                             hRes=640, vRes=32, publishBeams=False)
         for simulator in ("gazebo", "xsim"):
             context = dict(runMode="simulation", simulator=simulator, rosMasterUri="http://localhost:11311",
-                           rosIp="127.0.0.1", localizationOffset=dict(x=0, y=0, z=0),
+                           rosIp="127.0.0.1", simulatorHostname="198.51.100.19", localizationOffset=dict(x=0, y=0, z=0),
                            scene=dict(parameters=dict(lidar=dict(scope="global", settings=global_lidar))))
             request = dict(context=context, robots=[dict(asset=asset, binding=b) for b in bindings])
             original = copy.deepcopy(request)
@@ -50,6 +50,29 @@ class AssetProjectionTest(unittest.TestCase):
             context["scene"]["parameters"]["lidar"].update(scope="global", settings=dict(global_lidar, enabled=False))
             self.assertTrue(all(not row["binding"]["simulationSensors"]["simpleLidar"]["enabled"]
                                 for row in projection.project_batch(request)))
+
+    def test_authored_parameters_survive_for_shared_profile_resolution(self):
+        asset = dict(kind="scout_mini", profileId="scout-mini.physical.vrpn", scout=dict(
+            mocapRigidBodyName="tracked", positioningFrameNumber=5,
+            positioningComparisonThresholdM=0.001, managementAddress="192.0.2.8",
+            connector="swarm_ros_bridge", telemetryRemotePort=9090, controlLocalPort=9091))
+        authored = dict(localization_pose_topic="/measured/custom_pose",
+                        localization_twist_topic="/measured/custom_twist")
+        binding = dict(id="slot", namespace="/robot7", hybridSource="physical",
+                       runtimeParameters=authored)
+        context = dict(runMode="physical", simulator="none", rosMasterUri="http://localhost:11311",
+                       rosIp="127.0.0.1", simulatorHostname="198.51.100.19",
+                       localizationOffset=dict(x=0, y=0, z=0))
+        request = dict(context=context, robots=[dict(asset=asset, binding=binding)])
+        before = copy.deepcopy(request)
+        result = projection.project_batch(request)[0]
+        # Product injection and authored values both reach the generic profile
+        # resolver, which owns declaration validation and override precedence.
+        self.assertEqual(result["binding"]["runtimeParameters"], authored)
+        self.assertEqual(result["parameters"]["localization_pose_topic"], "/vrpn_client_node/tracked/pose")
+        self.assertEqual(result["parameters"]["localization_twist_topic"], "/vrpn_client_node/tracked/twist")
+        self.assertEqual(request, before)
+        self.assertIsNot(result["binding"]["runtimeParameters"], authored)
 
     def test_profiles_offsets_and_transport_for_all_sources(self):
         for kind, (arm, prefix, *_) in projection.MODELS.items():
@@ -65,16 +88,21 @@ class AssetProjectionTest(unittest.TestCase):
                 for backend in ("gazebo", "xsim"):
                     for source in ("physical", "simulation"):
                         context = dict(runMode=mode, simulator=backend, rosMasterUri="http://localhost:11311",
-                                       rosIp="127.0.0.1", localizationOffset=dict(x=1, y=-2, z=3))
+                                       rosIp="127.0.0.1", simulatorHostname="198.51.100.19", localizationOffset=dict(x=1, y=-2, z=3))
                         row = dict(asset=asset, binding=dict(id="slot", namespace="/robot7", hybridSource=source))
                         result = projection.project_batch(dict(context=context, robots=[row]))[0]
                         simulated = mode == "simulation" or mode == "hybrid" and source == "simulation"
                         self.assertEqual(result["profileId"], prefix + ("." + backend + (".ros" if backend == "xsim" else ".vrpn") if simulated else ".physical.vrpn"))
                         self.assertEqual(result["parameters"]["mocap_rigid_body"], "robot7" if simulated else "tracked_body")
+                        parameters = result["parameters"]
+                        root = parameters["mocap_source_root"] + '/' + parameters["mocap_rigid_body"]
+                        self.assertEqual(parameters["localization_pose_topic"], "/robot7/pose" if simulated and backend == "xsim" else root + '/pose')
+                        self.assertEqual(parameters["localization_twist_topic"], "/robot7/twist" if simulated and backend == "xsim" else root + '/twist')
+                        self.assertNotIn("physical_gcs_url", parameters)
                         self.assertEqual(result["parameters"]["localization_offset_y"], "0" if simulated else "-2")
                         if arm == "px4":
                             self.assertEqual(result["derived"]["sitlInstanceId"], 7)
-                            self.assertEqual(result["derived"]["simulationFcuUrl"], "udp://:20108@127.0.0.1:20508")
+                            self.assertEqual(result["derived"]["simulationFcuUrl"], "udp://:20108@198.51.100.19:20508")
             self.assertEqual(asset, before)
 
 

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import traceback
+import xmlrpc.client
 from process_test import http_call, scene_session, stop, wait_socket
 
 
@@ -176,7 +177,7 @@ def main():
             if profile == 'gazebo':
                 # Gazebo owns robot scans. Scene owns only the reference layer.
                 document = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_start_order',
-                    'binding': {'simulationSensors': {'simpleLidar': {'enabled': True, 'mode': 'raycast', 'acceleration': 'cpu', 'hRes': 1, 'vRes': 1}}}}],
+                    'binding': {'simulationSensors': {'simpleLidar': {'enabled': True, 'mode': 'raycast', 'acceleration': 'cpu', 'hRes': 3, 'vRes': 3}}}}],
                     'visualizationTopics': [{'topic': '/xgc/scene/reference_cloud',
                         'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]}
                 scene_session(document, source, root, profile)
@@ -220,6 +221,9 @@ def main():
                 print('PASS: pre-master readiness, held describe, late master, replacement exit 3 and SIGTERM while waiting', flush=True)
             else:
                 master = start_master()
+                # No /clock publisher exists: control ticks must use wall time.
+                reply = xmlrpc.client.ServerProxy(env['ROS_MASTER_URI']).setParam('/wall-clock-fixture', '/use_sim_time', True)
+                assert reply[0] == 1, reply
                 assert not world_socket.exists()
                 if args.long:
                     # A stopped listener can leave its socket inode behind.
@@ -274,6 +278,7 @@ def main():
                 pose = rospy.Publisher('/lf_start_order/pose', PoseStamped, queue_size=1)
                 until(lambda: clouds and clouds[-1].width > 0)
                 assert clouds[-1].header.frame_id == 'world'
+                assert rospy.Time.now().to_nsec() == 0, 'fixture unexpectedly received simulator clock'
                 assert pose.get_num_connections() == 0, 'Scene subscribed to a native robot sensor pose'
                 sample = PoseStamped()
                 sample.header.frame_id = 'world'
@@ -325,7 +330,7 @@ def main():
                     for topic, _ in rospy.get_published_topics()), 'Scene advertised native robot scans'
                 stop(node, signal.SIGTERM)
                 assert node.returncode == 0
-                print('PASS: late world, offline edits, new-instance replay, conflict resync, reference clear/recovery and native robot sensor ownership', flush=True)
+                print('PASS: no-clock wall timers, late world, offline edits, new-instance replay, conflict resync, reference clear/recovery and native robot sensor ownership', flush=True)
         except BaseException:
             print(log.read_text() if log.exists() else 'No node log', flush=True)
             raise

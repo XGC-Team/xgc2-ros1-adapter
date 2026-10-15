@@ -50,8 +50,8 @@ Edge::Edge(ros::NodeHandle& handle, const Parameters& parameters) {
     options.latch = true;
     reference_ = handle.advertise(options);
   }
-  timer_ = handle.createTimer(ros::Duration(1.0 / std::min(rate, 1000.0)),
-      [this](const ros::TimerEvent&) {
+  timer_ = handle.createWallTimer(ros::WallDuration(1.0 / std::min(rate, 1000.0)),
+      [this](const ros::WallTimerEvent&) {
         engine_->tick(ros::Time::now().toNSec());
         scene_ready_.store(engine_->sceneReady());
       });

@@ -1,10 +1,60 @@
 #include "xgc_scene/lidar/roster.hpp"
 
 #include <cmath>
+#include <initializer_list>
 #include <regex>
 #include <utility>
+#include <vector>
 
 namespace xgc_scene::lidar {
+namespace {
+Json authoredLidar(const Json &robot) {
+  const auto binding = robot.value("binding", Json::object());
+  const auto sensors = binding.value("simulationSensors", Json::object());
+  auto lidar = sensors.value("simpleLidar", Json(false));
+  if (lidar.is_boolean())
+    lidar = {{"enabled", lidar}};
+  if (!lidar.is_object())
+    throw SceneError("simpleLidar must be a boolean or object");
+  const auto invalid = [](const char *field) {
+    throw SceneError(std::string("invalid authored simpleLidar.") + field);
+  };
+  for (const auto *field : {"enabled", "bodyReturns", "publishBeams"})
+    if (lidar.contains(field) && !lidar.at(field).is_boolean())
+      invalid(field);
+  const auto text = [&](const char *field, std::initializer_list<const char *> allowed) {
+    const auto value = lidar.find(field);
+    if (value == lidar.end()) return std::string{};
+    if (!value->is_string()) invalid(field);
+    const auto result = value->get<std::string>();
+    for (const auto *choice : allowed)
+      if (result == choice) return result;
+    invalid(field);
+    return std::string{};
+  };
+  const auto mode = text("mode", {"", "raycast", "penetrating", "depth_frustum"});
+  text("preset", {"", "bridge_equivalent", "zju_cpu_crop", "zju_cpu_crop_ego_v2"});
+  text("acceleration", {"", "auto", "cpu", "gpu"});
+  for (const auto &bound : {std::pair<const char *, double>{"rateHz", 100},
+                           {"rangeMeters", 200}, {"hFovDeg", 360}, {"vFovDeg", 180}}) {
+    const auto value = lidar.find(bound.first);
+    if (value == lidar.end()) continue;
+    if (!value->is_number()) invalid(bound.first);
+    const auto number = value->get<double>();
+    if (!std::isfinite(number) || number < 0 || number > bound.second)
+      invalid(bound.first);
+  }
+  for (const auto *field : {"hRes", "vRes"}) {
+    const auto value = lidar.find(field);
+    if (value == lidar.end()) continue;
+    if (!value->is_number_integer()) invalid(field);
+    const auto number = value->get<double>();
+    if (number < 0 || number > 4096 || (number == 1 && mode != "penetrating"))
+      invalid(field);
+  }
+  return lidar;
+}
+} // namespace
 
 SessionInput parseSessionInput(std::string_view text) {
   if (text.size() > kMaxDocumentBytes)
@@ -40,6 +90,16 @@ SessionInput parseSessionInput(std::string_view text) {
 Json buildFleetJson(const SessionInput &input, bool point_cloud) {
   if (input.robots.size() > kMaxFleetMembers)
     throw SceneError("world lidar supports at most 512 robots");
+  // Validate the authored contract before selecting producers or resolving zero
+  // defaults. Filtering must not turn malformed values into valid selections.
+  std::vector<Json> selections;
+  selections.reserve(input.robots.size());
+  try {
+    for (const auto &robot : input.robots)
+      selections.push_back(authoredLidar(robot));
+  } catch (const Json::exception &error) {
+    throw SceneError("robots binding.simulationSensors.simpleLidar: " + std::string(error.what()));
+  }
   Json fleet = {{"schemaVersion", 1}, {"robots", Json::array()}};
   if (input.run_mode == "physical")
     return fleet;
@@ -56,10 +116,7 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
       if (input.run_mode == "hybrid" &&
           binding.value("hybridSource", std::string{}) != "simulation")
         continue;
-      const auto sensors = binding.value("simulationSensors", Json::object());
-      auto lidar = sensors.value("simpleLidar", Json(false));
-      if (lidar.is_boolean())
-        lidar = {{"enabled", lidar}};
+      const auto &lidar = selections[slot - 1];
       const auto mode = lidar.value("mode", std::string{});
       const auto preset = lidar.value("preset", std::string{});
       const bool publish_beams = lidar.value("publishBeams", false);

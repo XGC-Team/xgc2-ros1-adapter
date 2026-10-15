@@ -82,7 +82,7 @@ Json sessionDocument(std::size_t sensors = 1) {
   for (std::size_t i = 0; i < sensors; ++i)
     robots.push_back({{"namespace", "/A" + std::to_string(i)},
         {"binding", {{"simulationSensors", {{"simpleLidar", {{"enabled", true},
-            {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 1}, {"vRes", 1}}}}}}}});
+            {"mode", "depth_frustum"}, {"acceleration", "cpu"}, {"hRes", 3}, {"vRes", 3}}}}}}}});
   return {{"runMode", "simulation"}, {"robots", robots},
       {"visualizationTopics", Json::array({{{"topic", "/xgc/scene/reference_cloud"},
           {"messageType", "sensor_msgs/PointCloud2"}, {"role", "semantic"}, {"visible3d", true}}})}};
@@ -189,7 +189,7 @@ TEST(LidarParameters, DefaultsProfilesReferenceOnlyAndNamedErrors) {
     auto invalid = sessionDocument();
     auto& sensor = invalid["robots"][0]["binding"]["simulationSensors"]["simpleLidar"];
     const char* message;
-    if (refusal == 0) { sensor["acceleration"] = "invalid-backend"; message = "sensor backend must be auto, cpu or gpu"; }
+    if (refusal == 0) { sensor["acceleration"] = "invalid-backend"; message = "invalid authored simpleLidar.acceleration"; }
     else if (refusal == 1) { invalid["robots"][0]["namespace"] = "invalid namespace"; message = "invalid lidar namespace"; }
     else { sensor["mode"] = "penetrating"; sensor["publishBeams"] = true; message = "penetrating sampled clouds have no beams"; }
     const auto input = lidar::parseSessionInput(invalid.dump());

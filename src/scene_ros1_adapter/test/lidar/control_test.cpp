@@ -496,6 +496,9 @@ TEST_F(ControlTest, StoppingRejectsRequestsAndWaitsForActiveApply) {
   Error(Call("POST", "/v1/configure", Body(2).dump()), 503, "unavailable", "lidar source stopping");
   Error(Call("POST", "/v1/operations/active/wait"), 503, "unavailable", "lidar source stopping");
   EXPECT_EQ(stopped.wait_for(0ms), std::future_status::timeout);
+  auto lifecycle = std::async(std::launch::async, [this] { control_->SetReady(false); });
+  EXPECT_EQ(lifecycle.wait_for(1s), std::future_status::ready);
+  lifecycle.get();
   Unblock();
   EXPECT_EQ(stopped.wait_for(3s), std::future_status::ready);
   stopped.get();
@@ -550,5 +553,33 @@ TEST(ControlConstructionTest, DescribeMergesAdditionalFactsAndKeepsTargetIdentit
   control.Stop();
   EXPECT_THROW((Control(socket, "fixture", true, [](std::function<void()>) {}, [](bool) {}, Json::array())),
                std::invalid_argument);
+}
+void HangDuringStop(const std::string& socket) {
+  std::promise<void> entered, release;
+  auto released = release.get_future();
+  std::thread executor;
+  Control control(socket, "fixture", true,
+      [&](std::function<void()> fn) { executor = std::thread(std::move(fn)); },
+      [&](bool) { entered.set_value(); released.wait(); });
+  control.Start();
+  HttpRequest request; request.method = "GET"; request.target = "/v1/describe";
+  HttpClient discovery(socket);
+  const auto described = Json::parse(discovery.call(request, Clock::now() + 3s).body);
+  HttpClient client(socket, {}, described.at("instance_id").get<std::string>());
+  request.method = "POST"; request.target = "/v1/configure";
+  request.body = Body(1, false, 100).dump(); request.request_id = "hung-apply";
+  auto submission = std::async(std::launch::async, [&] { return client.call(request, Clock::now() + 3s); });
+  if (entered.get_future().wait_for(2s) != std::future_status::ready) std::_Exit(2);
+  control.Stop();
+  // Returning while the mutation still runs would release its captured owners.
+  std::_Exit(3);
+}
+
+TEST(ControlDeadlineDeathTest, HungApplyCannotMakeStopUnbounded) {
+  Directory directory;
+  const auto started = Clock::now();
+  ASSERT_EXIT(HangDuringStop(directory.path + "/hung.sock"), testing::ExitedWithCode(1),
+              "active apply deadline exceeded during stop");
+  EXPECT_LT(Clock::now() - started, 2s);
 }
 }  // namespace

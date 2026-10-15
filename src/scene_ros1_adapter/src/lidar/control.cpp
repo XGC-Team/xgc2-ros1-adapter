@@ -5,6 +5,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <json/json.h>
 #include <mutex>
@@ -63,6 +65,7 @@ public:
     std::mutex lifecycle_mutex;
     std::condition_variable idle;
     bool applying = false, ready = true;
+    Clock::time_point applying_deadline;
     std::atomic<bool> finish_io{false};
     struct ReadyWaiter {
         HttpReply reply;
@@ -347,6 +350,7 @@ public:
                 enabled = operations[index].enabled;
                 deadline = operations[index].deadline;
                 applying = true;
+                applying_deadline = deadline;
             }
             std::string failure;
             if (Clock::now() >= deadline)
@@ -408,8 +412,9 @@ void Control::Start() {
 }
 
 void Control::Stop() {
-    auto& s = *impl_;
-    std::lock_guard<std::mutex> lifecycle(s.lifecycle_mutex);
+    const auto owner = impl_;
+    auto& s = *owner;
+    std::unique_lock<std::mutex> lifecycle(s.lifecycle_mutex);
     {
         std::unique_lock<std::mutex> lock(s.mutex);
         if (s.stopping)
@@ -422,11 +427,18 @@ void Control::Stop() {
         for (const auto& waiter : s.ready_waiters)
             waiter.reply.complete(Reply(s.Describe()));
         s.ready_waiters.clear();
-        s.idle.wait(lock, [&s] { return !s.applying; });
+        lifecycle.unlock();
+        if (s.applying && !s.idle.wait_until(lock, s.applying_deadline, [&s] { return !s.applying; })) {
+            // The owner callback may hold references to the process's resources.
+            // Do not return and release them while a timed-out mutation still runs.
+            std::fprintf(stderr, "scene lidar: active apply deadline exceeded during stop; terminating process\n");
+            std::_Exit(EXIT_FAILURE);
+        }
     }
     s.finish_io.store(true);
     if (s.io.joinable())
         s.io.join();
+    lifecycle.lock();
     s.host.reset();
 }
 
