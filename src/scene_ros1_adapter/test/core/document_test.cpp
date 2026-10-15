@@ -49,6 +49,25 @@ TEST(Document, FieldErrorsAndStableIdentifiers) {
   rejects([] { geometry(Json{{"type", "it's"}}); }, "Unsupported geometry \"it's\"; no shape substitution is performed");
 }
 
+TEST(Document, ParametricRingKeepsNamedDimensionsAndRejectsHoleCollapse) {
+  const auto valid = parseJson(R"({"type":"ring","radii":[3,1],"tubeRadius":0.8})");
+  EXPECT_EQ(geometry(valid), valid);  // No curvature gate: 0.8 > 1/3.
+  for (const auto& radii : {Json::array({1}), Json::array({1, 2, 3}), Json::array({true, 2}),
+                            Json::array({0, 2}), Json::array({-1, 2}), Json::array({1e5, 2})}) {
+    auto value = valid; value["radii"] = radii;
+    EXPECT_THROW(geometry(value), SceneError);
+  }
+  for (const auto& tube : {Json(true), Json(0), Json(-1), Json(1), Json(2),
+                           Json(std::numeric_limits<double>::infinity())}) {
+    auto value = valid; value["tubeRadius"] = tube;
+    EXPECT_THROW(geometry(value), SceneError);
+  }
+  for (const auto* key : {"radius", "height", "size", "segments", "params"}) {
+    auto value = valid; value[key] = 1;
+    EXPECT_THROW(geometry(value), SceneError);
+  }
+}
+
 TEST(Document, PosePartAndNameNormalization) {
   EXPECT_EQ(pose(Json::object()), parseJson(R"({"position":[0.0,0.0,0.0],"orientation":[0.0,0.0,0.0,1.0]})"));
   EXPECT_EQ(pose(Json{{"orientation", Json::array({0, 0, 0, -2})}}).at("orientation")[3], -1.0);

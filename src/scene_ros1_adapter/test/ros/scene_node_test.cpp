@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <ros/serialization.h>
+#include <xgc2_math/scene/ellipse_ring.hpp>
 
 #include <cmath>
 #include <condition_variable>
@@ -126,6 +127,73 @@ TEST(SceneProjection, ObstacleMessagesPreserveGeometryPoseColorAndMotion) {
   EXPECT_DOUBLE_EQ(body.parts[1].geometry.radius, 0.1);
   EXPECT_DOUBLE_EQ(body.parts[1].geometry.height, 1.0);
   EXPECT_TRUE(body.parts[1].geometry.triangles.empty());
+}
+
+TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
+  auto raw = obstacleAt(1, true);
+  raw["pose"]["orientation"] = Json::array({0.0, 0.0, std::sin(0.31), std::cos(0.31)});
+  raw["parts"] = Json::array({Json{
+      {"id", "elliptic"},
+      {"pose", Json{{"position", Json::array({0.7, -0.2, 0.4})},
+                     {"orientation", Json::array({std::sin(0.23), 0.0, 0.0, std::cos(0.23)})}}},
+      {"geometry", Json{{"type", "ring"}, {"radii", Json::array({1.2, 1.0})}, {"tubeRadius", 0.05}}}}});
+  const auto definition = obstacle(raw);
+  xgc2_geometry_msgs::SceneSnapshot snapshot;
+  snapshot.header.frame_id = "world"; snapshot.scene_id = "ring";
+  snapshot.epoch = "ring-epoch"; snapshot.revision = 7;
+  snapshot.obstacles.push_back(obstacleMessage(definition));
+  auto encoded = bytes(snapshot);
+  ros::serialization::IStream input(encoded.data(), encoded.size());
+  xgc2_geometry_msgs::SceneSnapshot decoded;
+  ros::serialization::deserialize(input, decoded);
+  EXPECT_EQ(bytes(decoded), encoded);
+  EXPECT_EQ(decoded.header.frame_id, "world");
+  EXPECT_EQ(decoded.epoch, "ring-epoch");
+  EXPECT_EQ(decoded.revision, 7u);
+  ASSERT_EQ(decoded.obstacles.size(), 1u);
+  const auto& body = decoded.obstacles.front();
+  EXPECT_EQ(body.id, definition.at("id"));
+  EXPECT_EQ(body.motion_type, "constant_twist");
+  EXPECT_TRUE(body.dynamic);
+  EXPECT_DOUBLE_EQ(body.pose.orientation.z, std::sin(0.31));
+  EXPECT_DOUBLE_EQ(body.pose.orientation.w, std::cos(0.31));
+  ASSERT_EQ(body.parts.size(), 1u);
+  const auto& part = body.parts.front();
+  EXPECT_EQ(part.id, "elliptic");
+  EXPECT_DOUBLE_EQ(part.pose.position.x, 0.7);
+  EXPECT_DOUBLE_EQ(part.pose.position.y, -0.2);
+  EXPECT_DOUBLE_EQ(part.pose.position.z, 0.4);
+  EXPECT_DOUBLE_EQ(part.pose.orientation.x, std::sin(0.23));
+  EXPECT_DOUBLE_EQ(part.pose.orientation.w, std::cos(0.23));
+  EXPECT_EQ(part.geometry.type, "ring");
+  EXPECT_DOUBLE_EQ(part.geometry.radii[0], 1.2);
+  EXPECT_DOUBLE_EQ(part.geometry.radii[1], 1.0);
+  EXPECT_DOUBLE_EQ(part.geometry.tube_radius, 0.05);
+  EXPECT_DOUBLE_EQ(part.geometry.radius, 0.0);
+  EXPECT_DOUBLE_EQ(part.geometry.height, 0.0);
+  EXPECT_TRUE(part.geometry.vertices.empty());
+  EXPECT_TRUE(part.geometry.triangles.empty());
+  EXPECT_EQ(definition.at("parts")[0].at("geometry"), raw.at("parts")[0].at("geometry"));
+}
+
+TEST(SceneProjection, RingMarkerUsesLocalSurfacePointsWithOriginalPoseAndColor) {
+  xgc2_geometry_msgs::ScenePart part;
+  part.id = "ring"; part.geometry.type = "ring";
+  part.geometry.radii[0] = 2; part.geometry.radii[1] = 1; part.geometry.tube_radius = .8;
+  part.pose.position.x = 3; part.pose.position.y = -2; part.pose.position.z = 1;
+  part.pose.orientation.x = std::sin(.4); part.pose.orientation.w = std::cos(.4);
+  part.color.r = 1; part.color.g = .5; part.color.b = .1; part.color.a = 1;
+  const auto markers = partMarkers("o", part, "body-frame");
+  ASSERT_EQ(markers.size(), 1u);
+  const auto& marker = markers.front();
+  EXPECT_EQ(marker.type, visualization_msgs::Marker::POINTS);
+  ASSERT_FALSE(marker.points.empty());
+  EXPECT_EQ(marker.header.frame_id, "body-frame");
+  EXPECT_TRUE(marker.frame_locked);
+  EXPECT_EQ(bytes(marker.pose), bytes(part.pose));
+  EXPECT_EQ(bytes(marker.color), bytes(part.color));
+  for (const auto& p : marker.points)
+    EXPECT_NEAR(xgc2_math::scene::ellipticRingResidual({p.x, p.y, p.z}, {2, 1}, .8), 0, 1e-8);
 }
 
 TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {

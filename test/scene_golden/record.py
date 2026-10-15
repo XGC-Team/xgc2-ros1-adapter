@@ -254,6 +254,32 @@ class Scenario:
         return self.normalize(self.value)
 
 
+def ring_scenarios():
+    values = []
+    ring = {'type': 'ring', 'radii': [3, 1], 'tubeRadius': .8}
+    with Scenario('document', 'ring-contract', [case('test_parametric_ring', 'strict_named_dimensions_and_hole')]) as s:
+        invalid = [dict(ring, radii=v) for v in ([1], [1, 2, 3], [True, 2], [0, 2],
+                   [-1, 2], [math.nan, 2], [math.inf, 2], [1e5, 2])]
+        invalid += [dict(ring, tubeRadius=v) for v in (True, 0, -1, 1, 2, math.inf, math.nan)]
+        invalid += [dict(ring, **{key: value}) for key, value in
+                    [('radius', .2), ('height', 1), ('size', [3, 1, .2]), ('segments', 126), ('params', {})]]
+        invalid += [{'type': 'ring', 'radii': [3, 1]}, {'type': 'ring', 'tubeRadius': .2}]
+        for value in [ring]+invalid:
+            s.call('document.geometry', {'json': json.dumps(value)}, lambda value=value: document_module.geometry(value))
+        values.append(s.finish())
+    with Scenario('store', 'ring-roundtrip', [case('test_parametric_ring', 'save_reopen_edit_undo_preserves_one_part_and_poses')]) as s:
+        value = scene({'id': 'opening', 'pose': {'position': [3, -2, 4], 'orientation': [.5, .5, .5, .5]},
+            'parts': [{'id': 'tube', 'pose': {'position': [1, 2, 3], 'orientation': [.5, -.5, .5, .5]}, 'geometry': ring}]})
+        path = s.initial_file('ring.yaml', store_module.dump_yaml(document_module.document(value)))
+        s.create_store(value, source=str(path))
+        changed = copy.deepcopy(value['obstacles'][0]); changed['parts'][0]['geometry']['radii'] = [4, 1.25]
+        s.command('update', obstacle=changed); s.envelope()
+        s.options['reopened'] = dict(s.options['main']); s.restart('reopened')
+        s.command('undo'); s.envelope(); s.restart('reopened')
+        values.append(s.finish())
+    return values
+
+
 def document_scenarios():
     values = []
     with Scenario('document', 'visual-color', [store_case('obstacle_visual_color_is_product_amber')]) as s:
@@ -935,6 +961,8 @@ def coverage_rows(scene_root, scenarios):
     for source, lineno in inventory.items():
         paths = covered.get(source, [])
         reason = EXCLUSIONS.get(source, '')
+        if source == case('test_scene_projection', 'one_part_named_ros_dimensions_and_surface_points_marker'):
+            reason = 'Python ROS projection test; typed serialized roundtrip is owned by C++ scene_node_test.cpp, outside the core replay corpus.'
         if source.startswith('test_scene_consumers.py:'):
             reason = 'Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats.'
         if source == case('test_scene_projection', 'snapshots_markers_and_states_equal_the_uncached_projections'):
@@ -955,7 +983,7 @@ def coverage_rows(scene_root, scenarios):
 
 def record_all(directory):
     scenarios = []
-    for build in (document_scenarios, store_scenarios, motion_scenarios, generation_scenarios,
+    for build in (ring_scenarios, document_scenarios, store_scenarios, motion_scenarios, generation_scenarios,
                   prepare_scenarios, assembly_scenarios, projection_scenarios, wire_scenarios):
         scenarios.extend(build())
     names = set()

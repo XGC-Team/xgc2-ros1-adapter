@@ -2,6 +2,7 @@
 
 #include "xgc_scene/motion.hpp"
 #include "xgc_scene/yaml_io.hpp"
+#include <xgc2_math/scene/ellipse_ring.hpp>
 
 #include <cmath>
 #include <optional>
@@ -63,6 +64,11 @@ xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item) {
     part.geometry.size.z = size[2].get<double>();
     part.geometry.radius = geometry.value("radius", 0.0);
     part.geometry.height = geometry.value("height", 0.0);
+    if (part.geometry.type == "ring") {
+      part.geometry.radii[0] = geometry.at("radii")[0].get<double>();
+      part.geometry.radii[1] = geometry.at("radii")[1].get<double>();
+      part.geometry.tube_radius = geometry.at("tubeRadius").get<double>();
+    }
     for (const auto& vertex : geometry.value("vertices", Json::array())) part.geometry.vertices.push_back(point(vertex));
     for (const auto& triangle : geometry.value("triangles", Json::array()))
       part.geometry.triangles.push_back(triangle.get<std::uint32_t>());
@@ -135,6 +141,17 @@ std::vector<visualization_msgs::Marker> partMarkers(
         result.push_back(std::move(cap));
       }
       return result;
+    }
+  } else if (geometry.type == "ring") {
+    marker.type = Marker::POINTS;
+    const double spacing = std::min(0.02, geometry.tube_radius * 0.5);
+    marker.scale.x = marker.scale.y = spacing;
+    const auto samples = xgc2_math::scene::sampleEllipticRingSurface(
+        {geometry.radii[0], geometry.radii[1]}, geometry.tube_radius, spacing);
+    for (const auto& sample : samples) {
+      geometry_msgs::Point p;
+      p.x = sample.x(); p.y = sample.y(); p.z = sample.z();
+      marker.points.push_back(p);
     }
   } else if (geometry.type == "convex") {
     marker.type = Marker::TRIANGLE_LIST;

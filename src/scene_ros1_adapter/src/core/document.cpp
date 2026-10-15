@@ -104,6 +104,15 @@ Json geometry(const Json& value) {
     if (kind != "sphere") result["height"] = number(value.at("height"), "height", kind == "capsule" ? 0 : 1e-6, 1e4);
     return result;
   }
+  if (kind == "ring") {
+    fields(value, {"type", "radii", "tubeRadius"}, {"radii", "tubeRadius"});
+    Json radii = vector(value.at("radii"), "ring radii", 2);
+    for (auto& radius : radii) radius = number(radius, "ring radii", 1e-6, 1e4);
+    const double tube = number(value.at("tubeRadius"), "ring tube radius", 1e-6, 1e4);
+    if (tube >= std::min(radii[0].get<double>(), radii[1].get<double>()))
+      throw SceneError("Ring tube radius must be smaller than both radii");
+    return Json{{"type", kind}, {"radii", radii}, {"tubeRadius", tube}};
+  }
   if (kind == "convex") {
     fields(value, {"type", "vertices", "triangles"}, {"vertices", "triangles"});
     return convex(value);

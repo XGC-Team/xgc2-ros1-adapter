@@ -69,6 +69,10 @@ void SceneTap::snapshot(const xgc2_geometry_msgs::SceneSnapshot& message) {
       converted.size = {part.geometry.size.x, part.geometry.size.y, part.geometry.size.z};
       converted.radius = part.geometry.radius;
       converted.height = part.geometry.height;
+      if (converted.type == "ring") {
+        converted.radii = {part.geometry.radii[0], part.geometry.radii[1]};
+        converted.tubeRadius = part.geometry.tube_radius;
+      }
       converted.vertices.reserve(part.geometry.vertices.size());
       for (const auto& vertex : part.geometry.vertices)
         converted.vertices.emplace_back(vertex.x, vertex.y, vertex.z);
