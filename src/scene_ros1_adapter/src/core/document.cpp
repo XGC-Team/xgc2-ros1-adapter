@@ -1,3 +1,5 @@
+#include <xgc2_math/geometry/geometry_json.hpp>
+#include <sstream>
 #include "xgc_scene/document.hpp"
 
 #include "placement_json.hpp"
@@ -113,9 +115,23 @@ Json geometry(const Json& value) {
       throw SceneError("Ring tube radius must be smaller than both radii");
     return Json{{"type", kind}, {"radii", radii}, {"tubeRadius", tube}};
   }
-  if (kind == "convex") {
+  if (kind == "convex" && value.contains("triangles") && (!value.at("triangles").is_array() || !value.at("triangles").empty())) {
     fields(value, {"type", "vertices", "triangles"}, {"vertices", "triangles"});
     return convex(value);
+  }
+  if (kind.is_string() && std::any_of(std::begin(xgc2_math::geometry::geometryRegistry), std::end(xgc2_math::geometry::geometryRegistry),
+      [&](const auto& entry) { return entry.name == kind.get<std::string>(); })) {
+    try {
+      const auto type = xgc2_math::geometry::geometryTypeFromName(kind.get<std::string>());
+      const auto spec = xgc2_math::geometry::geometryTypeInfo(static_cast<std::uint32_t>(type));
+      std::vector<std::string> keys{"type"};
+      std::string declarations(spec.fields);
+      std::istringstream input(declarations);
+      std::string key;
+      while (std::getline(input, key, ',')) keys.push_back(key.substr(0, key.find('[')));
+      fields(value, keys, {"type"});
+      return xgc2_math::geometry::geometryToJson<Json>(xgc2_math::geometry::geometryFromJson(value));
+    } catch (const std::exception& error) { throw SceneError(error.what()); }
   }
   throw SceneError("Unsupported geometry " + detail::pythonRepr(kind) + "; no shape substitution is performed");
 }

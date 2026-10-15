@@ -3,6 +3,9 @@
 #include "xgc_scene/motion.hpp"
 #include "xgc_scene/yaml_io.hpp"
 #include <xgc2_math/scene/ellipse_ring.hpp>
+#include <xgc2_math/geometry/geometry_json.hpp>
+#include <xgc2_math/scene/convex_mesh.hpp>
+#include <xgc2_math/scene/scene_conversion.hpp>
 
 #include <cmath>
 #include <optional>
@@ -56,22 +59,9 @@ xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item) {
     xgc2_geometry_msgs::ScenePart part;
     part.id = definition.at("id").get<std::string>();
     setPose(part.pose, definition.at("pose"));
-    const auto& geometry = definition.at("geometry");
-    part.geometry.type = geometry.at("type").get<std::string>();
-    const auto size = geometry.value("size", Json::array({0, 0, 0}));
-    part.geometry.size.x = size[0].get<double>();
-    part.geometry.size.y = size[1].get<double>();
-    part.geometry.size.z = size[2].get<double>();
-    part.geometry.radius = geometry.value("radius", 0.0);
-    part.geometry.height = geometry.value("height", 0.0);
-    if (part.geometry.type == "ring") {
-      part.geometry.radii[0] = geometry.at("radii")[0].get<double>();
-      part.geometry.radii[1] = geometry.at("radii")[1].get<double>();
-      part.geometry.tube_radius = geometry.at("tubeRadius").get<double>();
-    }
-    for (const auto& vertex : geometry.value("vertices", Json::array())) part.geometry.vertices.push_back(point(vertex));
-    for (const auto& triangle : geometry.value("triangles", Json::array()))
-      part.geometry.triangles.push_back(triangle.get<std::uint32_t>());
+    const auto payload = xgc2_math::geometry::geometryFromJson(definition.at("geometry"));
+    part.geometry.type = payload.type;
+    part.geometry.parameters = payload.parameters;
     part.color.r = definition.at("color")[0].get<float>();
     part.color.g = definition.at("color")[1].get<float>();
     part.color.b = definition.at("color")[2].get<float>();
@@ -97,7 +87,8 @@ xgc2_geometry_msgs::SceneObstacleState stateMessage(const Json& value) {
 std::vector<visualization_msgs::Marker> partMarkers(
     const std::string& oid, const xgc2_geometry_msgs::ScenePart& part, const std::string& frame) {
   using Marker = visualization_msgs::Marker;
-  const auto& geometry = part.geometry;
+  const auto geometry = xgc2_math::geometry::decodeGeometry({part.geometry.type, part.geometry.parameters});
+  using Type = xgc2_math::geometry::GeometryType;
   Marker marker;
   marker.header.frame_id = frame;
   marker.ns = oid + "/" + part.id;
@@ -106,17 +97,19 @@ std::vector<visualization_msgs::Marker> partMarkers(
   marker.color = part.color;
   marker.frame_locked = true;
   marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
-  if (geometry.type == "box") {
+  if (geometry.type == Type::Box) {
     marker.type = Marker::CUBE;
-    marker.scale = geometry.size;
-  } else if (geometry.type == "sphere") {
+    marker.scale.x = geometry.size[0];
+    marker.scale.y = geometry.size[1];
+    marker.scale.z = geometry.size[2];
+  } else if (geometry.type == Type::Sphere) {
     marker.type = Marker::SPHERE;
     marker.scale.x = marker.scale.y = marker.scale.z = 2 * geometry.radius;
-  } else if (geometry.type == "cylinder" || geometry.type == "capsule") {
+  } else if (geometry.type == Type::Cylinder || geometry.type == Type::Capsule) {
     marker.type = Marker::CYLINDER;
     marker.scale.x = marker.scale.y = 2 * geometry.radius;
     marker.scale.z = geometry.height;
-    if (geometry.type == "capsule") {
+    if (geometry.type == Type::Capsule) {
       std::vector<Marker> result;
       if (geometry.height > 0) result.push_back(marker);
       const auto& q = marker.pose.orientation;
@@ -142,20 +135,41 @@ std::vector<visualization_msgs::Marker> partMarkers(
       }
       return result;
     }
-  } else if (geometry.type == "ring") {
+  } else if (geometry.type == Type::Ring) {
     marker.type = Marker::POINTS;
-    const double spacing = std::min(0.02, geometry.tube_radius * 0.5);
+    const double spacing = std::min(0.02, geometry.tubeRadius * 0.5);
     marker.scale.x = marker.scale.y = spacing;
     const auto samples = xgc2_math::scene::sampleEllipticRingSurface(
-        {geometry.radii[0], geometry.radii[1]}, geometry.tube_radius, spacing);
+        {geometry.radii[0], geometry.radii[1]}, geometry.tubeRadius, spacing);
     for (const auto& sample : samples) {
       geometry_msgs::Point p;
       p.x = sample.x(); p.y = sample.y(); p.z = sample.z();
       marker.points.push_back(p);
     }
-  } else if (geometry.type == "convex") {
+  } else if (geometry.type == Type::Halfspaces ||
+             (geometry.type == Type::Convex && geometry.triangles.empty())) {
+    // A finite surface is derived only for this cached visualization. Keep
+    // the original H/V payload intact for numerical and physical consumers.
+    const auto numeric = xgc2_math::scene::obstacleFromGeometry({part.geometry.type, part.geometry.parameters});
+    const auto surface = xgc2_math::scene::convexMeshOf(numeric.vertices);
     marker.type = Marker::TRIANGLE_LIST;
-    for (const auto index : geometry.triangles) marker.points.push_back(geometry.vertices.at(index));
+    for (const auto index : surface.triangles) {
+      const auto& vertex = surface.vertices.at(index);
+      geometry_msgs::Point p;
+      p.x = vertex.x(); p.y = vertex.y(); p.z = vertex.z();
+      marker.points.push_back(p);
+    }
+  } else if (geometry.type == Type::Convex || geometry.type == Type::Mesh) {
+    marker.type = Marker::TRIANGLE_LIST;
+    for (const auto& triangle : geometry.triangles)
+      for (const auto index : triangle) marker.points.push_back(point(geometry.vertices.at(index)));
+  } else if (geometry.type == Type::Ellipsoid) {
+    marker.type = Marker::SPHERE;
+    marker.scale.x = 2 * geometry.semiaxes[0];
+    marker.scale.y = 2 * geometry.semiaxes[1];
+    marker.scale.z = 2 * geometry.semiaxes[2];
+  } else {
+    throw std::invalid_argument("marker geometry requires a finite surface representation");
   }
   return {marker};
 }
@@ -165,7 +179,7 @@ class SceneProjection::Impl {
   explicit Impl(const std::string& name_space) : prefix("xgc_scene_" + digest(name_space).substr(0, 12)) {}
   struct Body { Json value; xgc2_geometry_msgs::SceneObstacle message; };
   struct Markers { Json value; std::string frame; std::vector<visualization_msgs::Marker> messages; };
-  struct Entry { Json value; std::optional<xgc2_geometry_msgs::SceneObstacleState> constant; };
+  struct Entry { Json value; };
   std::string prefix, epoch, parent;
   std::uint64_t revision = 0;
   Counters counts;
@@ -231,12 +245,7 @@ void SceneProjection::definition(const Json& document, const std::string& epoch,
       const auto id = item.at("id").get<std::string>();
       const bool held = item.at("motion").at("type") == "hold";
       impl_->frames[id] = impl_->prefix + "/" + epoch + (held ? "/fixed/" : "/moving/") + id;
-      Impl::Entry entry{item, {}};
-      if (held) {
-        entry.constant = stateMessage(xgc_scene::state(item, 0.0, false));
-        ++impl_->counts.hold_states;
-      }
-      impl_->entries.push_back(std::move(entry));
+      if (!held) impl_->entries.push_back(Impl::Entry{item});
     }
   }
   outputs.snapshot(snapshot);
@@ -284,13 +293,10 @@ void SceneProjection::tick(double stamp, double elapsed, bool playing, RosOutput
   std::vector<geometry_msgs::TransformStamped> transforms;
   ++impl_->counts.state_scans;
   for (const auto& entry : impl_->entries) {
-    if (entry.constant) message.obstacles.push_back(*entry.constant);
-    else {
-      ++impl_->counts.moving_states;
-      auto body = stateMessage(xgc_scene::state(entry.value, elapsed, playing));
-      transforms.push_back(impl_->transform(body.id, body.pose, message.header.stamp));
-      message.obstacles.push_back(std::move(body));
-    }
+    ++impl_->counts.moving_states;
+    auto body = stateMessage(xgc_scene::state(entry.value, elapsed, playing));
+    transforms.push_back(impl_->transform(body.id, body.pose, message.header.stamp));
+    message.obstacles.push_back(std::move(body));
   }
   if (!transforms.empty()) outputs.dynamicTransforms(transforms);
   outputs.state(message);

@@ -2,6 +2,7 @@
 #include "xgc_scene/lidar_ros/cloud.hpp"
 
 #include <algorithm>
+#include <xgc2_math/scene/scene_conversion.hpp>
 #include <ros/console.h>
 
 namespace xgc_scene::lidar_ros {
@@ -20,7 +21,17 @@ void SceneTap::install() {
   if (!have_snapshot_ || !synchronized() ||
       (!have_state_ && std::find(dynamic_.begin(), dynamic_.end(), true) != dynamic_.end())) return;
   try {
-    engine_->setScene(xgc2_math::scene::toObstacles(descriptions_), installation_);
+    std::vector<xgc2_math::scene::Obstacle> obstacles;
+    for (const auto& description : descriptions_) {
+      const auto parent = xgc2_math::normalizedQuaternion(description.pose.orientation);
+      for (const auto& part : description.parts) {
+        auto shape = part.geometry;
+        shape.position = description.pose.position + parent * part.pose.position;
+        shape.orientation = parent * part.pose.orientation;
+        obstacles.push_back(std::move(shape));
+      }
+    }
+    engine_->setScene(obstacles, installation_);
     error_.clear();
   } catch (const std::exception& error) {
     engine_->invalidateScene(installation_);
@@ -57,29 +68,26 @@ void SceneTap::snapshot(const xgc2_geometry_msgs::SceneSnapshot& message) {
   }
   descriptions_.reserve(message.obstacles.size());
   dynamic_.reserve(message.obstacles.size());
+  try {
   for (const auto& obstacle : message.obstacles) {
-    xgc2_math::scene::SceneObstacleDescription description;
+    Description description;
     description.id = obstacle.id;
     description.pose = poseOf(obstacle.pose);
     description.parts.reserve(obstacle.parts.size());
     for (const auto& part : obstacle.parts) {
-      xgc2_math::scene::ScenePartDescription converted;
-      converted.type = part.geometry.type;
+      Part converted;
+      converted.geometry = xgc2_math::scene::obstacleFromGeometry({part.geometry.type, part.geometry.parameters});
       converted.pose = poseOf(part.pose);
-      converted.size = {part.geometry.size.x, part.geometry.size.y, part.geometry.size.z};
-      converted.radius = part.geometry.radius;
-      converted.height = part.geometry.height;
-      if (converted.type == "ring") {
-        converted.radii = {part.geometry.radii[0], part.geometry.radii[1]};
-        converted.tubeRadius = part.geometry.tube_radius;
-      }
-      converted.vertices.reserve(part.geometry.vertices.size());
-      for (const auto& vertex : part.geometry.vertices)
-        converted.vertices.emplace_back(vertex.x, vertex.y, vertex.z);
       description.parts.push_back(std::move(converted));
     }
     descriptions_.push_back(std::move(description));
     dynamic_.push_back(obstacle.dynamic);
+  }
+  } catch (const std::exception& error) {
+    descriptions_.clear();
+    dynamic_.clear();
+    error_ = std::string("snapshot geometry: ") + error.what();
+    return;
   }
   have_snapshot_ = true;
   install();
@@ -96,11 +104,11 @@ void SceneTap::state(const xgc2_geometry_msgs::SceneState& message) {
   }
   bool changed = false;
   for (std::size_t i = 0; i < descriptions_.size(); ++i) {
+    if (!dynamic_[i]) continue;
     auto& description = descriptions_[i];
     const auto found = std::find_if(message.obstacles.begin(), message.obstacles.end(),
         [&](const auto& obstacle) { return obstacle.id == description.id; });
     if (found == message.obstacles.end()) {
-      if (!dynamic_[i]) continue;
       have_state_ = false;
       invalidate();
       error_ = "state lacks dynamic obstacle '" + description.id + "'";

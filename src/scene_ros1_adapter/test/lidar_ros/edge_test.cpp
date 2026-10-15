@@ -1,3 +1,4 @@
+#include "../geometry_wire.hpp"
 #include "xgc_scene/lidar_ros/cloud.hpp"
 #include "xgc_scene/lidar_ros/parameters.hpp"
 #include "xgc_scene/lidar_ros/scene_tap.hpp"
@@ -56,10 +57,7 @@ xgc2_geometry_msgs::SceneSnapshot snapshot(bool dynamic = false, std::string epo
   obstacle.pose.orientation.w = 1;
   xgc2_geometry_msgs::ScenePart part;
   part.pose.orientation.w = 1;
-  part.geometry.type = "box";
-  part.geometry.size.x = 1;
-  part.geometry.size.y = 4;
-  part.geometry.size.z = 2;
+  part.geometry = geometry_test::wire(geometry_test::Geometry::box({1, 4, 2}));
   obstacle.parts.push_back(part);
   message.obstacles.push_back(obstacle);
   return message;
@@ -330,7 +328,7 @@ TEST(LidarSceneTap, StaticConversionRefusalAndOldDefinitionIgnored) {
   tap.snapshot(definition);
   EXPECT_EQ(engine.sensorScene(0), installed);
   definition = snapshot(false, "first", 2);
-  definition.obstacles[0].parts[0].geometry.size.x = -1;
+  definition.obstacles[0].parts[0].geometry.parameters.clear();
   tap.application("first", 2, true);
   tap.snapshot(definition);
   EXPECT_FALSE(engine.sceneReady());

@@ -1,3 +1,4 @@
+#include "../geometry_wire.hpp"
 #include "xgc_scene/lidar_ros/edge.hpp"
 #include "xgc_scene/lidar_ros/scene_tap.hpp"
 #include "xgc_scene/lidar/control.hpp"
@@ -87,10 +88,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   obstacle.pose.position.x = 4;
   xgc2_geometry_msgs::ScenePart part;
   part.pose.orientation.w = 1;
-  part.geometry.type = "box";
-  part.geometry.size.x = 1;
-  part.geometry.size.y = 4;
-  part.geometry.size.z = 2;
+  part.geometry = geometry_test::wire(geometry_test::Geometry::box({1, 4, 2}));
   obstacle.parts.push_back(part);
   definition.obstacles.push_back(obstacle);
   tap.application("first", 1, true);

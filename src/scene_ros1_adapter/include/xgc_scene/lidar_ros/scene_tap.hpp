@@ -31,7 +31,16 @@ class SceneTap final : public RosOutputs {
   std::string epoch_, application_epoch_, error_;
   std::uint64_t revision_ = 0, application_revision_ = 0, installation_ = 0;
   bool have_snapshot_ = false, have_state_ = false, applied_ = false;
-  std::vector<xgc2_math::scene::SceneObstacleDescription> descriptions_;
+  struct Part {
+    xgc2_math::scene::Obstacle geometry; // decoded once per accepted definition
+    xgc2_math::Pose3 pose;
+  };
+  struct Description {
+    std::string id;
+    xgc2_math::Pose3 pose;
+    std::vector<Part> parts;
+  };
+  std::vector<Description> descriptions_;
   std::vector<bool> dynamic_;
 };
 

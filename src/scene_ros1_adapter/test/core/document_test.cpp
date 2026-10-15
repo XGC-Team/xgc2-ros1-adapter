@@ -105,7 +105,8 @@ TEST(Document, ConvexShapeChecksKeepPythonErrorOrder) {
   value = tetrahedron(); value["vertices"].push_back(Json::array({0.1, 0.1, 0.1}));
   rejects([&] { geometry(value); }, "Every convex vertex must belong to its surface");
   value = tetrahedron(); value["triangles"] = Json::array();
-  rejects([&] { geometry(value); }, "Convex geometry requires triangle index triplets");
+  EXPECT_EQ(geometry(value).at("vertices"), value.at("vertices"));
+  EXPECT_FALSE(geometry(value).contains("triangles"));
   value = tetrahedron(); value["triangles"] = std::vector<int>(24579, 0);
   rejects([&] { geometry(value); }, "Convex geometry requires triangle index triplets");
   value = tetrahedron(); value["vertices"] = std::vector<Json>(4097, Json::array({0, 0, 0}));

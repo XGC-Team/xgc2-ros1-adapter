@@ -1,3 +1,4 @@
+#include "../geometry_wire.hpp"
 #include "xgc_scene/lidar_ros/scene_tap.hpp"
 #include <gtest/gtest.h>
 
@@ -37,10 +38,7 @@ TEST(LidarRingMapping, NamedParametersBothPosesDynamicStateAndRejectedInvalidGeo
   xgc2_geometry_msgs::ScenePart part;
   part.pose.position.y = .3;
   assign(part.pose.orientation, child);
-  part.geometry.type = "ring";
-  part.geometry.radii[0] = 1;
-  part.geometry.radii[1] = 1.2;
-  part.geometry.tube_radius = .05;
+  part.geometry = geometry_test::wire(geometry_test::Geometry::ring({1, 1.2}, .05));
   obstacle.parts.push_back(part);
   definition.obstacles.push_back(obstacle);
   tap.application("ring", 1, true);
@@ -62,11 +60,11 @@ TEST(LidarRingMapping, NamedParametersBothPosesDynamicStateAndRejectedInvalidGeo
   ASSERT_TRUE(engine.sceneReady());
   EXPECT_NEAR(engine.sensorScene(0)->closest(center,direction,10),.95,1e-10);
   definition.revision=2;definition.obstacles[0].dynamic=false;
-  definition.obstacles[0].parts[0].geometry.tube_radius=1;
+  definition.obstacles[0].parts[0].geometry.parameters.clear();
   tap.application("ring",2,true);
   tap.snapshot(definition);
   EXPECT_FALSE(engine.sceneReady());
-  EXPECT_NE(tap.error().find("tubeRadius"),std::string::npos);
+  EXPECT_NE(tap.error().find("parameters"),std::string::npos);
 }
 } // namespace
 } // namespace xgc_scene::lidar_ros

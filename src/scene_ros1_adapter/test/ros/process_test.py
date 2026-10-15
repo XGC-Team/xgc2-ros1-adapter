@@ -201,15 +201,9 @@ def fleet_process(args, root, node_log, namespace, source):
             described, lidar_described = authoring.result(timeout=5), lidar.result(timeout=5)
             native.release.set()
         assert described['ready'] and lidar_described['ready']
-        assert {key: lidar_described['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 1, 'backend': 'cpu'}
+        assert {key: lidar_described['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backends']} == {'target_id': 'fixture', 'profile': 'gazebo', 'sensors': 0, 'backends': ['auto', 'cpu', 'gpu']}
         instance = lidar_described['instance_id']
-        assert not any(topic.startswith('/lf_process/B/simple_lidar/') for topic, _ in rospy.get_published_topics())
-        for robot in session['robots'][:1]:
-            name = robot['namespace']
-            for suffix in ['points', 'beams']:
-                topic = name + '/simple_lidar/' + suffix
-                subscribers.append(rospy.Subscriber(topic, PointCloud2, lambda msg, topic=topic: receive(topic, msg)))
-            poses.append(rospy.Publisher('/vrpn_client_node' + name + '/pose', PoseStamped, queue_size=1))
+        assert not any(topic.startswith('/lf_process/') for topic, _ in rospy.get_published_topics())
         subscribers.append(rospy.Subscriber('/xgc/scene/reference_cloud', PointCloud2, lambda msg: receive('reference', msg)))
         def send(duration, predicate=None):
             until = time.monotonic() + duration
@@ -231,7 +225,7 @@ def fleet_process(args, root, node_log, namespace, source):
         receipt = http_call(path, 'POST', '/v1/configure', 'enable', instance,
                             {'expected_revision': 1, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
         assert receipt['state'] == 'succeeded'
-        assert send(5, lambda: len(observed) == 3 and observed['reference'].width > 0), list(observed)
+        assert send(5, lambda: len(observed) == 1 and observed['reference'].width > 0), list(observed)
         with changed:
             for name, cloud in observed.items():
                 assert cloud.header.frame_id == 'world' and cloud.height == 1 and cloud.is_dense, name
@@ -248,7 +242,8 @@ def fleet_process(args, root, node_log, namespace, source):
         receipt = http_call(path, 'POST', '/v1/configure', 'reenable', instance,
                             {'expected_revision': 3, 'configuration': {'enabled': True}, 'operation_timeout_ms': 5000})
         assert receipt['state'] == 'succeeded'
-        assert send(3, lambda: counts['/lf_process/A/simple_lidar/points'] > before['/lf_process/A/simple_lidar/points'])
+        send(.3)
+        assert counts == before and observed['reference'].width > 0, 'Static reference latch/cache was lost on reenable'
         current = http_call(scene_socket, 'GET', '/v1/scene', 'current', described['instance_id'])
         native.release.clear()
         native.applying.clear()
@@ -288,22 +283,6 @@ def fleet_process(args, root, node_log, namespace, source):
                                 stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
         assert result.returncode == 1 and '~lidar_defaults_json' in result.stdout, result.stdout
         assert not path.exists() and not scene_socket.exists()
-        for refusal in ['cpu', 'namespace', 'beams']:
-            invalid_session = json.loads(json.dumps(session))
-            selected = invalid_session['robots'][0]['binding']['simulationSensors']['simpleLidar']
-            if refusal == 'cpu':
-                selected.pop('acceleration')
-                message = 'sampled-scene lidar requires an explicit CPU acceleration selection'
-            elif refusal == 'namespace':
-                invalid_session['robots'][0]['namespace'] = 'invalid namespace'
-                message = 'invalid lidar namespace'
-            else:
-                selected['mode'] = 'penetrating'
-                message = 'penetrating sampled clouds have no beams'
-            result = subprocess.run(command, input=json.dumps(invalid_session), text=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
-            assert result.returncode == 1 and message in result.stdout, result.stdout
-            assert not path.exists() and not scene_socket.exists()
         for profile in ['gazebo', 'xsim', 'physical']:
             invalid_command = [arg.replace('_profile:=gazebo', '_profile:=' + profile) for arg in command]
             for invalid_text in ['{', '{"runMode":"invalid","robots":[],"visualizationTopics":[]}', ' ' * (8388608 + 1)]:
@@ -311,7 +290,7 @@ def fleet_process(args, root, node_log, namespace, source):
                                         stderr=subprocess.STDOUT, start_new_session=True, timeout=10)
                 assert result.returncode == 2 and '--session-stdin' in result.stdout, result.stdout
                 assert not path.exists() and not scene_socket.exists()
-        print('PASS: two sockets ready during held native apply, sampled/default roster, beams/reference, enable control, endpoint/stdin/refusal errors, SIGTERM')
+        print('PASS: two sockets ready during held native apply, native sensor ownership, reference, enable control, endpoint/stdin/refusal errors, SIGTERM')
     finally:
         native.release.set()
         stop(node, signal.SIGTERM)
@@ -393,7 +372,7 @@ def main():
             instance = describe['instance_id']
             assert describe['facts']['run_id'] == run_id
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'empty-fleet')
-            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'physical', 'sensors': 0, 'backend': 'none'}
+            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backends']} == {'target_id': 'fixture', 'profile': 'physical', 'sensors': 0, 'backends': []}
             # Subscribe after startup to prove that definition outputs latch.
             for name, message_type in [('snapshot', SceneSnapshot), ('state', SceneState),
                                        ('document', String), ('markers', MarkerArray)]:
@@ -419,8 +398,8 @@ def main():
             assert first['success'] and first['playing']
             with changed:
                 assert changed.wait_for(lambda: states[-1].playing and states[-1].scene_time > 0.1, timeout=5)
-                assert states[-1].obstacles[0].pose.position.x == 0
-                assert states[-1].obstacles[1].pose.position.x > 0
+                assert len(states[-1].obstacles) == 1
+                assert states[-1].obstacles[0].pose.position.x > 0
             assert http_call(socket_path, 'POST', '/v1/commands', 'play', instance, play) == first
             assert http_call(socket_path, 'POST', '/v1/commands/result', 'receipt', instance, {'request_id': 'play'}) == first
             stop(node, signal.SIGTERM)
@@ -451,7 +430,7 @@ def main():
             node.stdin.close()
             wait_socket(str(lidar_socket), node, unix=True)
             empty = http_call(lidar_socket, 'GET', '/v1/describe?wait_ready_ms=30000', 'xsim-fleet')
-            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backend']} == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backend': 'none'}
+            assert empty['ready'] and {key: empty['facts'][key] for key in ['target_id', 'profile', 'sensors', 'backends']} == {'target_id': 'fixture', 'profile': 'xsim', 'sensors': 0, 'backends': []}
             assert not any(topic.startswith('/lf_absent/simple_lidar/') for topic, _ in rospy.get_published_topics())
             stop(node, signal.SIGTERM)
             assert node.returncode == 0 and not lidar_socket.exists()

@@ -21,7 +21,7 @@
   <depend>nlohmann-json3-dev</depend>
   <depend>libyaml-cpp-dev</depend>
   <depend>libssl-dev</depend>
-  <depend version_gte="0.6.0">libxgc2-math-dev</depend>
+  <depend version_gte="0.6.0-4~focal">libxgc2-math-dev</depend>
   <depend>libjsoncpp-dev</depend>
   <exec_depend>python3</exec_depend>
 

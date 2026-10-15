@@ -209,7 +209,8 @@ echo "Installed Tools package checks passed"
 
 scene_depends="$(dpkg-query -W -f='${Depends}' "${SCENE_PACKAGE}")"
 grep -Fq 'libxgc2-xrpc2 (>= 0.2.0-1~focal)' <<<"${scene_depends}"
-grep -Fq 'libxgc2-math-dev (>= 0.6.0-2~focal)' <<<"${scene_depends}"
+grep -Fq 'libxgc2-math-dev (>= 0.6.0-4~focal)' <<<"${scene_depends}"
+grep -Fq "ros-${ROS_DISTRO}-xgc2-geometry-msgs (>= 1.5.0-3)" <<<"${scene_depends}"
 for dependency in python3 roscpp tf2-ros geometry-msgs visualization-msgs std-msgs xgc2-geometry-msgs; do
   if [[ "${dependency}" == "python3" ]]; then
     grep -Eq '(^|, )python3( |[(,]|$)' <<<"${scene_depends}"

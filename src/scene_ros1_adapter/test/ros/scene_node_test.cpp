@@ -1,3 +1,4 @@
+#include "../geometry_wire.hpp"
 #include "xgc_scene/node.hpp"
 #include "xgc_scene/document.hpp"
 #include "xgc_scene/json_io.hpp"
@@ -101,11 +102,14 @@ void checkProjections(SceneNode& node, Outputs& outputs) {
     EXPECT_EQ(bytes(snapshot.obstacles[i]), bytes(obstacleMessage(document.at("obstacles")[i])));
   node.tick();
   const auto& current = outputs.states.back();
-  ASSERT_EQ(current.obstacles.size(), document.at("obstacles").size());
-  for (std::size_t i = 0; i < current.obstacles.size(); ++i) {
-    const auto value = xgc_scene::state(document.at("obstacles")[i], current.scene_time, current.playing);
-    EXPECT_EQ(bytes(current.obstacles[i]), bytes(stateMessage(value)));
+  std::size_t dynamic_index = 0;
+  for (const auto& item : document.at("obstacles")) {
+    if (item.at("motion").at("type") == "hold") continue;
+    ASSERT_LT(dynamic_index, current.obstacles.size());
+    const auto value = xgc_scene::state(item, current.scene_time, current.playing);
+    EXPECT_EQ(bytes(current.obstacles[dynamic_index++]), bytes(stateMessage(value)));
   }
+  EXPECT_EQ(current.obstacles.size(), dynamic_index);
   EXPECT_EQ(parseJson(outputs.documents.back()).at("document"), document);
   EXPECT_EQ(outputs.markers_list.back().markers.front().action, visualization_msgs::Marker::DELETEALL);
 }
@@ -120,13 +124,13 @@ TEST(SceneProjection, ObstacleMessagesPreserveGeometryPoseColorAndMotion) {
   EXPECT_DOUBLE_EQ(body.pose.position.x, 2.0);
   EXPECT_DOUBLE_EQ(body.pose.orientation.w, 1.0);
   ASSERT_EQ(body.parts.size(), 2u);
-  EXPECT_EQ(body.parts[0].geometry.type, "box");
-  EXPECT_DOUBLE_EQ(body.parts[0].geometry.size.z, 1.0);
+  EXPECT_EQ(geometry_test::read(body.parts[0].geometry).type, geometry_test::GeometryType::Box);
+  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[0].geometry).size[2], 1.0);
   EXPECT_FLOAT_EQ(body.parts[0].color.r, definition.at("parts")[0].at("color")[0].get<float>());
-  EXPECT_EQ(body.parts[1].geometry.type, "cylinder");
-  EXPECT_DOUBLE_EQ(body.parts[1].geometry.radius, 0.1);
-  EXPECT_DOUBLE_EQ(body.parts[1].geometry.height, 1.0);
-  EXPECT_TRUE(body.parts[1].geometry.triangles.empty());
+  EXPECT_EQ(geometry_test::read(body.parts[1].geometry).type, geometry_test::GeometryType::Cylinder);
+  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[1].geometry).radius, 0.1);
+  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[1].geometry).height, 1.0);
+  EXPECT_TRUE(geometry_test::read(body.parts[1].geometry).triangles.empty());
 }
 
 TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
@@ -165,21 +169,21 @@ TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
   EXPECT_DOUBLE_EQ(part.pose.position.z, 0.4);
   EXPECT_DOUBLE_EQ(part.pose.orientation.x, std::sin(0.23));
   EXPECT_DOUBLE_EQ(part.pose.orientation.w, std::cos(0.23));
-  EXPECT_EQ(part.geometry.type, "ring");
-  EXPECT_DOUBLE_EQ(part.geometry.radii[0], 1.2);
-  EXPECT_DOUBLE_EQ(part.geometry.radii[1], 1.0);
-  EXPECT_DOUBLE_EQ(part.geometry.tube_radius, 0.05);
-  EXPECT_DOUBLE_EQ(part.geometry.radius, 0.0);
-  EXPECT_DOUBLE_EQ(part.geometry.height, 0.0);
-  EXPECT_TRUE(part.geometry.vertices.empty());
-  EXPECT_TRUE(part.geometry.triangles.empty());
+  EXPECT_EQ(part.geometry.type, static_cast<std::uint32_t>(geometry_test::GeometryType::Ring));
+  const auto ring_geometry = geometry_test::read(part.geometry);
+  EXPECT_DOUBLE_EQ(ring_geometry.radii[0], 1.2);
+  EXPECT_DOUBLE_EQ(ring_geometry.radii[1], 1.0);
+  EXPECT_DOUBLE_EQ(ring_geometry.tubeRadius, 0.05);
+  EXPECT_DOUBLE_EQ(ring_geometry.radius, 0.0);
+  EXPECT_DOUBLE_EQ(ring_geometry.height, 0.0);
+  EXPECT_TRUE(ring_geometry.vertices.empty());
+  EXPECT_TRUE(ring_geometry.triangles.empty());
   EXPECT_EQ(definition.at("parts")[0].at("geometry"), raw.at("parts")[0].at("geometry"));
 }
 
 TEST(SceneProjection, RingMarkerUsesLocalSurfacePointsWithOriginalPoseAndColor) {
   xgc2_geometry_msgs::ScenePart part;
-  part.id = "ring"; part.geometry.type = "ring";
-  part.geometry.radii[0] = 2; part.geometry.radii[1] = 1; part.geometry.tube_radius = .8;
+  part.id = "ring"; part.geometry = geometry_test::wire(geometry_test::Geometry::ring({2, 1}, .8));
   part.pose.position.x = 3; part.pose.position.y = -2; part.pose.position.z = 1;
   part.pose.orientation.x = std::sin(.4); part.pose.orientation.w = std::cos(.4);
   part.color.r = 1; part.color.g = .5; part.color.b = .1; part.color.a = 1;
@@ -199,7 +203,7 @@ TEST(SceneProjection, RingMarkerUsesLocalSurfacePointsWithOriginalPoseAndColor) 
 TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {
   xgc2_geometry_msgs::ScenePart part;
   part.id = "capsule";
-  part.geometry.type = "capsule"; part.geometry.radius = 0.25; part.geometry.height = 2.0;
+  part.geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 2));
   part.pose.position.x = 3; part.pose.position.y = 4; part.pose.position.z = 5;
   const double norm = std::sqrt(0.3 * 0.3 + 0.5 * 0.5 + 0.2 * 0.2 + 0.79 * 0.79);
   auto& q = part.pose.orientation;
@@ -223,15 +227,13 @@ TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {
     EXPECT_NEAR(cap.pose.position.y, 4 + direction * 2 * (q.y * q.z - q.w * q.x), 1e-14);
     EXPECT_NEAR(cap.pose.position.z, 5 + direction * (1 - 2 * (q.x * q.x + q.y * q.y)), 1e-14);
   }
-  part.geometry.height = 0;
+  part.geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 0));
   const auto zero = partMarkers("o", part, "frame");
   ASSERT_EQ(zero.size(), 1u);
   EXPECT_EQ(zero[0].id, 1);
   EXPECT_DOUBLE_EQ(zero[0].pose.position.z, 5);
-  part.geometry.type = "convex";
-  part.geometry.vertices.resize(3);
-  part.geometry.vertices[0].x = 1; part.geometry.vertices[1].y = 2; part.geometry.vertices[2].z = 3;
-  part.geometry.triangles = {2, 0, 1};
+  part.geometry = geometry_test::wire(geometry_test::Geometry::convex(
+      {{1, 0, 0}, {0, 2, 0}, {0, 0, 3}, {0, 0, 0}}, {{2, 0, 1}}));
   const auto convex = partMarkers("o", part, "frame");
   ASSERT_EQ(convex.size(), 1u);
   EXPECT_EQ(convex[0].type, visualization_msgs::Marker::TRIANGLE_LIST);
@@ -239,6 +241,32 @@ TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {
   EXPECT_DOUBLE_EQ(convex[0].points[0].z, 3);
   EXPECT_DOUBLE_EQ(convex[0].points[1].x, 1);
   EXPECT_DOUBLE_EQ(convex[0].points[2].y, 2);
+}
+
+TEST(SceneProjection, FiniteHalfspacesAndTemporaryHullHaveCachedLocalSurfaces) {
+  using Geometry = geometry_test::Geometry;
+  const std::vector<Geometry> shapes{
+      Geometry::convex({{0,0,0},{1,0,0},{0,1,0},{0,0,1}}),
+      Geometry::halfspaces({{1,0,0,-1},{-1,0,0,-1},{0,1,0,-1},{0,-1,0,-1},{0,0,1,-1},{0,0,-1,-1}})};
+  for (const auto& shape : shapes) {
+    xgc2_geometry_msgs::ScenePart part;
+    part.id = "finite";
+    part.geometry = geometry_test::wire(shape);
+    part.pose.position.x = 9;
+    part.pose.orientation.w = 1;
+    const auto original = bytes(part.geometry);
+    const auto markers = partMarkers("o", part, "part-frame");
+    ASSERT_EQ(markers.size(), 1u);
+    EXPECT_EQ(markers[0].type, visualization_msgs::Marker::TRIANGLE_LIST);
+    EXPECT_EQ(markers[0].points.size(), shape.type == geometry_test::GeometryType::Convex ? 12u : 36u);
+    EXPECT_EQ(bytes(markers[0].pose), bytes(part.pose));
+    EXPECT_EQ(bytes(part.geometry), original);
+    for (const auto& point : markers[0].points) {
+      EXPECT_LE(std::abs(point.x), 1);
+      EXPECT_LE(std::abs(point.y), 1);
+      EXPECT_LE(std::abs(point.z), 1);
+    }
+  }
 }
 
 TEST(SceneNode, CachedProjectionsEqualUncachedResultsAcrossMotionEditsUndoAndDeletion) {
@@ -268,7 +296,7 @@ TEST(SceneNode, CachedProjectionsEqualUncachedResultsAcrossMotionEditsUndoAndDel
   checkProjections(node, outputs);
 }
 
-TEST(SceneNode, HoldMessagesAreConstantAndOnlyMovingObstaclesGetDynamicTransforms) {
+TEST(SceneNode, StateContainsOnlyMovingObstaclesAndStaticTransformsRemainInDefinition) {
   Outputs outputs;
   double now = 100;
   SceneNode node(scene(), physical(), "/namespace/", outputs, [&] { return now; });
@@ -280,7 +308,10 @@ TEST(SceneNode, HoldMessagesAreConstantAndOnlyMovingObstaclesGetDynamicTransform
   now += 3;
   node.tick();
   const auto& current = outputs.states.back();
-  EXPECT_EQ(bytes(initial.obstacles[0]), bytes(current.obstacles[0]));
+  ASSERT_EQ(current.obstacles.size(), 2u);
+  EXPECT_EQ(current.obstacles[0].id, "o1");
+  EXPECT_EQ(current.obstacles[1].id, "o3");
+  EXPECT_NE(bytes(initial.obstacles[0]), bytes(current.obstacles[0]));
   EXPECT_NE(bytes(initial.obstacles[1]), bytes(current.obstacles[1]));
   EXPECT_EQ(node.counters().hold_states, base.hold_states);
   EXPECT_EQ(node.counters().moving_states - base.moving_states, 4u);
@@ -537,3 +568,23 @@ TEST(SceneNode, ShutdownPublishesOfflineOnceAndStopsFurtherTicks) {
 
 }  // namespace
 }  // namespace xgc_scene
+
+namespace xgc_scene {
+TEST(SceneProjection, StaticScenePublishesEmptyStateHeartbeat) {
+  Outputs outputs;
+  double now = 100;
+  auto document = scene(1);
+  SceneNode node(document, physical(), "/static", outputs, [&] { return now; });
+  const auto initial = outputs.states.size();
+  now += 1;
+  node.tick();
+  ASSERT_GT(outputs.states.size(), initial);
+  const auto& heartbeat = outputs.states.back();
+  EXPECT_TRUE(heartbeat.obstacles.empty());
+  EXPECT_EQ(heartbeat.epoch, outputs.snapshots.back().epoch);
+  EXPECT_EQ(heartbeat.revision, outputs.snapshots.back().revision);
+  EXPECT_EQ(heartbeat.header.frame_id, "world");
+  ASSERT_EQ(outputs.snapshots.back().obstacles.size(), 1u);
+  EXPECT_DOUBLE_EQ(outputs.snapshots.back().obstacles[0].pose.position.x, 0);
+}
+} // namespace xgc_scene
