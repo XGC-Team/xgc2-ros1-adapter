@@ -329,12 +329,12 @@ class Replay {
   }
 };
 
-TEST(GoldenInventory, AllSixtyScenariosArePresent) {
+TEST(GoldenInventory, AllRecordedScenariosArePresent) {
   const auto files = scenarios();
-  ASSERT_EQ(files.size(), 60u);
+  ASSERT_EQ(files.size(), 62u);
   std::map<std::string, int> categories;
   for (const auto& file : files) ++categories[file.parent_path().filename().string()];
-  EXPECT_EQ(categories["document"], 10);
+  EXPECT_EQ(categories["document"], 11);
   EXPECT_EQ(categories["motion"], 6);
   EXPECT_EQ(categories.size(), 7u);
 }

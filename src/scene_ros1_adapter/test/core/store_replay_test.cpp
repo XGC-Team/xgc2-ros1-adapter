@@ -311,7 +311,7 @@ Json command(SceneStore& store, const std::string& id, const Json& operation, Js
   return store.command(request);
 }
 
-TEST(Store, CorpusInventory) { EXPECT_EQ(scenarios().size(), 22u); }
+TEST(Store, CorpusInventory) { EXPECT_EQ(scenarios().size(), 23u); }
 
 TEST(Store, OneOf512ObstaclesIsValidatedAndEmittedAndSnapshotsStayImmutable) {
   TemporaryDirectory directory;
