@@ -154,6 +154,8 @@ class ProcessDefinitionTest(unittest.TestCase):
                         "__master": "${rosMasterUri}",
                         "__ip": "${rosIp}",
                         "_scene_file": "${sceneFile}",
+                        "_resource_root": "${resourceRoot}",
+                        "_compiled_scene_file": "${compiledSceneFile}",
                         "_working_file": "${workingFile}",
                         "_generation_parameters_json": "${generationParametersJson}",
                         "_save_directory": "${saveDirectory}",
@@ -176,14 +178,18 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertEqual(used, set(declared))
                     self.assertEqual(
                         set(definition["parameters"]["required"]),
-                        {"socketPath", "runId", "lidarSocketPath", "targetId", "rosMasterUri", "sceneFile"},
+                        {"socketPath", "runId", "lidarSocketPath", "targetId", "rosMasterUri", "sceneFile",
+                         "resourceRoot", "compiledSceneFile"},
                     )
                     self.assertEqual(declared["profile"]["enum"], ["gazebo", "xsim", "physical"])
                     self.assertEqual(set(declared), {
                         "socketPath", "runId", "lidarSocketPath", "targetId", "rosMasterUri", "rosIp", "namespace",
                         "sceneFile", "workingFile", "generationParametersJson", "saveDirectory", "frozen",
                         "profile", "simulationEndpoint", "sessionJson", "lidarEnabled", "lidarDefaultsJson",
+                        "resourceRoot", "compiledSceneFile",
                     })
+                    for parameter in ("resourceRoot", "compiledSceneFile"):
+                        self.assertEqual(declared[parameter], {"type": "string", "fixedOnly": True, "default": ""})
                     self.assertEqual(declared["simulationEndpoint"]["type"], "string")
                     self.assertTrue(declared["simulationEndpoint"]["fixedOnly"])
                     self.assertEqual(declared["simulationEndpoint"]["default"], "")
