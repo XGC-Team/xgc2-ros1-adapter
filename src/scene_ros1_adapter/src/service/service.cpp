@@ -88,7 +88,7 @@ class SceneService::Impl {
 
   Json describeLocked() const {
     Json capabilities = Json::array({"scene.read", "scene.edit"});
-    if (profile_ == "gazebo" || profile_ == "physical") capabilities.push_back("scene.motion");
+    if (profile_ == "gazebo" || profile_ == "physical" || profile_ == "xsim") capabilities.push_back("scene.motion");
     capabilities.push_back("scene.save");
     auto facts = facts_;
     if (current_facts_) facts.update(current_facts_());
@@ -259,10 +259,8 @@ class SceneService::Impl {
     }
     if (!value.is_object() || value.contains("requestId"))
       return fault(400, "invalid_argument", "Command identity must come from X-Request-ID");
-    if (profile_ == "xsim" && (value.value("operation", Json()) == "play" ||
-        value.value("operation", Json()) == "pause" || value.value("operation", Json()) == "reset" ||
-        value.value("operation", Json()) == "resync"))
-      return fault(501, "unsupported", "Live scene application and motion are unsupported for the xsim profile");
+    if (profile_ == "xsim" && value.value("operation", Json()) == "resync")
+      return fault(501, "unsupported", "Scene resync is unsupported for profile xsim");
     if (work.cancelled() || Clock::now() >= work.request.deadline)
       return fault(408, "deadline_exceeded", "Scene request was cancelled or expired");
     value["requestId"] = work.request.request_id;

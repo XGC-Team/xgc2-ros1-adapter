@@ -23,12 +23,17 @@ using namespace std::chrono;
 
 class Outputs final : public RosOutputs {
  public:
+  void application(const std::string& epoch, std::uint64_t revision, bool synchronized) override {
+    applications.push_back({epoch, revision, synchronized});
+  }
   void snapshot(const xgc2_geometry_msgs::SceneSnapshot& value) override { snapshots.push_back(value); }
   void state(const xgc2_geometry_msgs::SceneState& value) override { states.push_back(value); }
   void document(const std::string& value) override { documents.push_back(value); }
   void markers(const visualization_msgs::MarkerArray& value) override { markers_list.push_back(value); }
   void staticTransforms(const std::vector<geometry_msgs::TransformStamped>& value) override { fixed.push_back(value); }
   void dynamicTransforms(const std::vector<geometry_msgs::TransformStamped>& value) override { moving.push_back(value); }
+  struct Application { std::string epoch; std::uint64_t revision = 0; bool synchronized = false; };
+  std::vector<Application> applications;
   std::vector<xgc2_geometry_msgs::SceneSnapshot> snapshots;
   std::vector<xgc2_geometry_msgs::SceneState> states;
   std::vector<std::string> documents;
@@ -601,6 +606,105 @@ TEST(SceneNode, ShutdownPublishesOfflineOnceAndStopsFurtherTicks) {
   EXPECT_EQ(simulation->closes, 1);
   EXPECT_EQ(outputs.documents.size(), 2u);
   EXPECT_EQ(parseJson(outputs.documents.back()).at("online"), false);
+}
+
+Json coloredTwist(const char* id, double x, const Json& color) {
+  return Json{{"id", id}, {"name", id},
+              {"pose", Json{{"position", Json::array({x, 0.0, 0.0})}}},
+              {"motion", Json{{"type", "constant_twist"}, {"linear", Json::array({1.0, 0.0, 0.0})},
+                              {"angular", Json::array({0.0, 0.0, 0.0})}}},
+              {"parts", Json::array({Json{{"id", "body"},
+                  {"geometry", Json{{"type", "box"}, {"size", Json::array({1.0, 1.0, 1.0})}}},
+                  {"color", color}}})}};
+}
+
+double stateX(const xgc2_geometry_msgs::SceneState& state, const char* id) {
+  for (const auto& body : state.obstacles)
+    if (body.id == id) return body.pose.position.x;
+  ADD_FAILURE() << id;
+  return 0;
+}
+
+TEST(SceneNode, XsimStoreClockPublishesRedAndGreenWithoutSimulation) {
+  auto client = std::make_shared<FakeSimulation>();
+  SceneParameters config;
+  config.profile = "xsim";
+  const Json document{{"schema", "xgc2.scene.v1"}, {"id", "xsim"}, {"frame", "world"},
+      {"obstacles", Json::array({coloredTwist("red", 1.0, Json::array({1.0, 0.0, 0.0, 1.0})),
+                                 coloredTwist("green", 5.0, Json::array({0.0, 1.0, 0.0, 1.0}))})}};
+  double now = 10;
+  Outputs outputs;
+  EXPECT_THROW(SceneNode(document, config, "/xsim/", outputs, [&] { return now; }, client), SceneError);
+  EXPECT_TRUE(client->applies.empty());
+  EXPECT_TRUE(client->motions.empty());
+  SceneNode node(document, config, "/xsim/", outputs, [&] { return now; });
+  ASSERT_FALSE(outputs.applications.empty());
+  EXPECT_TRUE(outputs.applications.back().synchronized);
+  EXPECT_EQ(outputs.applications.back().epoch, node.envelope().at("epoch").get<std::string>());
+  EXPECT_EQ(outputs.applications.back().revision, node.envelope().at("revision").get<std::uint64_t>());
+  ASSERT_FALSE(outputs.snapshots.empty());
+  const auto& snapshot = outputs.snapshots.back();
+  ASSERT_EQ(snapshot.obstacles.size(), 2u);
+  EXPECT_EQ(snapshot.obstacles[0].id, "red");
+  EXPECT_EQ(snapshot.obstacles[1].id, "green");
+  EXPECT_FLOAT_EQ(snapshot.obstacles[0].parts[0].color.r, 1.f);
+  EXPECT_FLOAT_EQ(snapshot.obstacles[0].parts[0].color.g, 0.5f);
+  EXPECT_FLOAT_EQ(snapshot.obstacles[0].parts[0].color.b, 0.1f);
+  EXPECT_FLOAT_EQ(snapshot.obstacles[1].parts[0].color.r, 1.f);
+  EXPECT_FLOAT_EQ(snapshot.obstacles[1].parts[0].color.g, 0.5f);
+  EXPECT_FLOAT_EQ(snapshot.obstacles[1].parts[0].color.b, 0.1f);
+  const auto published = [&] {
+    const auto& state = outputs.states.back();
+    EXPECT_EQ(state.playing, node.envelope().at("playing").get<bool>());
+    EXPECT_NEAR(state.scene_time, node.envelope().at("sceneTime").get<double>(), 1e-9);
+    const Json document = node.envelope().at("document").at("obstacles");
+    for (const char* id : {"red", "green"}) {
+      const Json* item = nullptr;
+      for (const auto& obstacle : document)
+        if (obstacle.at("id").get<std::string>() == id) item = &obstacle;
+      if (item == nullptr) {
+        ADD_FAILURE() << id;
+        continue;
+      }
+      const auto value = xgc_scene::state(*item, state.scene_time, state.playing);
+      EXPECT_NEAR(stateX(state, id), value.at("pose").at("position").at(0).get<double>(), 1e-6);
+    }
+    EXPECT_NEAR(stateX(state, "green") - stateX(state, "red"), 4.0, 1e-6);
+  };
+  ASSERT_FALSE(outputs.states.empty());
+  published();
+  const auto red0 = stateX(outputs.states.back(), "red");
+  const auto green0 = stateX(outputs.states.back(), "green");
+  const auto states_before_play = outputs.states.size();
+  ASSERT_TRUE(command(node, "play", "play").at("success").get<bool>());
+  EXPECT_GT(outputs.states.size(), states_before_play);
+  published();
+  EXPECT_NEAR(stateX(outputs.states.back(), "red"), red0, 1e-6);
+  now = 12;
+  node.tick();
+  published();
+  EXPECT_NEAR(outputs.states.back().scene_time, 2.0, 1e-9);
+  EXPECT_NEAR(stateX(outputs.states.back(), "red"), red0 + 2.0, 1e-6);
+  EXPECT_NEAR(stateX(outputs.states.back(), "green"), green0 + 2.0, 1e-6);
+  const auto states_before_pause = outputs.states.size();
+  ASSERT_TRUE(command(node, "pause", "pause").at("success").get<bool>());
+  EXPECT_GT(outputs.states.size(), states_before_pause);
+  const auto red_paused = stateX(outputs.states.back(), "red");
+  const auto green_paused = stateX(outputs.states.back(), "green");
+  now = 20;
+  node.tick();
+  published();
+  EXPECT_NEAR(stateX(outputs.states.back(), "red"), red_paused, 1e-9);
+  EXPECT_NEAR(stateX(outputs.states.back(), "green"), green_paused, 1e-9);
+  ASSERT_TRUE(command(node, "reset", "reset").at("success").get<bool>());
+  published();
+  EXPECT_NEAR(node.envelope().at("sceneTime").get<double>(), 0.0, 1e-9);
+  node.tick();
+  published();
+  EXPECT_NEAR(stateX(outputs.states.back(), "red"), red0, 1e-6);
+  EXPECT_NEAR(stateX(outputs.states.back(), "green"), green0, 1e-6);
+  EXPECT_TRUE(client->applies.empty());
+  EXPECT_TRUE(client->motions.empty());
 }
 
 }  // namespace

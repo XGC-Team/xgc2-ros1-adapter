@@ -275,7 +275,7 @@ void SceneNode::publishDefinition() {
   const auto envelope = store_->envelope();
   const auto epoch = envelope.at("epoch").get<std::string>();
   const auto revision = envelope.at("revision").get<std::uint64_t>();
-  if (parameters_.profile == "gazebo")
+  if (parameters_.profile == "gazebo" || parameters_.profile == "xsim")
     outputs_.application(epoch, revision, applicationView(epoch, revision).at("synchronized").get<bool>());
   const auto compiled = compiledFor(envelope.at("document"), epoch, revision);
   xgc2_geometry_msgs::SceneSnapshot message;

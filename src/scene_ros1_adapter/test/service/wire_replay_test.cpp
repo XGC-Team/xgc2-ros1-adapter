@@ -68,11 +68,12 @@ class Host {
 };
 
 std::future<HttpResponse> call(SceneService& service, std::string method, std::string path,
-                                const Json& body = nullptr, bool has_body = false) {
+                                const Json& body = nullptr, bool has_body = false,
+                                std::string request_id = "fixture") {
   auto promise = std::make_shared<std::promise<HttpResponse>>();
   auto result = promise->get_future();
   HttpRequest request;
-  request.method = std::move(method); request.target = std::move(path); request.request_id = "fixture";
+  request.method = std::move(method); request.target = std::move(path); request.request_id = std::move(request_id);
   request.deadline = xgc2::xrpc::Clock::now() + seconds(2);
   if (has_body) { request.body = dumpJson(body); request.headers = {{"Content-Type", "application/json"}}; }
   service.handle(std::move(request), [promise](HttpResponse response) { promise->set_value(std::move(response)); });
@@ -298,15 +299,25 @@ TEST(SceneService, DeclaresProfilesAndBounds) {
   EXPECT_EQ(limits.request_bytes, kMaxDocumentBytes);
   EXPECT_EQ(limits.response_bytes, kMaxDocumentBytes + 65536);
   EXPECT_EQ(limits.request_timeout, seconds(60));
+  auto node = std::make_shared<StoreNode>();
   SceneService xsim("/unused/scene.sock", "fixture", "xsim");
-  xsim.ready(std::make_shared<StoreNode>());
+  xsim.ready(node);
   const auto describe = parseJson(call(xsim, "GET", "/v1/describe").get().body);
-  EXPECT_EQ(describe.at("capabilities"), Json::array({"scene.read", "scene.edit", "scene.save"}));
+  EXPECT_EQ(describe.at("capabilities"), Json::array({"scene.read", "scene.edit", "scene.motion", "scene.save"}));
   EXPECT_EQ(describe.at("facts").at("scene_application"), "unsupported");
-  for (const auto* operation : {"play", "pause", "reset", "resync"}) {
-    const auto result = call(xsim, "POST", "/v1/commands", Json{{"operation", operation}}, true).get();
-    EXPECT_EQ(result.status, 501);
-    EXPECT_EQ(parseJson(result.body).at("error").at("code"), "unsupported");
+  const auto denied = call(xsim, "POST", "/v1/commands", Json{{"operation", "resync"}}, true, "resync").get();
+  EXPECT_EQ(denied.status, 501);
+  EXPECT_EQ(parseJson(denied.body).at("error").at("code"), "unsupported");
+  EXPECT_EQ(parseJson(denied.body).at("error").at("message"), "Scene resync is unsupported for profile xsim");
+  const auto epoch = node->store.status().at("epoch");
+  const auto revision = node->store.status().at("revision");
+  for (const auto* operation : {"play", "pause", "reset"}) {
+    const auto result = call(xsim, "POST", "/v1/commands",
+        Json{{"operation", operation}, {"expectedEpoch", epoch}, {"expectedRevision", revision}}, true, operation).get();
+    EXPECT_EQ(result.status, 200);
+    const auto body = parseJson(result.body);
+    EXPECT_EQ(body.at("success"), true);
+    EXPECT_EQ(body.at("playing"), operation == std::string("play"));
   }
   EXPECT_EQ(call(xsim, "POST", "/v1/commands", Json{{"operation", "get"}}, true).get().status, 200);
   SceneService physical("/unused/scene.sock", "fixture", "gazebo");
