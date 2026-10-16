@@ -1,6 +1,9 @@
 #include "xgc_scene/document.hpp"
 #include "xgc_scene/json_io.hpp"
 
+#include <xgc2_math/geometry/geometry_json.hpp>
+#include <xgc2_math/geometry/prepared_geometry.hpp>
+
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -259,6 +262,72 @@ TEST_F(Asset, RootModelPoseStaysOnTheInstance) {
   EXPECT_DOUBLE_EQ(compiled.at("obstacles")[0].at("pose").at("position")[0].get<double>(), 4);
   write("visual-only.sdf", R"(<?xml version="1.0"?><sdf version="1.7"><model name="m"><link name="paint"><visual name="v"><geometry><box><size>1 1 1</size></box></geometry></visual></link></model></sdf>)");
   EXPECT_THROW(compile(scene("\"models\":{\"resource\":{\"resource\":{\"format\":\"sdformat-model\",\"file\":\"visual-only.sdf\"}}},\"obstacles\":[]"), root.string()), SceneError);
+}
+
+void expectCorner(const Json& mesh, int triangle, int corner, double x, double y, double z) {
+  const auto index = mesh.at("triangles").at(triangle * 3 + corner).get<int>();
+  const auto& vertex = mesh.at("vertices").at(index);
+  EXPECT_DOUBLE_EQ(vertex.at(0).get<double>(), x);
+  EXPECT_DOUBLE_EQ(vertex.at(1).get<double>(), y);
+  EXPECT_DOUBLE_EQ(vertex.at(2).get<double>(), z);
+}
+
+void expectClosedTetra(const Json& mesh) {
+  ASSERT_EQ(mesh.at("vertices").size(), 4u);
+  ASSERT_EQ(mesh.at("triangles").size(), 12u);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[0][0].get<double>(), 0);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[0][1].get<double>(), 0);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[0][2].get<double>(), 0);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[1][1].get<double>(), 2);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[2][0].get<double>(), 1);
+  EXPECT_DOUBLE_EQ(mesh.at("vertices")[3][2].get<double>(), 3);
+  expectCorner(mesh, 0, 0, 0, 0, 0);
+  expectCorner(mesh, 0, 1, 0, 2, 0);
+  expectCorner(mesh, 0, 2, 1, 0, 0);
+  expectCorner(mesh, 1, 0, 0, 0, 0);
+  expectCorner(mesh, 1, 1, 1, 0, 0);
+  expectCorner(mesh, 1, 2, 0, 0, 3);
+  expectCorner(mesh, 2, 0, 0, 0, 0);
+  expectCorner(mesh, 2, 1, 0, 0, 3);
+  expectCorner(mesh, 2, 2, 0, 2, 0);
+  expectCorner(mesh, 3, 0, 1, 0, 0);
+  expectCorner(mesh, 3, 1, 0, 2, 0);
+  expectCorner(mesh, 3, 2, 0, 0, 3);
+  EXPECT_NO_THROW(xgc2_math::geometry::prepareConvexParts(xgc2_math::geometry::geometryFromJson<Json>(mesh)));
+}
+
+TEST_F(Asset, MeshReusesBitExactPositions) {
+  write("asymmetric.obj", "v 0 0 0\nv 1 0 0\nv 0 2 0\nv 0 0 3\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n");
+  write("seamed.obj",
+        "v 0 0 0\nv 1 0 0\nv 0 2 0\nv 0 0 3\n"
+        "vt 0 0\nvt 1 0\nvn 0 0 1\nvn 1 0 0\n"
+        "f 1/1/1 3/1/1 2/1/1\n"
+        "f 1/2/2 2/2/2 4/2/2\n"
+        "f 1/1/1 4/2/2 3/1/1\n"
+        "f 2/1/1 3/2/2 4/2/2\n");
+  write("distinct.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1.0000002 0 0\nf 1 2 3\nf 4 2 3\n");
+  std::string obstacles = "[";
+  for (int index = 0; index < 100; ++index) {
+    if (index) obstacles += ",";
+    obstacles += "{\"id\":\"i" + std::to_string(index) + "\",\"model\":\"shared\",\"pose\":{\"position\":[" +
+                 std::to_string(index) + ",0,0]}}";
+  }
+  obstacles += "]";
+  std::size_t reads = 0;
+  const auto plain = compile(scene("\"models\":{\"shared\":{\"resource\":{\"format\":\"mesh\",\"file\":\"asymmetric.obj\"}}},\"obstacles\":" + obstacles),
+                             root.string(), &reads);
+  EXPECT_EQ(reads, 1u);
+  EXPECT_EQ(plain.at("geometries").size(), 1u);
+  EXPECT_EQ(plain.at("obstacles").size(), 100u);
+  expectClosedTetra(plain.at("geometries")[0]);
+  reads = 0;
+  const auto seamed = compile(scene("\"models\":{\"shared\":{\"resource\":{\"format\":\"mesh\",\"file\":\"seamed.obj\"}}},\"obstacles\":[{\"id\":\"one\",\"model\":\"shared\"}]"),
+                              root.string(), &reads);
+  EXPECT_EQ(reads, 1u);
+  expectClosedTetra(seamed.at("geometries")[0]);
+  const auto distinct = compile(scene("\"models\":{\"shared\":{\"resource\":{\"format\":\"mesh\",\"file\":\"distinct.obj\"}}},\"obstacles\":[{\"id\":\"one\",\"model\":\"shared\"}]"),
+                                root.string());
+  EXPECT_EQ(distinct.at("geometries")[0].at("vertices").size(), 4u);
 }
 
 TEST(Compiled, RejectsEscapingResourcePaths) {

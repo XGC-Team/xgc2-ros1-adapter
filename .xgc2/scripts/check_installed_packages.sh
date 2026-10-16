@@ -222,6 +222,9 @@ if grep -Eq 'xgc2-protobuf-dev|libxgc2-xrpc-(grpc-)?dev' <<<"${scene_depends}"; 
   echo "scene adapter package depends on a build-only XRPC or protobuf package" >&2
   exit 1
 fi
+for dependency in nlohmann-json3-dev libyaml-cpp-dev libssl-dev libassimp-dev libpugixml-dev libsdformat9-dev pkg-config; do
+  grep -Eq "(^|, )${dependency}( |[(,]|$)" <<<"${scene_depends}"
+done
 rospack find "${SCENE_ROS_PACKAGE}" >/dev/null
 test -f "${PREFIX}/share/${SCENE_ROS_PACKAGE}/package.xml"
 for name in xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare; do
@@ -277,4 +280,20 @@ assert definition['parameters']['properties']['profile']['enum'] == ['gazebo', '
 assert definition['readiness'] == {'kind': 'describe', 'startGraceMs': 15000, 'timeoutMs': 30000}
 assert definition['stop'] == {'graceMs': 5000}
 PYSCENE
+# A fresh consumer must find only the installed target, including its link closure.
+for path in "${PREFIX}/lib/libxgc_scene_core.a" \
+    "${PREFIX}/lib/cmake/XgcSceneCore/"*.cmake \
+    "${PREFIX}/include/xgc_scene/"*.hpp; do
+  test -f "${path}"
+  dpkg-query -S "${path}" | grep -Fq "${SCENE_PACKAGE}:"
+done
+scene_core_check_root="$(mktemp -d)"
+trap 'rm -rf "${scene_core_check_root}"' EXIT
+cmake -S "${REPO_ROOT}/src/scene_ros1_adapter/test/installed_core_consumer" \
+  -B "${scene_core_check_root}" -DCMAKE_BUILD_TYPE=Release \
+  "-DCMAKE_PREFIX_PATH=${PREFIX}"
+cmake --build "${scene_core_check_root}" -j1
+(cd "${scene_core_check_root}" && ./consumer)
+rm -rf "${scene_core_check_root}"
+trap - EXIT
 echo "Installed Scene package checks passed"

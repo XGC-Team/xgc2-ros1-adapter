@@ -34,10 +34,37 @@ file(GLOB LIDAR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/lidar/
 
 if(CORE_SOURCES)
   add_library(xgc_scene_core STATIC ${CORE_SOURCES})
-  target_include_directories(xgc_scene_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  set_target_properties(xgc_scene_core PROPERTIES POSITION_INDEPENDENT_CODE ON EXPORT_NAME Core)
+  add_library(XgcSceneCore::Core ALIAS xgc_scene_core)
+  target_compile_features(xgc_scene_core PUBLIC cxx_std_17)
+  target_include_directories(xgc_scene_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
   target_include_directories(xgc_scene_core PRIVATE ${ASSIMP_INCLUDE_DIR})
-  target_link_libraries(xgc_scene_core PUBLIC nlohmann_json::nlohmann_json yaml-cpp OpenSSL::Crypto xgc2_math::scene
-                        ${ASSIMP_LIBRARY} PkgConfig::PUGIXML PkgConfig::SDFORMAT)
+  # Focal's broken Assimp exports are not part of the installed interface.
+  add_library(XgcSceneCore::Assimp UNKNOWN IMPORTED)
+  set_target_properties(XgcSceneCore::Assimp PROPERTIES IMPORTED_LOCATION "${ASSIMP_LIBRARY}")
+  target_link_libraries(xgc_scene_core PUBLIC nlohmann_json::nlohmann_json
+                        yaml-cpp OpenSSL::Crypto xgc2_math::scene
+                        XgcSceneCore::Assimp PkgConfig::PUGIXML PkgConfig::SDFORMAT)
+
+  include(GNUInstallDirs)
+  include(CMakePackageConfigHelpers)
+  set(SCENE_CORE_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/XgcSceneCore")
+  install(TARGETS xgc_scene_core EXPORT XgcSceneCoreTargets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT scene_core)
+  set(SCENE_CORE_PUBLIC_HEADERS
+      assembly command_dispatch common document generation json_io motion ordered_object prepare store yaml_io)
+  foreach(header ${SCENE_CORE_PUBLIC_HEADERS})
+    install(FILES include/xgc_scene/${header}.hpp DESTINATION include/xgc_scene COMPONENT scene_core)
+  endforeach()
+  install(EXPORT XgcSceneCoreTargets NAMESPACE XgcSceneCore::
+          DESTINATION ${SCENE_CORE_CONFIG_DIR} COMPONENT scene_core)
+  configure_package_config_file(cmake/XgcSceneCoreConfig.cmake.in
+      ${CMAKE_CURRENT_BINARY_DIR}/XgcSceneCoreConfig.cmake
+      INSTALL_DESTINATION ${SCENE_CORE_CONFIG_DIR})
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/XgcSceneCoreConfig.cmake
+          DESTINATION ${SCENE_CORE_CONFIG_DIR} COMPONENT scene_core)
 endif()
 if(LIDAR_SOURCES)
   add_library(xgc_scene_lidar STATIC ${LIDAR_SOURCES})
@@ -154,6 +181,12 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   find_package(GTest REQUIRED)
+  add_test(NAME installed_scene_core_consumer
+    COMMAND ${CMAKE_COMMAND}
+      -DCORE_BUILD=${CMAKE_CURRENT_BINARY_DIR}
+      -DCONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/test/installed_core_consumer
+      "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/test/installed_core_consumer/run.cmake)
   add_executable(gpu_integration_test test/lidar/gpu_integration_probe.cpp)
   target_compile_options(gpu_integration_test PRIVATE -UNDEBUG)
   target_link_libraries(gpu_integration_test PRIVATE xgc_scene_lidar)

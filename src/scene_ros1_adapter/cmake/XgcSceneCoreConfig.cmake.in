@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(nlohmann_json 3.7 CONFIG)
+find_dependency(yaml-cpp)
+find_dependency(OpenSSL)
+find_dependency(xgc2_math CONFIG)
+find_dependency(PkgConfig)
+pkg_check_modules(PUGIXML REQUIRED IMPORTED_TARGET pugixml)
+pkg_check_modules(SDFORMAT REQUIRED IMPORTED_TARGET sdformat9)
+# Assimp is implementation-only. Rediscover its actual library rather than
+# exporting the build host path or loading Focal's broken CMake/pkg-config files.
+if(NOT TARGET XgcSceneCore::Assimp)
+  find_library(XGC_SCENE_CORE_ASSIMP_LIBRARY NAMES assimp)
+  if(NOT XGC_SCENE_CORE_ASSIMP_LIBRARY)
+    set(XgcSceneCore_FOUND FALSE)
+    set(XgcSceneCore_NOT_FOUND_MESSAGE "Assimp library is required by the Scene compiler")
+    return()
+  endif()
+  add_library(XgcSceneCore::Assimp UNKNOWN IMPORTED)
+  set_target_properties(XgcSceneCore::Assimp PROPERTIES IMPORTED_LOCATION "${XGC_SCENE_CORE_ASSIMP_LIBRARY}")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/XgcSceneCoreTargets.cmake")
+check_required_components(XgcSceneCore)

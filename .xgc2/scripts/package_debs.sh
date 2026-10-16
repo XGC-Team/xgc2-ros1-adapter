@@ -305,6 +305,17 @@ package_scene() {
   copy_path "${PREFIX_ROOT}/share/${SCENE_ROS_PACKAGE}" "${scene_root}"
   copy_path "${PREFIX_ROOT}/lib/${SCENE_ROS_PACKAGE}" "${scene_root}"
   copy_path "${INSTALL_ROOT}${definition}" "${scene_root}"
+  # The installed ROS-free Core target is consumed by native replay tools.
+  test -f "${PREFIX_ROOT}/lib/libxgc_scene_core.a"
+  test -f "${PREFIX_ROOT}/lib/cmake/XgcSceneCore/XgcSceneCoreConfig.cmake"
+  test -f "${PREFIX_ROOT}/lib/cmake/XgcSceneCore/XgcSceneCoreTargets.cmake"
+  test -f "${PREFIX_ROOT}/include/xgc_scene/document.hpp"
+  copy_path "${PREFIX_ROOT}/lib/libxgc_scene_core.a" "${scene_root}"
+  copy_path "${PREFIX_ROOT}/lib/cmake/XgcSceneCore" "${scene_root}"
+  local header
+  for header in "${PREFIX_ROOT}/include/xgc_scene/"*.hpp; do
+    copy_path "${header}" "${scene_root}"
+  done
   for name in xgc2_scene_adapter xgc2-scene-assemble xgc2-scene-prepare; do
     test -x "${scene_root}${library_root}/${name}"
     binaries+=("${scene_root}${library_root}/${name}")
@@ -312,7 +323,7 @@ package_scene() {
   local scene_depends
   scene_depends="$(binary_dependencies "${binaries[@]}")"
   write_control "${scene_root}" "${SCENE_PACKAGE}" \
-    "${scene_depends}, libxgc2-xrpc2 (>= 0.2.0-1~focal), libxgc2-math-dev (>= 0.6.0-4~focal), python3, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-visualization-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-geometry-msgs (>= 1.5.0-3)" \
+    "${scene_depends}, libxgc2-xrpc2 (>= 0.2.0-1~focal), libxgc2-math-dev (>= 0.6.0-4~focal), nlohmann-json3-dev, libyaml-cpp-dev, libssl-dev, libassimp-dev, libpugixml-dev, libsdformat9-dev, pkg-config, python3, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-visualization-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-geometry-msgs (>= 1.5.0-3)" \
     "XGC2 ROS1 scene authoring service and finite scene tools" \
     "Run-owned scene authoring, visualization and simulator application over XRPC http.v1."
   build_deb "${scene_root}" "${SCENE_PACKAGE}"

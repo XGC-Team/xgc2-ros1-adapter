@@ -20,6 +20,8 @@
 
 #include <pugixml.hpp>
 
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -139,15 +141,40 @@ const std::vector<Json>& readMeshFile(Compiler& compiler, const fs::path& path) 
     const aiMatrix4x4 global = parent * node->mTransformation;
     for (unsigned index = 0; index < node->mNumMeshes; ++index) {
       const aiMesh* mesh = scene->mMeshes[node->mMeshes[index]];
+      // Assimp keeps one record per corner when normals or UVs differ. Positions are the only
+      // emitted fields, so bit-identical XYZ reuses the first index. Distinct bits stay distinct.
+      struct XyzBits {
+        std::uint32_t x = 0, y = 0, z = 0;
+        bool operator<(const XyzBits& other) const { return std::tie(x, y, z) < std::tie(other.x, other.y, other.z); }
+      };
+      const auto xyzBits = [](const aiVector3D& point) {
+        XyzBits bits;
+        static_assert(sizeof(float) == sizeof(std::uint32_t));
+        std::memcpy(&bits.x, &point.x, sizeof(float));
+        std::memcpy(&bits.y, &point.y, sizeof(float));
+        std::memcpy(&bits.z, &point.z, sizeof(float));
+        return bits;
+      };
+      std::map<XyzBits, unsigned> first;
+      std::vector<unsigned> remap(mesh->mNumVertices);
       Json vertices = Json::array();
       for (unsigned vertex = 0; vertex < mesh->mNumVertices; ++vertex) {
         const aiVector3D point = global * mesh->mVertices[vertex];
+        const auto found = first.find(xyzBits(point));
+        if (found != first.end()) {
+          remap[vertex] = found->second;
+          continue;
+        }
+        const auto assigned = static_cast<unsigned>(vertices.size());
+        first.emplace(xyzBits(point), assigned);
+        remap[vertex] = assigned;
         vertices.push_back(Json::array({point.x, point.y, point.z}));
       }
       Json triangles = Json::array();
       for (unsigned face = 0; face < mesh->mNumFaces; ++face) {
         if (mesh->mFaces[face].mNumIndices != 3) throw SceneError("Mesh face must be a triangle");
-        for (unsigned corner = 0; corner < 3; ++corner) triangles.push_back(mesh->mFaces[face].mIndices[corner]);
+        for (unsigned corner = 0; corner < 3; ++corner)
+          triangles.push_back(remap.at(mesh->mFaces[face].mIndices[corner]));
       }
       pieces.push_back(geometry(Json{{"type", "mesh"}, {"vertices", std::move(vertices)}, {"triangles", std::move(triangles)}}));
     }

@@ -41,6 +41,13 @@ apt:
   - ros-noetic-std-msgs
   - libxgc2-xrpc2 (>= 0.2.0-1~focal)
   - libxgc2-math-dev (>= 0.6.0-4~focal)
+  - nlohmann-json3-dev
+  - libyaml-cpp-dev
+  - libssl-dev
+  - libassimp-dev
+  - libpugixml-dev
+  - libsdformat9-dev
+  - pkg-config
   - libyaml-cpp0.6
   - libssl1.1
   - ros-noetic-tf2-ros
@@ -131,6 +138,9 @@ ownership:
   - /usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json
   - /opt/ros/noetic/share/xgc_scene_ros1_adapter
   - /opt/ros/noetic/lib/xgc_scene_ros1_adapter
+  - /opt/ros/noetic/lib/libxgc_scene_core.a
+  - /opt/ros/noetic/lib/cmake/XgcSceneCore
+  - /opt/ros/noetic/include/xgc_scene
   - /usr/share/xgc2/process-definitions/xgc2-ros1-scene-adapter.json
 release:
   repository: XGC-Team/xgc2-ros1-adapter
