@@ -3,11 +3,12 @@
 #include "xgc_scene/lidar/engine.hpp"
 #include "xgc_scene/ros_outputs.hpp"
 #include <functional>
+#include <unordered_map>
 
 namespace xgc_scene::lidar_ros {
 
 // One definition is retained solely to pair geometry with its state. There is
-// no compiled-scene cache or tick buffer here; those belong to Engine.
+// no compiled-scene cache or scan buffer here; those belong to Engine.
 class SceneTap final : public RosOutputs {
  public:
   SceneTap(RosOutputs& outputs, lidar::Engine* engine, std::function<std::int64_t()> now)
@@ -32,7 +33,7 @@ class SceneTap final : public RosOutputs {
   std::uint64_t revision_ = 0, application_revision_ = 0, installation_ = 0;
   bool have_snapshot_ = false, have_state_ = false, applied_ = false;
   struct Part {
-    xgc2_math::scene::Obstacle geometry; // decoded once per accepted definition
+    std::shared_ptr<const xgc2_math::scene::Obstacle> geometry; // shared definition table entry
     xgc2_math::Pose3 pose;
   };
   struct Description {
@@ -41,7 +42,14 @@ class SceneTap final : public RosOutputs {
     std::vector<Part> parts;
   };
   std::vector<Description> descriptions_;
-  std::vector<bool> dynamic_;
+  // Static numeric ground, separate from business identities/dynamic slots.
+  std::vector<xgc2_math::scene::Obstacle> ground_shapes_;
+  struct Dynamic {
+    std::size_t description, state;
+  };
+  std::vector<Dynamic> dynamic_;
+  std::unordered_map<std::string, std::size_t> dynamic_slots_;
+  std::vector<std::size_t> state_positions_;
 };
 
 }  // namespace xgc_scene::lidar_ros

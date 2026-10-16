@@ -923,18 +923,18 @@ def wire_scenarios():
 
 
 EXCLUSIONS = {
-    case('test_scene_frozen', 'scene_launch_forwards_the_frozen_argument_as_a_param'):
-        'ROS-bound launch forwarding; to be written as a C++ launch contract test from the Python intent.',
-    case('test_scene_scaling', 'gazebo_receives_one_batched_apply_per_revision'):
-        'ROS-bound node/application batching; to be written as a C++ test from the Python intent.',
-    case('test_scene_scaling', 'unchanged_consumer_heartbeats_do_not_republish_the_document'):
-        'Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats.',
-    case('test_scene_scaling', 'native_failure_and_recovery_change_the_published_view'):
-        'ROS-bound published synchronization view; store/native-failure and store/lost-reply-resync retain native applied status. To be written as a C++ output test.',
-    case('test_scene_scaling', 'tick_and_definition_scan_the_obstacle_list_a_constant_number_of_times'):
-        'Performance-only obstacle scan counts (also ROS-bound).',
     store_case('one_edit_validates_and_emits_only_the_edited_obstacle'):
         'Performance-only validation/emission counts and Python object identity; to be written as a C++ immutability/cost test from the intent. Store undo and YAML behavior are recorded separately.',
+}
+
+
+# These existing corpus IDs retain their original derivation after the Python
+# ROS producer was retired. They are provenance, not executable test entries.
+RETIRED_TEST_REFERENCES = {
+    case('test_scene_projection', 'equals_json_dumps'):
+        'Retired Python ROS module; plain envelope JSON remains in this corpus and native Store.EnvelopesUseExactPythonTextIncludingCacheInvalidation test.',
+    case('test_scene_projection', 'snapshots_markers_and_states_equal_the_uncached_projections'):
+        'Retired Python ROS module; plain motion remains in this corpus; native scene_node_test owns projections.',
 }
 
 
@@ -955,24 +955,20 @@ def coverage_rows(scene_root, scenarios):
             if ':test_' in source:
                 covered.setdefault(source, []).append('corpus/' + scenario['scenario'] + '.json')
     inventory = test_inventory(scene_root)
-    if set(covered) - set(inventory):
-        raise RuntimeError('Unknown Python test references: ' + ', '.join(sorted(set(covered) - set(inventory))))
+    unknown = set(covered) - set(inventory) - set(RETIRED_TEST_REFERENCES)
+    if unknown:
+        raise RuntimeError('Unknown Python test references: ' + ', '.join(sorted(unknown)))
+    for source in RETIRED_TEST_REFERENCES:
+        if source in covered:
+            inventory[source] = "retired"
     rows = []
-    for source, lineno in inventory.items():
+    for source, lineno in sorted(inventory.items(), key=lambda item: item[0].split(':', 1)[0]):
         paths = covered.get(source, [])
-        reason = EXCLUSIONS.get(source, '')
-        if source == case('test_scene_projection', 'one_part_named_ros_dimensions_and_surface_points_marker'):
-            reason = 'Python ROS projection test; typed serialized roundtrip is owned by C++ scene_node_test.cpp, outside the core replay corpus.'
+        reason = EXCLUSIONS.get(source, RETIRED_TEST_REFERENCES.get(source, ''))
         if source.startswith('test_scene_consumers.py:'):
             reason = 'Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats.'
-        if source == case('test_scene_projection', 'snapshots_markers_and_states_equal_the_uncached_projections'):
-            reason = ('ROS-bound snapshots/markers/state projections are excluded; motion/rotating-twist '
-                      'records only the plain motion sample. To be written as C++ ROS output tests.')
         if source == case('test_xrpc_control', 'simulation_waits_once_and_never_probes_entities'):
             reason = 'Simulation-client transport sequencing; to be written as a C++ client integration test from the Python intent.'
-        if source == case('test_scene_projection', 'equals_json_dumps'):
-            reason = ('Plain encoder cases only; consumer fields are dropped. JSON converts integer '
-                      'object keys to strings; cache branch identity is a later C++ test concern.')
         if not paths and not reason:
             raise RuntimeError('Test is neither recorded nor explicitly excluded: ' + source)
         links = ', '.join('[{}]({})'.format(path[len('corpus/'):], path) for path in sorted(paths))

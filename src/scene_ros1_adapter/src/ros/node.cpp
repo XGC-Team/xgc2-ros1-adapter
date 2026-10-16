@@ -1,7 +1,9 @@
 #include "xgc_scene/node.hpp"
 
+#include "xgc_scene/document.hpp"
 #include "xgc_scene/generation.hpp"
 #include "xgc_scene/json_io.hpp"
+#include "xgc_scene/prepare.hpp"
 #include <cmath>
 
 namespace xgc_scene {
@@ -27,6 +29,8 @@ SceneParameters SceneParameters::parse(const Json& values) {
   };
   result.scene_file = string("scene_file", true);
   result.working_file = string("working_file");
+  result.resource_root = string("resource_root");
+  result.compiled_scene_file = string("compiled_scene_file");
   result.save_directory = string("save_directory");
   result.target_id = string("target_id", true);
   result.xrpc_socket = string("xrpc_socket", true);
@@ -51,6 +55,8 @@ SceneNode::SceneNode(const SceneParameters& parameters, const std::string& name_
                      RosOutputs& outputs, Clock clock, std::shared_ptr<Simulation> simulation)
     : parameters_(parameters), outputs_(outputs), clock_(std::move(clock)), simulation_(std::move(simulation)),
       projection_(name_space) {
+  if (parameters_.resource_root.empty())
+    parameters_.resource_root = std::filesystem::absolute(parameters_.scene_file).parent_path();
   const auto resolved = resolve(parameters_.scene_file, parameters_.working_file, parameters_.generation_parameters);
   parameters_.scene_file = resolved.second;
   initialize(resolved.first.first, resolved.first.second);
@@ -72,6 +78,10 @@ void SceneNode::initialize(const Json& initial, const std::optional<std::string>
     throw SceneError("The gazebo profile requires a simulation client");
   if (parameters_.profile != "gazebo" && simulation_)
     throw SceneError("Native scene application requires the gazebo profile");
+  if (parameters_.resource_root.empty() && !parameters_.scene_file.empty())
+    parameters_.resource_root = std::filesystem::absolute(parameters_.scene_file).parent_path();
+  if (!parameters_.compiled_scene_file.empty())
+    startup_compiled_ = parseJson(read(parameters_.compiled_scene_file, kMaxDocumentBytes));
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   store_.reset(new SceneStore(initial, pathOption(parameters_.scene_file), pathOption(parameters_.save_directory),
       [this](const Json& document, const std::string& epoch, std::uint64_t revision) { applyScene(document, epoch, revision); },
@@ -86,10 +96,27 @@ SceneNode::~SceneNode() { shutdown(); }
 bool SceneNode::online() const { return online_.load(); }
 
 void SceneNode::applyScene(const Json& document, const std::string& epoch, std::uint64_t revision) {
+  const auto compiled = compiledFor(document, epoch, revision);
   if (!simulation_) return;
   outputs_.application(epoch, revision, false);
-  applied_snapshot_ = projection_.snapshot(document, epoch, revision, clock_());
+  applied_snapshot_ = projection_.snapshot(*compiled, epoch, revision, clock_());
   gazeboFailure(epoch, revision, "World host application pending");
+}
+
+std::shared_ptr<const Json> SceneNode::compiledFor(const Json& document, const std::string& epoch,
+                                                std::uint64_t revision) {
+  if (compiled_ && compiled_->epoch == epoch && compiled_->revision == revision) return compiled_->value;
+  std::shared_ptr<const Json> value;
+  if (startup_compiled_) {
+    const auto& prepared = *startup_compiled_;
+    if (!prepared.is_object() || prepared.value("schema", Json()) != "xgc2.scene.compiled.v1" ||
+        prepared.value("id", Json()) != document.at("id") || prepared.value("frame", Json()) != document.at("frame"))
+      throw SceneError("Prepared scene must belong to the initial source definition");
+    value = std::make_shared<const Json>(std::move(*startup_compiled_));
+    startup_compiled_.reset();
+  } else value = std::make_shared<const Json>(compile(document, parameters_.resource_root.string()));
+  compiled_ = CompiledDefinition{epoch, revision, value};
+  return value;
 }
 void SceneNode::applyMotion(const std::string& operation, const std::string&, std::uint64_t) {
   if (simulation_) motion_operation_ = operation;
@@ -99,8 +126,9 @@ void SceneNode::queueSimulation() {
   const auto value = store_->envelope();
   gazeboFailure(value.at("epoch").get<std::string>(), value.at("revision").get<std::uint64_t>(), "World host application pending");
   Json motion{{"playing", value.at("playing")}, {"scene_time", store_->sceneTime()}, {"operation", motion_operation_}};
-  simulation_->update(value.at("document"), value.at("epoch").get<std::string>(),
-                      value.at("revision").get<std::uint64_t>(), motion);
+  const auto epoch = value.at("epoch").get<std::string>();
+  const auto revision = value.at("revision").get<std::uint64_t>();
+  simulation_->update(*compiledFor(value.at("document"), epoch, revision), epoch, revision, motion);
   motion_operation_.clear();
 }
 void SceneNode::receiveSimulation() {
@@ -159,6 +187,9 @@ void SceneNode::addPublicView(Json& result) {
   result["online"] = online();
   result["synchronized"] = public_view.at("synchronized");
   result["syncRetryable"] = public_view.at("syncRetryable");
+  if (result.contains("document"))
+    result["compiled"] = *compiledFor(result.at("document"), result.at("epoch").get<std::string>(),
+                                       result.at("revision").get<std::uint64_t>());
 }
 Json SceneNode::envelope() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -177,7 +208,8 @@ Json SceneNode::commandValue(const Json& command, CommandContext context) {
   auto result = store_->command(command);
   const auto cached = public_receipts_.find(id);
   if (retained && result == *retained && cached != public_receipts_.end()) {
-    for (auto it = cached->second.begin(); it != cached->second.end(); ++it) result[it.key()] = it.value();
+    for (auto it = cached->second.fields.begin(); it != cached->second.fields.end(); ++it) result[it.key()] = it.value();
+    result["compiled"] = *cached->second.compiled;
     return result;
   }
   if (store_->status().at("revision") != previous || !motion_operation_.empty()) {
@@ -193,8 +225,10 @@ Json SceneNode::commandValue(const Json& command, CommandContext context) {
   const bool saved = receipt && *receipt == result;
   addPublicView(result);
   if (saved) {
-    public_receipts_[id] = Json{{"consumers", result.at("consumers")}, {"online", result.at("online")},
-                                {"synchronized", result.at("synchronized")}, {"syncRetryable", result.at("syncRetryable")}};
+    public_receipts_[id] = PublicReceipt{
+        Json{{"consumers", result.at("consumers")}, {"online", result.at("online")},
+             {"synchronized", result.at("synchronized")}, {"syncRetryable", result.at("syncRetryable")}},
+        compiled_->value};
     if (public_receipts_.size() > 256) {
       for (auto it = public_receipts_.begin(); it != public_receipts_.end();) {
         if (!store_->requestResult(it->first)) it = public_receipts_.erase(it);
@@ -211,7 +245,8 @@ std::optional<Json> SceneNode::requestResult(const std::string& request_id) {
   if (!receipt) return {};
   const auto cached = public_receipts_.find(request_id);
   if (cached != public_receipts_.end()) {
-    for (auto it = cached->second.begin(); it != cached->second.end(); ++it) (*receipt)[it.key()] = it.value();
+    for (auto it = cached->second.fields.begin(); it != cached->second.fields.end(); ++it) (*receipt)[it.key()] = it.value();
+    (*receipt)["compiled"] = *cached->second.compiled;
   }
   return receipt;
 }
@@ -223,7 +258,9 @@ bool SceneNode::publishDocument() {
   const auto view = Json::array({status, public_view, online()});
   if (published_view_ && *published_view_ == view) return false;
   status["sceneTime"] = store_->sceneTime();
-  status["document"] = definition_;
+  status["document"] = store_->envelope().at("document");
+  status["compiled"] = *compiledFor(status.at("document"), status.at("epoch").get<std::string>(),
+                                     status.at("revision").get<std::uint64_t>());
   status["consumers"] = public_view.at("consumers");
   status["online"] = online();
   status["synchronized"] = public_view.at("synchronized");
@@ -240,12 +277,12 @@ void SceneNode::publishDefinition() {
   const auto revision = envelope.at("revision").get<std::uint64_t>();
   if (parameters_.profile == "gazebo")
     outputs_.application(epoch, revision, applicationView(epoch, revision).at("synchronized").get<bool>());
-  definition_ = envelope.at("document");
+  const auto compiled = compiledFor(envelope.at("document"), epoch, revision);
   xgc2_geometry_msgs::SceneSnapshot message;
   if (applied_snapshot_ && applied_snapshot_->epoch == epoch && applied_snapshot_->revision == revision)
     message = *applied_snapshot_;
-  else message = projection_.snapshot(definition_, epoch, revision, clock_());
-  projection_.definition(definition_, epoch, revision, message, outputs_);
+  else message = projection_.snapshot(*compiled, epoch, revision, clock_());
+  projection_.definition(*compiled, epoch, revision, message, outputs_);
   tick();
   publishDocument();
 }

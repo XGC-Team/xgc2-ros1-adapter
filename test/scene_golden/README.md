@@ -219,20 +219,15 @@ brief and marked as boundaries beyond the related test's original inputs.
 | `test_scene_consumers.py:test_exited_consumers_expire_and_reentry_replaces_them` | 55 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
 | `test_scene_consumers.py:test_old_epoch_and_out_of_order_stamps_do_not_overwrite` | 71 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
 | `test_scene_consumers.py:test_public_envelope_splits_sync_from_capability_and_derives_success` | 87 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
-| `test_scene_frozen.py:test_every_edit_save_and_reload_channel_is_rejected_with_an_explicit_error` | 29 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
-| `test_scene_frozen.py:test_rejection_is_a_result_not_a_silent_drop_or_exception` | 49 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
-| `test_scene_frozen.py:test_frozen_scene_still_serves_reads_motion_clock_and_resync` | 59 | [store/frozen-read-motion-resync.json](corpus/store/frozen-read-motion-resync.json) |
-| `test_scene_frozen.py:test_frozen_source_yaml_is_never_reloaded_or_written` | 72 | [store/frozen-source.json](corpus/store/frozen-source.json) |
-| `test_scene_frozen.py:test_unfrozen_default_keeps_every_existing_channel_open` | 85 | [store/external-edit-reload.json](corpus/store/external-edit-reload.json) |
-| `test_scene_frozen.py:test_scene_launch_forwards_the_frozen_argument_as_a_param` | 100 | ROS-bound launch forwarding; to be written as a C++ launch contract test from the Python intent. |
+| `test_scene_frozen.py:test_every_edit_save_and_reload_channel_is_rejected_with_an_explicit_error` | 26 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
+| `test_scene_frozen.py:test_rejection_is_a_result_not_a_silent_drop_or_exception` | 46 | [store/frozen-rejections.json](corpus/store/frozen-rejections.json) |
+| `test_scene_frozen.py:test_frozen_scene_still_serves_reads_motion_clock_and_resync` | 56 | [store/frozen-read-motion-resync.json](corpus/store/frozen-read-motion-resync.json) |
+| `test_scene_frozen.py:test_frozen_source_yaml_is_never_reloaded_or_written` | 69 | [store/frozen-source.json](corpus/store/frozen-source.json) |
+| `test_scene_frozen.py:test_unfrozen_default_keeps_every_existing_channel_open` | 82 | [store/external-edit-reload.json](corpus/store/external-edit-reload.json) |
 | `test_scene_generation.py:test_external_generator_runs_once_and_saves_exact_parameters` | 11 | [generation/external-once.json](corpus/generation/external-once.json) |
 | `test_scene_generation.py:test_generator_failure_does_not_publish_a_scene` | 33 | [generation/failure-no-publish.json](corpus/generation/failure-no-publish.json) |
-| `test_scene_projection.py:test_equals_json_dumps` | 153 | [document/envelope-json.json](corpus/document/envelope-json.json); Plain encoder cases only; consumer fields are dropped. JSON converts integer object keys to strings; cache branch identity is a later C++ test concern. |
-| `test_scene_projection.py:test_snapshots_markers_and_states_equal_the_uncached_projections` | 187 | [motion/rotating-twist.json](corpus/motion/rotating-twist.json); ROS-bound snapshots/markers/state projections are excluded; motion/rotating-twist records only the plain motion sample. To be written as C++ ROS output tests. |
-| `test_scene_scaling.py:test_gazebo_receives_one_batched_apply_per_revision` | 175 | ROS-bound node/application batching; to be written as a C++ test from the Python intent. |
-| `test_scene_scaling.py:test_unchanged_consumer_heartbeats_do_not_republish_the_document` | 181 | Dropped by decision: consumer registry and ROS-topic acknowledgement heartbeats. |
-| `test_scene_scaling.py:test_native_failure_and_recovery_change_the_published_view` | 187 | ROS-bound published synchronization view; store/native-failure and store/lost-reply-resync retain native applied status. To be written as a C++ output test. |
-| `test_scene_scaling.py:test_tick_and_definition_scan_the_obstacle_list_a_constant_number_of_times` | 202 | Performance-only obstacle scan counts (also ROS-bound). |
+| `test_scene_projection.py:test_equals_json_dumps` (retired source) | retired | [document/envelope-json.json](corpus/document/envelope-json.json); Plain encoder provenance retained. Native `Store.EnvelopesUseExactPythonTextIncludingCacheInvalidation` covers encoding; no Python ROS entry remains. |
+| `test_scene_projection.py:test_snapshots_markers_and_states_equal_the_uncached_projections` (retired source) | retired | [motion/rotating-twist.json](corpus/motion/rotating-twist.json); Plain motion provenance retained; live projection is owned by C++ `SceneNode.CachedProjectionsEqualUncachedResultsAcrossMotionEditsUndoAndDeletion`. |
 | `test_scene_store.py:test_obstacle_visual_color_is_product_amber` | 30 | [document/visual-color.json](corpus/document/visual-color.json) |
 | `test_scene_store.py:test_compounds_preserve_parts_and_geometry_has_explicit_sizes` | 39 | [document/compound-sizes.json](corpus/document/compound-sizes.json) |
 | `test_scene_store.py:test_invalid_geometry_does_not_become_another_shape` | 49 | [document/invalid-geometry.json](corpus/document/invalid-geometry.json) |
@@ -260,3 +255,12 @@ brief and marked as boundaries beyond the related test's original inputs.
 | `test_xrpc_control.py:test_simulation_waits_once_and_never_probes_entities` | 56 | Simulation-client transport sequencing; to be written as a C++ client integration test from the Python intent. |
 | `test_xrpc_control.py:test_failed_native_effect_does_not_promote_desired_or_persisted` | 83 | [store/native-failure.json](corpus/store/native-failure.json) |
 <!-- coverage:end -->
+
+The retired Python ROS projection/scaling/launch tests are not current runtime
+gates. Their effective native contracts are `SceneNode.BatchesNativeApplyAndRebuildsOnlyTheEditedObstacleMessagesAndMarkers`,
+`SceneNode.OnlyPublicChangesRepublishDocumentIncludingNativeFailureAndRecovery`,
+`SceneNode.StateContainsOnlyMovingObstaclesAndStaticTransformsRemainInDefinition`,
+the `SceneCompilation` resource/revision cases, and Adapter LiDAR `edge_test`/
+`transport_test`. Consumer-registry heartbeat behavior is retired. Pure frozen
+Store tests remain in Python and native store replay. This ownership map records
+where the contracts live; it does not claim those native suites ran in this retirement slice.

@@ -83,6 +83,16 @@
           "runId": {
             "type": "string",
             "fixedOnly": true
+          },
+          "resourceRoot": {
+            "type": "string",
+            "fixedOnly": true,
+            "default": ""
+          },
+          "compiledSceneFile": {
+            "type": "string",
+            "fixedOnly": true,
+            "default": ""
           }
         },
         "required": [
@@ -91,7 +101,9 @@
           "targetId",
           "rosMasterUri",
           "sceneFile",
-          "lidarSocketPath"
+          "lidarSocketPath",
+          "compiledSceneFile",
+          "resourceRoot"
         ]
       },
       "command": {
@@ -113,6 +125,8 @@
           "__master:=${rosMasterUri}",
           "__ip:=${rosIp}",
           "_scene_file:=${sceneFile}",
+          "_resource_root:=${resourceRoot}",
+          "_compiled_scene_file:=${compiledSceneFile}",
           "_working_file:=${workingFile}",
           "_generation_parameters_json:=${generationParametersJson}",
           "_save_directory:=${saveDirectory}",

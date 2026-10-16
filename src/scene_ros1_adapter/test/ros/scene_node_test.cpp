@@ -98,8 +98,12 @@ void checkProjections(SceneNode& node, Outputs& outputs) {
   EXPECT_EQ(snapshot.header.frame_id, document.at("frame"));
   EXPECT_EQ(snapshot.epoch, envelope.at("epoch"));
   EXPECT_EQ(snapshot.revision, envelope.at("revision"));
-  for (std::size_t i = 0; i < snapshot.obstacles.size(); ++i)
-    EXPECT_EQ(bytes(snapshot.obstacles[i]), bytes(obstacleMessage(document.at("obstacles")[i])));
+  const auto compiled = compile(document);
+  for (std::size_t i = 0; i < snapshot.obstacles.size(); ++i) {
+    const auto& item = compiled.at("obstacles")[i];
+    EXPECT_EQ(bytes(snapshot.obstacles[i]),
+              bytes(obstacleMessage(item, compiled.at("models").at(item.at("model").get<std::string>()))));
+  }
   node.tick();
   const auto& current = outputs.states.back();
   std::size_t dynamic_index = 0;
@@ -116,7 +120,9 @@ void checkProjections(SceneNode& node, Outputs& outputs) {
 
 TEST(SceneProjection, ObstacleMessagesPreserveGeometryPoseColorAndMotion) {
   auto definition = obstacle(obstacleAt(1, true));
-  const auto body = obstacleMessage(definition);
+  SceneProjection projection("/test");
+  const auto snapshot = projection.snapshot(compile(Json{{"schema", "xgc2.scene.v1"}, {"frame", "world"}, {"id", "test"}, {"obstacles", Json::array({definition})}}), "epoch", 1, 0);
+  const auto& body = snapshot.obstacles[0];
   EXPECT_EQ(body.id, "o1");
   EXPECT_EQ(body.name, "Obstacle 1");
   EXPECT_EQ(body.motion_type, "constant_twist");
@@ -124,13 +130,36 @@ TEST(SceneProjection, ObstacleMessagesPreserveGeometryPoseColorAndMotion) {
   EXPECT_DOUBLE_EQ(body.pose.position.x, 2.0);
   EXPECT_DOUBLE_EQ(body.pose.orientation.w, 1.0);
   ASSERT_EQ(body.parts.size(), 2u);
-  EXPECT_EQ(geometry_test::read(body.parts[0].geometry).type, geometry_test::GeometryType::Box);
-  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[0].geometry).size[2], 1.0);
+  EXPECT_EQ(geometry_test::read(snapshot.geometries[body.parts[0].geometry_index]).type, geometry_test::GeometryType::Box);
+  EXPECT_DOUBLE_EQ(geometry_test::read(snapshot.geometries[body.parts[0].geometry_index]).size[2], 1.0);
   EXPECT_FLOAT_EQ(body.parts[0].color.r, definition.at("parts")[0].at("color")[0].get<float>());
-  EXPECT_EQ(geometry_test::read(body.parts[1].geometry).type, geometry_test::GeometryType::Cylinder);
-  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[1].geometry).radius, 0.1);
-  EXPECT_DOUBLE_EQ(geometry_test::read(body.parts[1].geometry).height, 1.0);
-  EXPECT_TRUE(geometry_test::read(body.parts[1].geometry).triangles.empty());
+  EXPECT_EQ(geometry_test::read(snapshot.geometries[body.parts[1].geometry_index]).type, geometry_test::GeometryType::Cylinder);
+  EXPECT_DOUBLE_EQ(geometry_test::read(snapshot.geometries[body.parts[1].geometry_index]).radius, 0.1);
+  EXPECT_DOUBLE_EQ(geometry_test::read(snapshot.geometries[body.parts[1].geometry_index]).height, 1.0);
+  EXPECT_TRUE(geometry_test::read(snapshot.geometries[body.parts[1].geometry_index]).triangles.empty());
+}
+
+TEST(SceneProjection, RepeatedGeometryTableReindexesCachedBodiesWithoutMutatingPriorSnapshot) {
+  auto value = document(scene(100));
+  SceneProjection projection("/table/");
+  const auto first = projection.snapshot(compile(value), "epoch", 1, 0);
+  ASSERT_EQ(first.geometries.size(), 2u);
+  ASSERT_EQ(first.obstacles.size(), 100u);
+  for (const auto& body : first.obstacles) {
+    EXPECT_EQ(body.parts[0].geometry_index, 0u);
+    EXPECT_EQ(body.parts[1].geometry_index, 1u);
+  }
+  auto different = value.at("obstacles")[0];
+  different["id"] = "different";
+  different["parts"][0]["geometry"]["size"][0] = 3.0;
+  value["obstacles"].insert(value["obstacles"].begin(), different);
+  const auto before = projection.snapshot(compile(value), "epoch", 2, 0);
+  EXPECT_EQ(before.obstacles[1].parts[0].geometry_index, 2u);
+  value["obstacles"].erase(value["obstacles"].begin());
+  const auto after = projection.snapshot(compile(value), "epoch", 3, 0);
+  ASSERT_EQ(after.geometries.size(), 2u);
+  EXPECT_EQ(after.obstacles[0].parts[0].geometry_index, 0u);
+  EXPECT_EQ(before.obstacles[1].parts[0].geometry_index, 2u);
 }
 
 TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
@@ -143,9 +172,14 @@ TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
       {"geometry", Json{{"type", "ring"}, {"radii", Json::array({1.2, 1.0})}, {"tubeRadius", 0.05}}}}});
   const auto definition = obstacle(raw);
   xgc2_geometry_msgs::SceneSnapshot snapshot;
+  snapshot.ground.mode = xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE;
   snapshot.header.frame_id = "world"; snapshot.scene_id = "ring";
   snapshot.epoch = "ring-epoch"; snapshot.revision = 7;
-  snapshot.obstacles.push_back(obstacleMessage(definition));
+  snapshot.geometries.push_back(geometry_test::wire(geometry_test::Geometry::ring({1.2, 1.0}, .05)));
+  const auto compiled = compile(Json{{"schema", "xgc2.scene.v1"}, {"id", "ring"}, {"frame", "world"},
+                                      {"obstacles", Json::array({definition})}});
+  const auto& item = compiled.at("obstacles")[0];
+  snapshot.obstacles.push_back(obstacleMessage(item, compiled.at("models").at(item.at("model").get<std::string>())));
   auto encoded = bytes(snapshot);
   ros::serialization::IStream input(encoded.data(), encoded.size());
   xgc2_geometry_msgs::SceneSnapshot decoded;
@@ -169,8 +203,8 @@ TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
   EXPECT_DOUBLE_EQ(part.pose.position.z, 0.4);
   EXPECT_DOUBLE_EQ(part.pose.orientation.x, std::sin(0.23));
   EXPECT_DOUBLE_EQ(part.pose.orientation.w, std::cos(0.23));
-  EXPECT_EQ(part.geometry.type, static_cast<std::uint32_t>(geometry_test::GeometryType::Ring));
-  const auto ring_geometry = geometry_test::read(part.geometry);
+  EXPECT_EQ(decoded.geometries[part.geometry_index].type, static_cast<std::uint32_t>(geometry_test::GeometryType::Ring));
+  const auto ring_geometry = geometry_test::read(decoded.geometries[part.geometry_index]);
   EXPECT_DOUBLE_EQ(ring_geometry.radii[0], 1.2);
   EXPECT_DOUBLE_EQ(ring_geometry.radii[1], 1.0);
   EXPECT_DOUBLE_EQ(ring_geometry.tubeRadius, 0.05);
@@ -183,11 +217,12 @@ TEST(SceneProjection, RingRoundTripPreservesNamedFieldsAndBothPoses) {
 
 TEST(SceneProjection, RingMarkerUsesLocalSurfacePointsWithOriginalPoseAndColor) {
   xgc2_geometry_msgs::ScenePart part;
-  part.id = "ring"; part.geometry = geometry_test::wire(geometry_test::Geometry::ring({2, 1}, .8));
+  xgc2_geometry_msgs::SceneGeometry geometry;
+  part.id = "ring"; geometry = geometry_test::wire(geometry_test::Geometry::ring({2, 1}, .8));
   part.pose.position.x = 3; part.pose.position.y = -2; part.pose.position.z = 1;
   part.pose.orientation.x = std::sin(.4); part.pose.orientation.w = std::cos(.4);
   part.color.r = 1; part.color.g = .5; part.color.b = .1; part.color.a = 1;
-  const auto markers = partMarkers("o", part, "body-frame");
+  const auto markers = partMarkers("o", part, geometry_test::read(geometry), "body-frame");
   ASSERT_EQ(markers.size(), 1u);
   const auto& marker = markers.front();
   EXPECT_EQ(marker.type, visualization_msgs::Marker::POINTS);
@@ -202,14 +237,15 @@ TEST(SceneProjection, RingMarkerUsesLocalSurfacePointsWithOriginalPoseAndColor) 
 
 TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {
   xgc2_geometry_msgs::ScenePart part;
+  xgc2_geometry_msgs::SceneGeometry geometry;
   part.id = "capsule";
-  part.geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 2));
+  geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 2));
   part.pose.position.x = 3; part.pose.position.y = 4; part.pose.position.z = 5;
   const double norm = std::sqrt(0.3 * 0.3 + 0.5 * 0.5 + 0.2 * 0.2 + 0.79 * 0.79);
   auto& q = part.pose.orientation;
   q.x = 0.3 / norm; q.y = 0.5 / norm; q.z = 0.2 / norm; q.w = 0.79 / norm;
   part.color.r = 1; part.color.a = 0.8;
-  const auto markers = partMarkers("o", part, "frame");
+  const auto markers = partMarkers("o", part, geometry_test::read(geometry), "frame");
   ASSERT_EQ(markers.size(), 3u);
   EXPECT_EQ(markers[0].type, visualization_msgs::Marker::CYLINDER);
   EXPECT_DOUBLE_EQ(markers[0].scale.z, 2);
@@ -227,14 +263,14 @@ TEST(SceneProjection, MarkersKeepCapsuleCapsAndConvexTrianglesInThePartFrame) {
     EXPECT_NEAR(cap.pose.position.y, 4 + direction * 2 * (q.y * q.z - q.w * q.x), 1e-14);
     EXPECT_NEAR(cap.pose.position.z, 5 + direction * (1 - 2 * (q.x * q.x + q.y * q.y)), 1e-14);
   }
-  part.geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 0));
-  const auto zero = partMarkers("o", part, "frame");
+  geometry = geometry_test::wire(geometry_test::Geometry::capsule(.25, 0));
+  const auto zero = partMarkers("o", part, geometry_test::read(geometry), "frame");
   ASSERT_EQ(zero.size(), 1u);
   EXPECT_EQ(zero[0].id, 1);
   EXPECT_DOUBLE_EQ(zero[0].pose.position.z, 5);
-  part.geometry = geometry_test::wire(geometry_test::Geometry::convex(
+  geometry = geometry_test::wire(geometry_test::Geometry::convex(
       {{1, 0, 0}, {0, 2, 0}, {0, 0, 3}, {0, 0, 0}}, {{2, 0, 1}}));
-  const auto convex = partMarkers("o", part, "frame");
+  const auto convex = partMarkers("o", part, geometry_test::read(geometry), "frame");
   ASSERT_EQ(convex.size(), 1u);
   EXPECT_EQ(convex[0].type, visualization_msgs::Marker::TRIANGLE_LIST);
   ASSERT_EQ(convex[0].points.size(), 3u);
@@ -250,17 +286,18 @@ TEST(SceneProjection, FiniteHalfspacesAndTemporaryHullHaveCachedLocalSurfaces) {
       Geometry::halfspaces({{1,0,0,-1},{-1,0,0,-1},{0,1,0,-1},{0,-1,0,-1},{0,0,1,-1},{0,0,-1,-1}})};
   for (const auto& shape : shapes) {
     xgc2_geometry_msgs::ScenePart part;
+  xgc2_geometry_msgs::SceneGeometry geometry;
     part.id = "finite";
-    part.geometry = geometry_test::wire(shape);
+    geometry = geometry_test::wire(shape);
     part.pose.position.x = 9;
     part.pose.orientation.w = 1;
-    const auto original = bytes(part.geometry);
-    const auto markers = partMarkers("o", part, "part-frame");
+    const auto original = bytes(geometry);
+    const auto markers = partMarkers("o", part, geometry_test::read(geometry), "part-frame");
     ASSERT_EQ(markers.size(), 1u);
     EXPECT_EQ(markers[0].type, visualization_msgs::Marker::TRIANGLE_LIST);
     EXPECT_EQ(markers[0].points.size(), shape.type == geometry_test::GeometryType::Convex ? 12u : 36u);
     EXPECT_EQ(bytes(markers[0].pose), bytes(part.pose));
-    EXPECT_EQ(bytes(part.geometry), original);
+    EXPECT_EQ(bytes(geometry), original);
     for (const auto& point : markers[0].points) {
       EXPECT_LE(std::abs(point.x), 1);
       EXPECT_LE(std::abs(point.y), 1);
@@ -330,10 +367,10 @@ TEST(SceneNode, StateContainsOnlyMovingObstaclesAndStaticTransformsRemainInDefin
 TEST(SceneProjection, CacheEqualityPreservesSignedZeroInMessages) {
   auto initial = document(scene(1));
   SceneProjection projection("/run/");
-  const auto first = projection.snapshot(initial, "epoch", 1, 100);
+  const auto first = projection.snapshot(compile(initial), "epoch", 1, 100);
   EXPECT_FALSE(std::signbit(first.obstacles[0].pose.position.x));
   initial["obstacles"][0]["pose"]["position"][0] = -0.0;
-  const auto changed = projection.snapshot(initial, "epoch", 2, 100);
+  const auto changed = projection.snapshot(compile(initial), "epoch", 2, 100);
   EXPECT_TRUE(std::signbit(changed.obstacles[0].pose.position.x));
   EXPECT_EQ(projection.counters().obstacle_messages, 2u);
 }

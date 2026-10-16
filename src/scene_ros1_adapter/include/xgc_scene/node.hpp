@@ -13,7 +13,7 @@
 namespace xgc_scene {
 
 struct SceneParameters {
-  std::filesystem::path scene_file, working_file, save_directory;
+  std::filesystem::path scene_file, working_file, save_directory, resource_root, compiled_scene_file;
   Json generation_parameters = Json::object();
   std::string target_id, xrpc_socket, profile = "gazebo", simulation_endpoint;
   bool frozen = false;
@@ -52,6 +52,7 @@ class SceneNode final : public AuthoringNode {
   void queueSimulation();
   void receiveSimulation();
   void addPublicView(Json& envelope);
+  std::shared_ptr<const Json> compiledFor(const Json& document, const std::string& epoch, std::uint64_t revision);
 
   // Lane 0 owns store hooks and publications. Peer IO never holds this lock.
   std::recursive_mutex mutex_;
@@ -65,11 +66,21 @@ class SceneNode final : public AuthoringNode {
   std::atomic<bool> online_{true};
   std::optional<Json> native_report_, published_view_;
   std::optional<xgc2_geometry_msgs::SceneSnapshot> applied_snapshot_;
-  Json definition_;
+  struct CompiledDefinition {
+    std::string epoch;
+    std::uint64_t revision;
+    std::shared_ptr<const Json> value;
+  };
+  std::optional<CompiledDefinition> compiled_;
+  std::optional<Json> startup_compiled_;
   std::string motion_operation_;
   // Store receipts contain core fields. These bounded public projections keep
   // native reports and online state at receipt time, including on replay.
-  std::unordered_map<std::string, Json> public_receipts_;
+  struct PublicReceipt {
+    Json fields;
+    std::shared_ptr<const Json> compiled;
+  };
+  std::unordered_map<std::string, PublicReceipt> public_receipts_;
 };
 
 }  // namespace xgc_scene

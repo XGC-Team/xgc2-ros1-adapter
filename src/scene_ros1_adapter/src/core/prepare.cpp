@@ -603,19 +603,18 @@ Json prepare(const Json& request) {
     const auto simulators = manifest.value("simulators", Json::object());
     if (!simulators.is_object() || !simulators.value("gazebo", Json()).is_object())
       throw SceneError("The asset must declare Gazebo geometry support");
-    const auto mode = simulators.at("gazebo").value("geometry", Json());
-    if (mode != "document" && mode != "native") throw SceneError("Gazebo geometry must be document or native");
-    project_geometry = mode == "document";
-    scene_file = attachment(directory, manifest.value("sceneDocument", Json()), project_geometry);
+    for (const auto& support : simulators)
+      if (!support.is_object() || support.value("geometry", Json()) != "document")
+        throw SceneError("Scene asset geometry must be document");
+    project_geometry = true;
+    scene_file = attachment(directory, manifest.value("sceneDocument", Json()), true);
     if (truth(manifest.value("gazeboWorld", Json()))) world = attachment(directory, manifest.at("gazeboWorld"), true);
-    else if (project_geometry) {
+    else {
       world = kDefaultWorld;
       if (!fs::is_regular_file(world)) throw SceneError("The provider editable-world template is not installed");
       template_world = true;
-    } else throw SceneError("Native geometry requires the original Gazebo world attachment");
-    frozen = !(project_geometry && editable.get<bool>() && std::all_of(simulators.begin(), simulators.end(), [](const auto& support) {
-      return support.is_object() && support.value("geometry", Json()) == "document";
-    }));
+    }
+    frozen = !editable.get<bool>();
     media_file = attachment(directory, manifest.value("media", Json()));
     camera_file = attachment(directory, manifest.value("cameraInfo", Json()));
     extrinsic_file = attachment(directory, manifest.value("extrinsic", Json()));
@@ -701,18 +700,18 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
       name.get_ref<const std::string&>().find("..") != std::string::npos) throw SceneError("Invalid scene asset name");
   if (!resource_root.is_absolute() || !fs::is_directory(resource_root)) throw SceneError("An explicit existing resource root is required");
   const auto root = fs::canonical(resource_root);
-  const auto directory = checkedPath((root / "Shared" / "Scenes" / name.get<std::string>()).string(), root / "Shared" / "Scenes", true);
-  const auto manifest = manifestAt(directory);
+  auto directory = checkedPath((root / "Shared" / "Scenes" / name.get<std::string>()).string(), root / "Shared" / "Scenes", true);
+  auto manifest = manifestAt(directory);
   const auto supports = manifest.value("simulators", Json());
   const bool physical = simulator == "none";
   if (!supports.is_object() || (!physical && (simulator != "gazebo" && simulator != "xsim")) ||
       (!physical && !supports.value(simulator.get<std::string>(), Json()).is_object()))
     throw SceneError("The selected simulator is not supported by the asset");
-  const auto mode = physical ? Json("document") : supports.at(simulator.get<std::string>()).value("geometry", Json());
-  if ((mode != "document" && mode != "native") || (simulator == "xsim" && mode != "document"))
-    throw SceneError("Unsupported geometry for the selected simulator");
-  auto scene = attachment(directory, manifest.value("sceneDocument", Json()), mode == "document");
-  auto world = simulator == "gazebo" ? attachment(directory, manifest.value("gazeboWorld", Json()), mode == "native") : "";
+  for (const auto& support : supports)
+    if (!support.is_object() || support.value("geometry", Json()) != "document")
+      throw SceneError("Scene asset geometry must be document");
+  auto scene = attachment(directory, manifest.value("sceneDocument", Json()), true);
+  auto world = simulator == "gazebo" ? attachment(directory, manifest.value("gazeboWorld", Json())) : "";
   const bool template_world = simulator == "gazebo" && world.empty();
   if (template_world) {
     world = kDefaultWorld;
@@ -733,9 +732,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   auto obstacle_input = manifest.value("obstacleInput", Json());
   if (!truth(obstacle_input)) obstacle_input = Json::object();
   const bool random = obstacle_input.value("mode", Json()) == "random";
-  const bool editable = !locked && mode == "document" && std::all_of(supports.begin(), supports.end(), [](const auto& support) {
-    return support.is_object() && support.value("geometry", Json()) == "document";
-  });
+  const bool editable = !locked;
   std::string working;
   const auto experiment = context.value("experimentResourceId", Json(""));
   if ((editable || random) && truth(experiment)) {
@@ -750,12 +747,49 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
       output /= run.get<std::string>();
     }
     workspaceChildren(grant, output);
-    working = (output / "scene-document.yaml").string();
+    working = (output / (random ? fs::path(scene).filename() : fs::path("scene-document.yaml"))).string();
   } else if (random) throw SceneError("Random geometry requires an Experiment workspace");
-  if (!scene.empty() && random) scene = resolve(scene, working, authored.value("generation", Json::object()), 8 * 1024 * 1024).second;
+  if (random) {
+    std::vector<fs::path> files;
+    for (const auto& entry : fs::recursive_directory_iterator(directory)) {
+      const auto status = entry.symlink_status();
+      if (fs::is_symlink(status)) throw SceneError("Runtime scene assets cannot include symbolic links");
+      if (fs::is_directory(status)) continue;
+      if (!fs::is_regular_file(status)) throw SceneError("Runtime scene assets support only regular files");
+      if (entry.path().filename() != "manifest.json" && entry.path() != fs::path(scene)) files.push_back(entry.path());
+    }
+    // Validate sealed references before producing the runtime asset. The
+    // expanded document is the only attachment whose bytes and digest change.
+    for (const auto* key : {"gazeboWorld", "media", "cameraInfo", "extrinsic", "pointCloud", "preview", "fieldSite", "recordingWindow"})
+      attachment(directory, manifest.value(key, Json()));
+    if (fs::is_symlink(working)) throw SceneError("Runtime scene document cannot be a symlink");
+    const auto expanded = resolve(scene, working, authored.value("generation", Json::object()), 8 * 1024 * 1024);
+    if (expanded.second != working) atomic(working, dumpYaml(expanded.first.first));
+    scene = working;
+    const auto output = fs::path(working).parent_path();
+    for (const auto& file : files) {
+      const auto target = output / fs::relative(file, directory);
+      if (fs::is_symlink(target) || (fs::exists(target) &&
+          (!fs::is_regular_file(target) || sha256(target) != sha256(file))))
+        throw SceneError("Runtime scene attachment conflicts with an existing file: " + file.filename().string());
+      if (!fs::exists(target)) {
+        fs::create_directories(target.parent_path());
+        fs::copy_file(file, target);
+      }
+    }
+    manifest["sceneDocument"]["sha256"] = sha256(scene);
+    manifest["obstacleInput"] = Json{{"mode", "fixed"}, {"format", "geometry"}};
+    const auto encoded = dumpJson(manifest);
+    const auto target = output / "manifest.json";
+    if (!fs::exists(target) || read(target, 65536) != encoded) atomic(target, encoded);
+    directory = output;
+    if (simulator == "gazebo" && truth(manifest.value("gazeboWorld", Json())))
+      world = attachment(directory, manifest.at("gazeboWorld"), true);
+  }
   Json value{{"assetDirectory", directory.string()}, {"simulator", simulator}, {"sceneFile", scene}, {"worldFile", world},
+             {"sceneDocumentFile", fs::path(scene).filename().string()},
              {"worldAttachment", truth(manifest.value("gazeboWorld", Json())) && simulator == "gazebo"},
-             {"projectGeometry", simulator == "gazebo" && mode == "document"}, {"workingFile", working}, {"frozen", locked || working.empty()},
+             {"projectGeometry", simulator == "gazebo"}, {"workingFile", working}, {"frozen", locked || working.empty()},
              {"parameters", physics}, {"generationParametersJson", ""}};
   // dumpJson supplies Python's number spelling and nonfinite rejection; compact
   // separators are selected without altering spaces inside strings.
@@ -774,6 +808,23 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
     return encoded + (item.is_object() ? "}" : "]");
   };
   value["generationParametersJson"] = compact(generation_json);
+  {
+    const auto session = context.value("sessionId", Json());
+    if (!shortIdentity(session)) throw SceneError("Compiled scene preparation requires the actual Session identity");
+    const auto grant = providerPath(workspace_root);
+    if (!grant.is_absolute() || !fs::is_directory(grant) || fs::is_symlink(grant))
+      throw SceneError("An existing provider workspace grant is required");
+    const auto output = fs::canonical(grant) / "compiled-scenes" / session.get<std::string>();
+    workspaceChildren(grant, output);
+    // Resolve the editor's selected working definition before compiling. The
+    // sealed asset directory remains the resource root even when the working
+    // YAML lives elsewhere. Only this finite startup command parses resources.
+    const auto initial = !working.empty() && fs::is_regular_file(working)
+        ? load(working).first : resolve(scene, working, generation_json).first.first;
+    const auto path = output / "scene-document.expanded.json";
+    atomic(path, dumpJson(compile(initial, directory.string())));
+    value["compiledSceneFile"] = path.string();
+  }
   value["mediaFile"] = attachment(directory, manifest.value("media", Json()));
   value["cameraInfoFile"] = attachment(directory, manifest.value("cameraInfo", Json()));
   value["extrinsicFile"] = attachment(directory, manifest.value("extrinsic", Json()));

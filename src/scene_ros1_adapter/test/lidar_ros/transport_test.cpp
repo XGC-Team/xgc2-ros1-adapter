@@ -79,6 +79,7 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   Outputs outputs;
   SceneTap tap(outputs, edge.engine(), [] { return ros::Time::now().toNSec(); });
   xgc2_geometry_msgs::SceneSnapshot definition;
+  definition.ground.mode = xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE;
   definition.header.frame_id = "world";
   definition.epoch = "first";
   definition.revision = 1;
@@ -88,7 +89,8 @@ TEST(LidarTransport, OwnedMasterTwoWorkersDemandBodiesWireLatchAndControl) {
   obstacle.pose.position.x = 4;
   xgc2_geometry_msgs::ScenePart part;
   part.pose.orientation.w = 1;
-  part.geometry = geometry_test::wire(geometry_test::Geometry::box({1, 4, 2}));
+  definition.geometries.push_back(geometry_test::wire(geometry_test::Geometry::box({1, 4, 2})));
+  part.geometry_index = 0;
   obstacle.parts.push_back(part);
   definition.obstacles.push_back(obstacle);
   tap.application("first", 1, true);

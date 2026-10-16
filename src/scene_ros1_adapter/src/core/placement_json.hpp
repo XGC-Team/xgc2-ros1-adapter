@@ -26,7 +26,9 @@ inline Json fromPose(const xgc2_math::Pose3& value) {
 inline xgc2_math::scene::Motion toMotion(const Json& value) {
   xgc2_math::scene::Motion result;
   const auto& type = value.at("type");
-  if (type == "constant_twist") {
+  if (type == "hold") {
+    return result;
+  } else if (type == "constant_twist") {
     result.type = xgc2_math::scene::Motion::kConstantTwist;
     result.linear = toVector(value.at("linear"));
     result.angular = toVector(value.at("angular"));
@@ -41,6 +43,8 @@ inline xgc2_math::scene::Motion toMotion(const Json& value) {
     result.radius = value.at("radius").get<double>();
     result.angular_speed = value.at("angular_speed").get<double>();
     result.phase = value.at("phase").get<double>();
+  } else {
+    throw SceneError("Unsupported native motion: " + (type.is_string() ? type.get<std::string>() : type.dump()));
   }
   return result;
 }

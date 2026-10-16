@@ -1,5 +1,6 @@
 #include "xgc_scene/ros_outputs.hpp"
 
+#include "xgc_scene/document.hpp"
 #include "xgc_scene/motion.hpp"
 #include "xgc_scene/yaml_io.hpp"
 #include <xgc2_math/scene/ellipse_ring.hpp>
@@ -8,6 +9,7 @@
 #include <xgc2_math/scene/scene_conversion.hpp>
 
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 
@@ -46,28 +48,49 @@ geometry_msgs::Point point(const Json& value) {
   return result;
 }
 ros::Time time(double seconds) { ros::Time result; result.fromSec(seconds); return result; }
+void requireCompiled(const Json& document) {
+  if (document.value("schema", std::string()) != kCompiledSchema ||
+      !document.at("geometries").is_array() || !document.at("models").is_object() ||
+      !document.at("obstacles").is_array())
+    throw SceneError("SceneProjection requires xgc2.scene.compiled.v1");
+}
+std::uint32_t geometryIndex(const Json& part, std::size_t count) {
+  const auto& value = part.at("geometryIndex");
+  if (part.contains("geometry") || !value.is_number_integer() ||
+      (!value.is_number_unsigned() && value.get<std::int64_t>() < 0))
+    throw SceneError("Compiled part requires a nonnegative geometryIndex");
+  const auto index = value.get<std::uint64_t>();
+  if (index >= count || index > std::numeric_limits<std::uint32_t>::max())
+    throw SceneError("Compiled geometryIndex out of range");
+  return static_cast<std::uint32_t>(index);
+}
+std::string motionType(const Json& item) {
+  const auto type = item.at("motion").at("type").get<std::string>();
+  if (type != "hold" && type != "constant_twist" && type != "ping_pong" && type != "circle")
+    throw SceneError("Unsupported Scene projection motion: " + type);
+  return type;
+}
+xgc2_geometry_msgs::ScenePart partMessage(const Json& definition) {
+  xgc2_geometry_msgs::ScenePart part;
+  part.id = definition.at("id").get<std::string>();
+  setPose(part.pose, definition.at("pose"));
+  part.geometry_index = definition.at("geometryIndex").get<std::uint32_t>();
+  part.color.r = definition.at("color")[0].get<float>();
+  part.color.g = definition.at("color")[1].get<float>();
+  part.color.b = definition.at("color")[2].get<float>();
+  part.color.a = definition.at("color")[3].get<float>();
+  return part;
+}
 }  // namespace
 
-xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item) {
+xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item, const Json& model) {
   xgc2_geometry_msgs::SceneObstacle body;
   body.id = item.at("id").get<std::string>();
   body.name = item.at("name").get<std::string>();
-  body.motion_type = item.at("motion").at("type").get<std::string>();
+  body.motion_type = motionType(item);
   body.dynamic = body.motion_type != "hold";
   setPose(body.pose, item.at("pose"));
-  for (const auto& definition : item.at("parts")) {
-    xgc2_geometry_msgs::ScenePart part;
-    part.id = definition.at("id").get<std::string>();
-    setPose(part.pose, definition.at("pose"));
-    const auto payload = xgc2_math::geometry::geometryFromJson(definition.at("geometry"));
-    part.geometry.type = payload.type;
-    part.geometry.parameters = payload.parameters;
-    part.color.r = definition.at("color")[0].get<float>();
-    part.color.g = definition.at("color")[1].get<float>();
-    part.color.b = definition.at("color")[2].get<float>();
-    part.color.a = definition.at("color")[3].get<float>();
-    body.parts.push_back(std::move(part));
-  }
+  for (const auto& definition : model.at("parts")) body.parts.push_back(partMessage(definition));
   return body;
 }
 
@@ -85,9 +108,9 @@ xgc2_geometry_msgs::SceneObstacleState stateMessage(const Json& value) {
 }
 
 std::vector<visualization_msgs::Marker> partMarkers(
-    const std::string& oid, const xgc2_geometry_msgs::ScenePart& part, const std::string& frame) {
+    const std::string& oid, const xgc2_geometry_msgs::ScenePart& part,
+    const xgc2_math::geometry::Geometry& geometry, const std::string& frame) {
   using Marker = visualization_msgs::Marker;
-  const auto geometry = xgc2_math::geometry::decodeGeometry({part.geometry.type, part.geometry.parameters});
   using Type = xgc2_math::geometry::GeometryType;
   Marker marker;
   marker.header.frame_id = frame;
@@ -150,8 +173,10 @@ std::vector<visualization_msgs::Marker> partMarkers(
              (geometry.type == Type::Convex && geometry.triangles.empty())) {
     // A finite surface is derived only for this cached visualization. Keep
     // the original H/V payload intact for numerical and physical consumers.
-    const auto numeric = xgc2_math::scene::obstacleFromGeometry({part.geometry.type, part.geometry.parameters});
-    const auto surface = xgc2_math::scene::convexMeshOf(numeric.vertices);
+    const auto finite = geometry.type == Type::Halfspaces
+        ? xgc2_math::geometry::preparation_detail::finiteHalfspaces(geometry, {}) : geometry;
+    const auto surface = xgc2_math::scene::convexMeshOf(
+        xgc2_math::geometry::preparation_detail::eigenVertices(finite));
     marker.type = Marker::TRIANGLE_LIST;
     for (const auto index : surface.triangles) {
       const auto& vertex = surface.vertices.at(index);
@@ -177,16 +202,61 @@ std::vector<visualization_msgs::Marker> partMarkers(
 class SceneProjection::Impl {
  public:
   explicit Impl(const std::string& name_space) : prefix("xgc_scene_" + digest(name_space).substr(0, 12)) {}
-  struct Body { Json value; xgc2_geometry_msgs::SceneObstacle message; };
-  struct Markers { Json value; std::string frame; std::vector<visualization_msgs::Marker> messages; };
+  struct Model {
+    Json value;
+    std::vector<std::shared_ptr<const Json>> geometries;
+  };
+  struct Body { Json value; std::shared_ptr<const Model> model; xgc2_geometry_msgs::SceneObstacle message; };
+  struct Markers { Json value; std::shared_ptr<const Model> model; std::string frame; std::vector<visualization_msgs::Marker> messages; };
   struct Entry { Json value; };
   std::string prefix, epoch, parent;
   std::uint64_t revision = 0;
   Counters counts;
   std::unordered_map<std::string, std::shared_ptr<const Body>> bodies;
   std::unordered_map<std::string, std::shared_ptr<const Markers>> markers;
+  std::shared_ptr<const Markers> ground_markers;
+  std::unordered_map<std::string, std::shared_ptr<const Model>> models;
+  std::vector<std::shared_ptr<const Json>> geometries;
   std::unordered_map<std::string, std::string> frames;
   std::vector<Entry> entries;
+
+  void prepareModels(const Json& document) {
+    requireCompiled(document);
+    std::vector<std::shared_ptr<const Json>> definitions;
+    definitions.reserve(document.at("geometries").size());
+    for (const auto& geometry : document.at("geometries")) {
+      const auto index = definitions.size();
+      if (index < geometries.size() && sameProjectionValue(*geometries[index], geometry))
+        definitions.push_back(geometries[index]);
+      else definitions.push_back(std::make_shared<const Json>(geometry));
+    }
+    decltype(models) next;
+    for (auto it = document.at("models").begin(); it != document.at("models").end(); ++it) {
+      std::vector<std::shared_ptr<const Json>> references;
+      for (const auto& part : it.value().at("parts"))
+        references.push_back(definitions[geometryIndex(part, definitions.size())]);
+      const auto previous = models.find(it.key());
+      if (previous != models.end() && sameProjectionValue(previous->second->value, it.value()) &&
+          previous->second->geometries == references) next[it.key()] = previous->second;
+      else next[it.key()] = std::make_shared<const Model>(Model{it.value(), std::move(references)});
+    }
+    for (const auto& item : document.at("obstacles")) {
+      if (item.contains("parts") || next.count(item.at("model").get<std::string>()) == 0)
+        throw SceneError("Compiled obstacle requires a known model reference");
+      motionType(item); // Unknown motion must never become an implicit hold state.
+    }
+    const auto& ground = document.at("ground");
+    const auto mode = ground.at("mode").get<std::string>();
+    if (mode == xgc2_geometry_msgs::SceneGround::MODE_MODEL) {
+      if (next.count(ground.at("model").get<std::string>()) == 0)
+        throw SceneError("Compiled ground requires a known model reference");
+    } else if (mode == xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE) {
+      if (!std::isfinite(ground.at("z").get<double>())) throw SceneError("Ground z must be finite");
+    } else if (mode != xgc2_geometry_msgs::SceneGround::MODE_NONE)
+      throw SceneError("Unsupported Scene ground mode: " + mode);
+    geometries = std::move(definitions);
+    models = std::move(next);
+  }
 
   geometry_msgs::TransformStamped transform(const std::string& oid, const geometry_msgs::Pose& pose, const ros::Time& stamp) const {
     geometry_msgs::TransformStamped result;
@@ -208,6 +278,7 @@ const std::string& SceneProjection::frame(const std::string& oid) const { return
 
 xgc2_geometry_msgs::SceneSnapshot SceneProjection::snapshot(const Json& document, const std::string& epoch,
                                                           std::uint64_t revision, double stamp) {
+  impl_->prepareModels(document);
   xgc2_geometry_msgs::SceneSnapshot result;
   result.header.stamp = time(stamp);
   result.header.frame_id = document.at("frame").get<std::string>();
@@ -215,15 +286,36 @@ xgc2_geometry_msgs::SceneSnapshot SceneProjection::snapshot(const Json& document
   result.epoch = epoch;
   result.revision = revision;
   decltype(impl_->bodies) bodies;
+  result.geometries.reserve(document.at("geometries").size());
+  for (const auto& definition : document.at("geometries")) {
+    const auto payload = xgc2_math::geometry::geometryFromJson(definition);
+    xgc2_geometry_msgs::SceneGeometry message;
+    message.type = payload.type;
+    message.parameters = payload.parameters;
+    result.geometries.push_back(std::move(message));
+    ++impl_->counts.geometry_encodes;
+  }
+  const auto& ground = document.at("ground");
+  result.ground.mode = ground.at("mode").get<std::string>();
+  result.ground.pose.orientation.w = 1;
+  if (result.ground.mode == xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE)
+    result.ground.z = ground.at("z").get<double>();
+  else if (result.ground.mode == xgc2_geometry_msgs::SceneGround::MODE_MODEL) {
+    setPose(result.ground.pose, ground.at("pose"));
+    const auto& model = impl_->models.at(ground.at("model").get<std::string>());
+    for (const auto& part : model->value.at("parts")) result.ground.parts.push_back(partMessage(part));
+  }
   ++impl_->counts.snapshot_scans;
   for (const auto& item : document.at("obstacles")) {
     const auto id = item.at("id").get<std::string>();
+    const auto& model = impl_->models.at(item.at("model").get<std::string>());
     const auto cached = impl_->bodies.find(id);
     std::shared_ptr<const Impl::Body> body;
-    if (cached != impl_->bodies.end() && sameProjectionValue(cached->second->value, item)) body = cached->second;
+    if (cached != impl_->bodies.end() && sameProjectionValue(cached->second->value, item) &&
+        cached->second->model == model) body = cached->second;
     else {
       ++impl_->counts.obstacle_messages;
-      body = std::make_shared<const Impl::Body>(Impl::Body{item, obstacleMessage(item)});
+      body = std::make_shared<const Impl::Body>(Impl::Body{item, model, obstacleMessage(item, model->value)});
     }
     result.obstacles.push_back(body->message);
     bodies[id] = std::move(body);
@@ -234,6 +326,7 @@ xgc2_geometry_msgs::SceneSnapshot SceneProjection::snapshot(const Json& document
 
 void SceneProjection::definition(const Json& document, const std::string& epoch, std::uint64_t revision,
                                  const xgc2_geometry_msgs::SceneSnapshot& snapshot, RosOutputs& outputs) {
+  impl_->prepareModels(document);
   if (impl_->epoch != epoch || impl_->revision != revision) {
     impl_->epoch = epoch;
     impl_->revision = revision;
@@ -248,6 +341,19 @@ void SceneProjection::definition(const Json& document, const std::string& epoch,
       if (!held) impl_->entries.push_back(Impl::Entry{item});
     }
   }
+  std::vector<xgc2_math::geometry::Geometry> geometries;
+  geometries.reserve(snapshot.geometries.size());
+  for (const auto& geometry : snapshot.geometries)
+    geometries.push_back(xgc2_math::geometry::decodeGeometry({geometry.type, geometry.parameters}));
+  for (const auto& obstacle : snapshot.obstacles)
+    for (const auto& part : obstacle.parts)
+      if (part.geometry_index >= geometries.size()) throw std::invalid_argument("snapshot geometry index out of range");
+  if (snapshot.ground.mode == xgc2_geometry_msgs::SceneGround::MODE_MODEL) {
+    for (const auto& part : snapshot.ground.parts)
+      if (part.geometry_index >= geometries.size()) throw SceneError("ground geometry index out of range");
+  } else if (snapshot.ground.mode != xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE &&
+             snapshot.ground.mode != xgc2_geometry_msgs::SceneGround::MODE_NONE)
+    throw SceneError("Unsupported Scene ground mode: " + snapshot.ground.mode);
   outputs.snapshot(snapshot);
   std::vector<geometry_msgs::TransformStamped> fixed;
   visualization_msgs::MarkerArray markers;
@@ -261,15 +367,17 @@ void SceneProjection::definition(const Json& document, const std::string& epoch,
     const auto& body = snapshot.obstacles.at(index++);
     if (!body.dynamic) fixed.push_back(impl_->transform(body.id, body.pose, snapshot.header.stamp));
     const auto& frame = impl_->frames.at(body.id);
+    const auto& model = impl_->models.at(item.at("model").get<std::string>());
     const auto found = impl_->markers.find(body.id);
     std::shared_ptr<const Impl::Markers> cached;
-    if (found != impl_->markers.end() && sameProjectionValue(found->second->value, item) && found->second->frame == frame)
+    if (found != impl_->markers.end() && sameProjectionValue(found->second->value, item) &&
+        found->second->model == model && found->second->frame == frame)
       cached = found->second;
     else {
-      Impl::Markers built{item, frame, {}};
+      Impl::Markers built{item, model, frame, {}};
       for (const auto& part : body.parts) {
         ++impl_->counts.part_markers;
-        const auto messages = partMarkers(body.id, part, frame);
+        const auto messages = partMarkers(body.id, part, geometries[part.geometry_index], frame);
         built.messages.insert(built.messages.end(), messages.begin(), messages.end());
       }
       cached = std::make_shared<const Impl::Markers>(std::move(built));
@@ -278,6 +386,33 @@ void SceneProjection::definition(const Json& document, const std::string& epoch,
     cache[body.id] = std::move(cached);
   }
   impl_->markers = std::move(cache);
+  if (snapshot.ground.mode == xgc2_geometry_msgs::SceneGround::MODE_MODEL) {
+    const auto& ground = document.at("ground");
+    const auto& model = impl_->models.at(ground.at("model").get<std::string>());
+    const auto frame = impl_->prefix + "/" + epoch + "/ground";
+    geometry_msgs::TransformStamped transform;
+    transform.header.frame_id = impl_->parent;
+    transform.header.stamp = snapshot.header.stamp;
+    transform.child_frame_id = frame;
+    transform.transform.translation.x = snapshot.ground.pose.position.x;
+    transform.transform.translation.y = snapshot.ground.pose.position.y;
+    transform.transform.translation.z = snapshot.ground.pose.position.z;
+    transform.transform.rotation = snapshot.ground.pose.orientation;
+    fixed.push_back(std::move(transform));
+    const auto& previous = impl_->ground_markers;
+    if (!previous || previous->model != model || previous->frame != frame ||
+        !sameProjectionValue(previous->value, ground)) {
+      Impl::Markers built{ground, model, frame, {}};
+      for (const auto& part : snapshot.ground.parts) {
+        ++impl_->counts.part_markers;
+        const auto messages = partMarkers(frame, part, geometries[part.geometry_index], frame);
+        built.messages.insert(built.messages.end(), messages.begin(), messages.end());
+      }
+      impl_->ground_markers = std::make_shared<const Impl::Markers>(std::move(built));
+    }
+    const auto& ground_messages = impl_->ground_markers->messages;
+    markers.markers.insert(markers.markers.end(), ground_messages.begin(), ground_messages.end());
+  } else impl_->ground_markers.reset();
   if (!fixed.empty()) outputs.staticTransforms(fixed);
   outputs.markers(markers);
 }

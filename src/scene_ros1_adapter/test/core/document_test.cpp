@@ -1,5 +1,6 @@
 #include "xgc_scene/document.hpp"
 #include "xgc_scene/json_io.hpp"
+#include "xgc_scene/motion.hpp"
 
 #include <gtest/gtest.h>
 
@@ -123,6 +124,102 @@ TEST(Document, MotionAndPartErrors) {
   rejects([&] { obstacle(value); }, "Orientation quaternion must be nonzero");
   value = box(); value["parts"][0]["geometry"] = Json::object();
   rejects([&] { obstacle(value); }, "Unsupported geometry None; no shape substitution is performed");
+}
+
+TEST(Document, WaypointsNormalizeExactlyLikePythonSourceMetadata) {
+  const auto minimal = parseJson(R"({"type":"waypoints","waypoints":[[0,0,0],[1,2,3]]})");
+  const auto expected = parseJson(R"({"type":"waypoints","velocity":1.0,"orientation":true,"angular_velocity":0.8,"loop":false,"sin":false,"waypoints":[[0.0,0.0,0.0],[1.0,2.0,3.0]]})");
+  EXPECT_EQ(dumpJson(motion(minimal)), dumpJson(expected));
+  EXPECT_EQ(motion(expected), expected);
+  auto explicit_values = minimal;
+  explicit_values["velocity"] = 1000;
+  explicit_values["orientation"] = false;
+  explicit_values["angular_velocity"] = 1e-6;
+  explicit_values["loop"] = true;
+  explicit_values["sin"] = true;
+  EXPECT_EQ(motion(explicit_values), parseJson(R"({"type":"waypoints","velocity":1000.0,"orientation":false,"angular_velocity":0.000001,"loop":true,"sin":true,"waypoints":[[0.0,0.0,0.0],[1.0,2.0,3.0]]})"));
+  explicit_values["waypoints"] = std::vector<Json>(4096, Json::array({-1e6, 0, 1e6}));
+  EXPECT_EQ(motion(explicit_values).at("waypoints").size(), 4096u);
+
+  auto item = box();
+  item["motion"] = minimal;
+  EXPECT_EQ(obstacle(item).at("motion"), expected);
+  item["motion"]["waypoints"][0] = Json::array({5, 0, 0});
+  const auto independent = obstacle(item);
+  EXPECT_EQ(independent.at("pose").at("position"), Json::array({0.0, 0.0, 0.0}));
+  EXPECT_EQ(independent.at("motion").at("waypoints")[0], Json::array({5.0, 0.0, 0.0}));
+  rejects([&] { state(independent, 0.0, false); }, "Unsupported native motion: waypoints");
+  item["motion"] = parseJson(R"({"type":"ping_pong","point_a":[5,0,0],"point_b":[6,0,0],"speed":1})");
+  rejects([&] { obstacle(item); }, "Initial obstacle position must match its motion path start");
+  item["motion"] = parseJson(R"({"type":"circle","center":[0,0,0],"radius":5,"angular_speed":1})");
+  rejects([&] { obstacle(item); }, "Initial obstacle position must match its motion path start");
+}
+
+TEST(Document, WaypointsStrictFieldsTypesAndRangesKeepPythonCheckOrder) {
+  const auto valid = parseJson(R"({"type":"waypoints","waypoints":[[0,0,0],[1,2,3]]})");
+  rejects([] { motion(Json{{"type", "waypoints"}}); }, "Invalid fields: unknown=[], missing=['waypoints']");
+  for (const auto* key : {"points", "speed", "angularVelocity", "sinusoidal"}) {
+    auto value = valid; value[key] = 1;
+    rejects([&] { motion(value); }, (std::string("Invalid fields: unknown=['") + key + "'], missing=[]").c_str());
+  }
+  for (const auto& points : {Json(nullptr), Json::object(), Json::array(), Json::array({Json::array({0, 0, 0})}),
+                             Json(std::vector<Json>(4097, Json::array({0, 0, 0})))}) {
+    auto value = valid; value["waypoints"] = points; value["velocity"] = false;
+    rejects([&] { motion(value); }, "Waypoints require 2 to 4096 positions");
+  }
+  for (const auto* key : {"velocity", "angular_velocity"}) {
+    const auto label = std::string(key) == "velocity" ? "velocity" : "angular velocity";
+    for (const auto& input : {Json(true), Json("1"), Json(nullptr), Json(std::numeric_limits<double>::infinity()),
+                              Json(std::numeric_limits<double>::quiet_NaN())}) {
+      auto value = valid; value[key] = input;
+      rejects([&] { motion(value); }, (std::string(label) + " must be finite").c_str());
+    }
+    for (const auto input : {0.0, -1.0, 0.0000009, 1000.0001}) {
+      auto value = valid; value[key] = input;
+      rejects([&] { motion(value); }, (std::string(label) + " is outside the supported range").c_str());
+    }
+    for (const auto input : {0.000001, 1000.0}) {
+      auto value = valid; value[key] = input;
+      EXPECT_DOUBLE_EQ(motion(value).at(key).get<double>(), input);
+    }
+  }
+  for (const auto* key : {"orientation", "loop", "sin"}) {
+    for (const auto& input : {Json(0), Json(1), Json("false"), Json(nullptr), Json::array()}) {
+      auto value = valid; value[key] = input;
+      rejects([&] { motion(value); }, (std::string(key) + " must be a boolean").c_str());
+    }
+  }
+  for (const auto& point : {Json::array({0, 0}), Json::array({0, 0, 0, 0}), Json("0,0,0")}) {
+    auto value = valid; value["waypoints"][0] = point;
+    rejects([&] { motion(value); }, "waypoint must have 3 components");
+  }
+  for (const auto& coordinate : {Json(true), Json("0"), Json(nullptr), Json(std::numeric_limits<double>::infinity())}) {
+    auto value = valid; value["waypoints"][1][0] = coordinate;
+    rejects([&] { motion(value); }, "waypoint must be finite");
+  }
+  auto value = valid; value["waypoints"][1][0] = 1000001;
+  rejects([&] { motion(value); }, "waypoint is outside the supported range");
+  value = valid; value["orientation"] = 1; value["velocity"] = false;
+  rejects([&] { motion(value); }, "velocity must be finite");
+  value["velocity"] = 1; value["angular_velocity"] = false;
+  rejects([&] { motion(value); }, "orientation must be a boolean");
+  value["orientation"] = true; value["loop"] = 1;
+  rejects([&] { motion(value); }, "angular velocity must be finite");
+  value["angular_velocity"] = 1; value["sin"] = 1;
+  rejects([&] { motion(value); }, "loop must be a boolean");
+  value["loop"] = false; value["waypoints"][0] = Json::array({true, 0, 0});
+  rejects([&] { motion(value); }, "sin must be a boolean");
+  rejects([] { motion(Json{{"type", "path"}}); }, "Unsupported motion 'path'");
+}
+
+TEST(Document, WaypointsAndUnknownNativeMotionCannotSilentlyBecomeHold) {
+  auto item = obstacle(box());
+  EXPECT_EQ(state(item, 10.0, true).at("pose"), item.at("pose"));
+  item["motion"] = motion(parseJson(R"({"type":"waypoints","waypoints":[[0,0,0],[1,2,3]]})"));
+  rejects([&] { state(item, 0.0, false); }, "Unsupported native motion: waypoints");
+  rejects([&] { state(item, 10.0, true); }, "Unsupported native motion: waypoints");
+  item["motion"] = Json{{"type", "unknown"}};
+  rejects([&] { state(item, 10.0, true); }, "Unsupported native motion: unknown");
 }
 
 TEST(JsonIo, DuplicateFieldsAndInsertionOrder) {

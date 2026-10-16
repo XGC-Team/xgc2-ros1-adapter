@@ -36,7 +36,7 @@ bool launchBoolean(const std::string& name, const std::string& text) {
 
 xgc_scene::Json parameters(ros::NodeHandle& private_node, const adapter::ServerOptions& options) {
   xgc_scene::Json values = xgc_scene::Json::object();
-  for (const auto* key : {"scene_file", "working_file", "generation_parameters_json", "save_directory",
+  for (const auto* key : {"scene_file", "working_file", "compiled_scene_file", "resource_root", "generation_parameters_json", "save_directory",
                            "target_id", "xrpc_socket", "profile", "simulation_endpoint"}) {
     if (std::string(key) == "simulation_endpoint" && values.value("profile", "gazebo") != "gazebo") continue;
     std::string value;
@@ -266,16 +266,15 @@ int main(int argc, char** argv) {
         }
         std::optional<sensor_msgs::PointCloud2> fixed_cloud;
         if (session) {
-          const auto& facts = session->facts;
-          const auto& runtime = facts.at("runtime");
-          const auto selected = xgc_scene::inputs(facts, runtime.at("userFilesDir").get<std::string>(),
-                                                 runtime.at("workspaceDir").get<std::string>());
-          config.scene_file = selected.at("sceneFile").get<std::string>();
-          config.working_file = selected.at("workingFile").get<std::string>();
-          config.frozen = selected.at("frozen").get<bool>();
-          config.generation_parameters = xgc_scene::parseJson(selected.at("generationParametersJson").get<std::string>());
-          if (selected.contains("pointCloud")) {
-            fixed_cloud = xgc_scene::fixedPointCloud(selected);
+          if (!config.resource_root.is_absolute() || config.compiled_scene_file.empty())
+            throw xgc_scene::SceneError("Run scene requires its selected resource root and compiled scene file");
+          // The workflow already selected and compiled this Run's scene. Read
+          // only the fixed-cloud metadata here; repeating inputs() would run
+          // resource compilation (and potentially generation) a second time.
+          const auto manifest = xgc_scene::parseJson(xgc_scene::read(config.resource_root / "manifest.json", 65536));
+          if (manifest.contains("pointCloud")) {
+            fixed_cloud = xgc_scene::fixedPointCloud(xgc_scene::Json{
+                {"assetDirectory", config.resource_root.string()}, {"pointCloud", manifest.at("pointCloud")}});
             lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session, true);
             // The canonical reference topic has one owner. A fixed original
             // cloud is never replaced by the geometry fleet's surface sample.

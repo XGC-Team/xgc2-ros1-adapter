@@ -6,6 +6,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <xgc2_geometry_msgs/SceneSnapshot.h>
+#include <xgc2_math/geometry/geometry_payload.hpp>
 #include <xgc2_geometry_msgs/SceneState.h>
 
 #include <memory>
@@ -48,19 +49,21 @@ class RosPublishers final : public RosOutputs {
   std::unique_ptr<Impl> impl_;
 };
 
-xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item);
+xgc2_geometry_msgs::SceneObstacle obstacleMessage(const Json& item, const Json& model);
 xgc2_geometry_msgs::SceneObstacleState stateMessage(const Json& value);
 std::vector<visualization_msgs::Marker> partMarkers(
-    const std::string& obstacle_id, const xgc2_geometry_msgs::ScenePart& part, const std::string& frame);
+    const std::string& obstacle_id, const xgc2_geometry_msgs::ScenePart& part,
+    const xgc2_math::geometry::Geometry& geometry, const std::string& frame);
 
-// Value caches replace Python's immutable-object identity caches: the store
-// returns JSON copies. Revisions gate scans; unchanged obstacle messages and
-// markers survive a revision. Hold states never run through motion per tick.
+// Input is compiled.v1 only: one ordered geometry table and model-local parts.
+// Caches retain geometry definitions once, models retain only references, and
+// instances never retain expanded geometry JSON. Hold states never run motion.
 class SceneProjection {
  public:
   struct Counters {
     std::size_t obstacle_messages = 0, part_markers = 0, hold_states = 0, moving_states = 0;
     std::size_t frame_scans = 0, snapshot_scans = 0, definition_scans = 0, state_scans = 0;
+    std::size_t geometry_encodes = 0;
   };
   explicit SceneProjection(const std::string& name_space);
   ~SceneProjection();

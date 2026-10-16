@@ -24,6 +24,7 @@ TEST(LidarRingMapping, NamedParametersBothPosesDynamicStateAndRejectedInvalidGeo
   lidar::Engine engine(manifest, sink);
   SceneTap tap(outputs, &engine, [] { return 1000000000; });
   xgc2_geometry_msgs::SceneSnapshot definition;
+  definition.ground.mode = xgc2_geometry_msgs::SceneGround::MODE_DEFAULT_PLANE;
   definition.header.frame_id = "world";
   definition.epoch = "ring";
   definition.revision = 1;
@@ -38,7 +39,8 @@ TEST(LidarRingMapping, NamedParametersBothPosesDynamicStateAndRejectedInvalidGeo
   xgc2_geometry_msgs::ScenePart part;
   part.pose.position.y = .3;
   assign(part.pose.orientation, child);
-  part.geometry = geometry_test::wire(geometry_test::Geometry::ring({1, 1.2}, .05));
+  definition.geometries.push_back(geometry_test::wire(geometry_test::Geometry::ring({1, 1.2}, .05)));
+  part.geometry_index = 0;
   obstacle.parts.push_back(part);
   definition.obstacles.push_back(obstacle);
   tap.application("ring", 1, true);
@@ -60,7 +62,7 @@ TEST(LidarRingMapping, NamedParametersBothPosesDynamicStateAndRejectedInvalidGeo
   ASSERT_TRUE(engine.sceneReady());
   EXPECT_NEAR(engine.sensorScene(0)->closest(center,direction,10),.95,1e-10);
   definition.revision=2;definition.obstacles[0].dynamic=false;
-  definition.obstacles[0].parts[0].geometry.parameters.clear();
+  definition.geometries[0].parameters.clear();
   tap.application("ring",2,true);
   tap.snapshot(definition);
   EXPECT_FALSE(engine.sceneReady());

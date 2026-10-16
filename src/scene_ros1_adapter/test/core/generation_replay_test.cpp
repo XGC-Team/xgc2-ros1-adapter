@@ -18,6 +18,7 @@
 #include <future>
 #include <limits>
 #include <set>
+#include <sys/inotify.h>
 #include <sys/prctl.h>
 #include <system_error>
 #include <unistd.h>
@@ -222,6 +223,43 @@ TEST_F(GenerationTest, FixedAndPlainDocumentsKeepTheirSourceDigest) {
   EXPECT_EQ(resolved.first, load(path));
   EXPECT_EQ(resolved.second, path.string());
   EXPECT_FALSE(fs::exists(root_ / "ignored.yaml"));
+}
+
+TEST_F(GenerationTest, PlainDocumentReadsItsOriginalBytesOnce) {
+  const std::string raw =
+      "# Preserve this authored YAML, not its normalized serialization.\n"
+      "schema: xgc2.scene.v1\nid: plain\nframe: world\nobstacles:\n"
+      "- id: box\n  pose:\n    orientation: [0, 0, 0, 2]\n  parts:\n"
+      "  - id: body\n    geometry: {type: box, size: [1, 2, 3]}\n";
+  const auto expected = document(parseYaml(raw));
+  const auto path = root_ / "source.yaml";
+  write(path, raw);
+  struct Watch {
+    int fd = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
+    ~Watch() { if (fd >= 0) ::close(fd); }
+  } watch;
+  ASSERT_GE(watch.fd, 0);
+  ASSERT_GE(::inotify_add_watch(watch.fd, path.c_str(), IN_OPEN | IN_CLOSE_NOWRITE), 0);
+
+  const auto resolved = resolve(path);
+  EXPECT_EQ(resolved.first.first, expected);
+  EXPECT_EQ(resolved.first.second, digest(raw));
+  EXPECT_NE(resolved.first.second, digest(dumpYaml(expected)));
+  EXPECT_EQ(resolved.second, path.string());
+
+  std::size_t opens = 0, closes = 0;
+  alignas(inotify_event) char events[4096];
+  ssize_t bytes;
+  while ((bytes = ::read(watch.fd, events, sizeof events)) > 0) {
+    for (ssize_t offset = 0; offset < bytes;) {
+      const auto* event = reinterpret_cast<const inotify_event*>(events + offset);
+      if (event->mask & IN_OPEN) ++opens;
+      if (event->mask & IN_CLOSE_NOWRITE) ++closes;
+      offset += sizeof(inotify_event) + event->len;
+    }
+  }
+  EXPECT_EQ(opens, 1u);
+  EXPECT_EQ(closes, 1u);
 }
 
 TEST_F(GenerationTest, ExistingRunFilePrecedesGeneratorValidation) {

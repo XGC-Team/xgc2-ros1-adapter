@@ -524,7 +524,7 @@ std::pair<std::pair<Json, std::string>, std::string> resolve(
   const auto raw = readSource(source);
   const auto value = parseYaml(raw);
   if (!value.is_object() || value.value("schema", Json(nullptr)) != "xgc2.scene-source.v1")
-    return {load(source), source.string()};
+    return {{document(value), digest(raw)}, source.string()};
   const auto mode = value.value("mode", Json(nullptr));
   if (value.value("format", Json(nullptr)) != "geometry" || (mode != "fixed" && mode != "random"))
     throw SceneError("Scene source requires explicit geometry format and fixed/random mode");

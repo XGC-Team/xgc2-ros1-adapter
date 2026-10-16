@@ -163,19 +163,29 @@ Json motion(const Json& value) {
     const double phase = number(value.value("phase", Json(0)), "phase");
     return Json{{"type", kind}, {"center", center}, {"radius", radius}, {"angular_speed", angular_speed}, {"phase", phase}};
   }
+  if (kind == "waypoints") {
+    fields(value, {"type", "velocity", "orientation", "angular_velocity", "loop", "sin", "waypoints"}, {"waypoints"});
+    const auto& points = value.at("waypoints");
+    if (!points.is_array() || points.size() < 2 || points.size() > 4096)
+      throw SceneError("Waypoints require 2 to 4096 positions");
+    const auto flag = [&](const char* key, bool fallback) {
+      if (!value.contains(key)) return fallback;
+      if (!value.at(key).is_boolean()) throw SceneError(std::string(key) + " must be a boolean");
+      return value.at(key).get<bool>();
+    };
+    Json result{{"type", kind}, {"velocity", number(value.value("velocity", Json(1.0)), "velocity", 1e-6, 1000)}};
+    result["orientation"] = flag("orientation", true);
+    result["angular_velocity"] = number(value.value("angular_velocity", Json(0.8)), "angular velocity", 1e-6, 1000);
+    result["loop"] = flag("loop", false);
+    result["sin"] = flag("sin", false);
+    result["waypoints"] = Json::array();
+    for (const auto& point : points) result["waypoints"].push_back(vector(point, "waypoint"));
+    return result;
+  }
   throw SceneError("Unsupported motion " + detail::pythonRepr(kind));
 }
 
-Json obstacle(const Json& value) {
-  fields(value, {"id", "name", "pose", "parts", "motion"}, {"id", "parts"});
-  const auto oid = identifier(value.at("id"), "Obstacle ID");
-  const Json name = value.value("name", Json(oid));
-  if (!name.is_string()) throw SceneError("Obstacle name must have 1 to 256 characters");
-  const auto characters = detail::utf8Characters(name.get_ref<const std::string&>());
-  if (characters.size() > 256 || std::all_of(characters.begin(), characters.end(), [](const auto& c) {
-        return detail::pythonWhitespace(detail::codepoint(c));
-      })) throw SceneError("Obstacle name must have 1 to 256 characters");
-  const auto& parts = value.at("parts");
+Json normalizeParts(const Json& parts) {
   if (!parts.is_array() || parts.empty() || parts.size() > 128) throw SceneError("Obstacle requires 1 to 128 parts");
   Json normalized = Json::array();
   std::set<std::string> ids;
@@ -188,18 +198,98 @@ Json obstacle(const Json& value) {
       for (const auto& channel : color)
         if (channel.get<double>() < 0 || channel.get<double>() > 1) throw SceneError("Color channels must be between 0 and 1");
     }
-    const auto part_pose = pose(part.value("pose", Json::object()));
-    const auto part_geometry = geometry(part.at("geometry"));
-    normalized.push_back(Json{{"id", pid}, {"pose", part_pose}, {"geometry", part_geometry},
+    normalized.push_back(Json{{"id", pid}, {"pose", pose(part.value("pose", Json::object()))},
+                              {"geometry", geometry(part.at("geometry"))},
                               {"color", Json::array({1.0, 0.5, 0.1, 1.0})}});
   }
+  return normalized;
+}
+
+Json resourceRef(const Json& value) {
+  fields(value, {"format", "file"}, {"format", "file"});
+  const auto& format = value.at("format");
+  if (format != "sdformat-model" && format != "gltf" && format != "mesh")
+    throw SceneError("Model resource format must be sdformat-model, gltf, or mesh");
+  if (!value.at("file").is_string()) throw SceneError("Model resource file must be asset-relative");
+  const auto& file = value.at("file").get_ref<const std::string&>();
+  const bool escaped = file.empty() || file.front() == '/' || file.find('\\') != std::string::npos ||
+                       file.find('\0') != std::string::npos;
+  if (!escaped) {
+    std::size_t begin = 0;
+    while (begin <= file.size()) {
+      const auto end = file.find('/', begin);
+      const auto segment = file.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+      if (segment.empty() || segment == "." || segment == "..") {
+        throw SceneError("Model resource file must be asset-relative");
+      }
+      if (end == std::string::npos) break;
+      begin = end + 1;
+    }
+  } else throw SceneError("Model resource file must be asset-relative");
+  return Json{{"format", format}, {"file", file}};
+}
+
+Json obstacle(const Json& value) {
+  fields(value, {"id", "name", "pose", "parts", "motion", "model"}, {"id"});
+  const auto oid = identifier(value.at("id"), "Obstacle ID");
+  if (oid == "ground_plane") throw SceneError("ground_plane is owned by ground, not an obstacle");
+  const Json name = value.value("name", Json(oid));
+  if (!name.is_string()) throw SceneError("Obstacle name must have 1 to 256 characters");
+  const auto characters = detail::utf8Characters(name.get_ref<const std::string&>());
+  if (characters.size() > 256 || std::all_of(characters.begin(), characters.end(), [](const auto& c) {
+        return detail::pythonWhitespace(detail::codepoint(c));
+      })) throw SceneError("Obstacle name must have 1 to 256 characters");
+  const bool has_parts = value.contains("parts");
+  const bool has_model = value.contains("model");
+  if (has_parts == has_model) throw SceneError("Obstacle requires parts or one model");
   const Json initial = pose(value.value("pose", Json::object()));
   const Json movement = motion(value.value("motion", Json{{"type", "hold"}}));
-  const auto start = xgc2_math::scene::motionStart(detail::toVector(initial.at("position")), detail::toMotion(movement));
-  for (int i = 0; i < 3; ++i)
-    if (std::abs(start[i] - initial.at("position")[i].get<double>()) > 1e-6)
-      throw SceneError("Initial obstacle position must match its motion path start");
-  return Json{{"id", oid}, {"name", name}, {"pose", initial}, {"parts", normalized}, {"motion", movement}};
+  if (movement.at("type") != "waypoints") {
+    const auto start = xgc2_math::scene::motionStart(detail::toVector(initial.at("position")), detail::toMotion(movement));
+    for (int i = 0; i < 3; ++i)
+      if (std::abs(start[i] - initial.at("position")[i].get<double>()) > 1e-6)
+        throw SceneError("Initial obstacle position must match its motion path start");
+  }
+  Json result{{"id", oid}, {"name", name}, {"pose", initial}, {"motion", movement}};
+  if (has_model) {
+    result["model"] = identifier(value.at("model"), "Model ID");
+    return result;
+  }
+  result["parts"] = normalizeParts(value.at("parts"));
+  return result;
+}
+
+Json models(const Json& value) {
+  if (!value.is_object()) throw SceneError("Models must be an object");
+  Json result = Json::object();
+  for (auto it = value.begin(); it != value.end(); ++it) {
+    const auto name = identifier(Json(it.key()), "Model ID");
+    fields(it.value(), {"parts", "resource"});
+    const bool has_parts = it.value().contains("parts");
+    const bool has_resource = it.value().contains("resource");
+    if (has_parts == has_resource) throw SceneError("Model requires parts or one resource");
+    if (has_resource) result[name] = Json{{"resource", resourceRef(it.value().at("resource"))}};
+    else result[name] = Json{{"parts", normalizeParts(it.value().at("parts"))}};
+  }
+  return result;
+}
+
+Json ground(const Json& value) {
+  if (!value.is_object() || !value.contains("mode")) throw SceneError("Ground requires a mode");
+  const auto& mode = value.at("mode");
+  if (mode == "default_plane") {
+    fields(value, {"mode", "z"}, {"mode"});
+    return Json{{"mode", mode}, {"z", number(value.value("z", Json(0.0)), "ground z")}};
+  }
+  if (mode == "none") {
+    fields(value, {"mode"}, {"mode"});
+    return Json{{"mode", mode}};
+  }
+  if (mode == "model") {
+    fields(value, {"mode", "model", "pose"}, {"mode", "model", "pose"});
+    return Json{{"mode", mode}, {"model", identifier(value.at("model"), "Model ID")}, {"pose", pose(value.at("pose"))}};
+  }
+  throw SceneError("Ground mode must be default_plane, model, or none");
 }
 
 const Json& checkObstacleSet(const Json& obstacles) {
@@ -208,7 +298,7 @@ const Json& checkObstacleSet(const Json& obstacles) {
   std::size_t parts = 0;
   for (const auto& item : obstacles) {
     ids.insert(item.at("id").get<std::string>());
-    parts += item.at("parts").size();
+    if (item.contains("parts")) parts += item.at("parts").size();
   }
   if (ids.size() != obstacles.size()) throw SceneError("Duplicate obstacle ID");
   if (parts > 4096) throw SceneError("Scene supports at most 4096 convex parts");
@@ -216,7 +306,7 @@ const Json& checkObstacleSet(const Json& obstacles) {
 }
 
 Json document(const Json& value) {
-  fields(value, {"schema", "id", "frame", "obstacles"}, {"schema", "id", "frame", "obstacles"});
+  fields(value, {"schema", "id", "frame", "obstacles", "models", "ground"}, {"schema", "id", "frame", "obstacles"});
   if (value.at("schema") != kSchema) throw SceneError("Unsupported scene schema");
   identifier(value.at("id"), "Scene ID");
   const auto& frame = value.at("frame");
@@ -229,7 +319,21 @@ Json document(const Json& value) {
   Json obstacles = Json::array();
   for (const auto& item : items) obstacles.push_back(obstacle(item));
   checkObstacleSet(obstacles);
-  return Json{{"schema", kSchema}, {"id", value.at("id")}, {"frame", frame}, {"obstacles", obstacles}};
+  Json defined = value.contains("models") ? models(value.at("models")) : Json::object();
+  for (const auto& item : obstacles) {
+    if (!item.contains("model")) continue;
+    if (!defined.contains(item.at("model").get<std::string>()))
+      throw SceneError("Obstacle model is not defined");
+  }
+  Json result{{"schema", kSchema}, {"id", value.at("id")}, {"frame", frame}, {"obstacles", obstacles}};
+  if (value.contains("models")) result["models"] = std::move(defined);
+  if (value.contains("ground")) {
+    auto owned = ground(value.at("ground"));
+    if (owned.at("mode") == "model" && !result.value("models", Json::object()).contains(owned.at("model").get<std::string>()))
+      throw SceneError("Ground model is not defined");
+    result["ground"] = std::move(owned);
+  }
+  return result;
 }
 
 }  // namespace xgc_scene
