@@ -702,7 +702,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   const auto root = fs::canonical(resource_root);
   auto directory = checkedPath((root / "Shared" / "Scenes" / name.get<std::string>()).string(), root / "Shared" / "Scenes", true);
   auto manifest = manifestAt(directory);
-  const auto supports = manifest.value("simulators", Json());
+  const auto supports = manifest.value("simulators", simulator == "none" ? Json::object() : Json());
   const bool physical = simulator == "none";
   if (!supports.is_object() || (!physical && (simulator != "gazebo" && simulator != "xsim")) ||
       (!physical && !supports.value(simulator.get<std::string>(), Json()).is_object()))

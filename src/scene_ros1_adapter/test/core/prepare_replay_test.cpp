@@ -520,6 +520,26 @@ TEST(Prepare, WorkspaceSelectionAndCliContextValidation) {
   write(fixture.asset() / "manifest.json", mixed.dump());
   EXPECT_EQ(inputs(physical_only, fixture.work, fixture.workspace()).at("sceneFile"), selected.at("sceneFile"));
   EXPECT_THROW(inputs(context, fixture.work, fixture.workspace()), SceneError);
+  auto no_supports = mixed;
+  no_supports.erase("simulators");
+  write(fixture.asset() / "manifest.json", no_supports.dump());
+  EXPECT_EQ(inputs(physical_only, fixture.work, fixture.workspace()).at("sceneFile"), selected.at("sceneFile"));
+  EXPECT_THROW(inputs(context, fixture.work, fixture.workspace()), SceneError);
+  auto gazebo_context = context; gazebo_context["scene"]["simulator"] = "gazebo";
+  EXPECT_THROW(inputs(gazebo_context, fixture.work, fixture.workspace()), SceneError);
+  for (const auto& invalid : {Json(), Json::array()}) {
+    auto malformed = no_supports; malformed["simulators"] = invalid;
+    write(fixture.asset() / "manifest.json", malformed.dump());
+    EXPECT_THROW(inputs(physical_only, fixture.work, fixture.workspace()), SceneError);
+  }
+  auto no_document = no_supports; no_document.erase("sceneDocument");
+  write(fixture.asset() / "manifest.json", no_document.dump());
+  EXPECT_THROW(inputs(physical_only, fixture.work, fixture.workspace()), SceneError);
+  write(fixture.asset() / "manifest.json", no_supports.dump());
+  const auto physical_cli = cli(fixture.temporary.root, {"--context-json=" + physical_only.dump()},
+    {{"XGC_USER_FILES_DIR", fixture.work.string()}, {"XGC_JOB_ARTIFACT_ROOT", fixture.workspace().string()}});
+  ASSERT_EQ(physical_cli.code, 0) << physical_cli.err;
+  EXPECT_EQ(parseJson(physical_cli.out).at("sceneFile"), selected.at("sceneFile"));
   write(fixture.asset() / "manifest.json", manifest.dump());
   EXPECT_EQ(selected.at("workingFile"), (fixture.cliOutput(true) / "scene-document.yaml").string());
   EXPECT_EQ(selected.at("generationParametersJson"), "{\"seed\":1.0}");
