@@ -103,7 +103,7 @@ def apply_runtime(params, derived, binding, context, simulated):
         params["mocap_rigid_body"] = binding["namespace"].lstrip("/")
         offset = dict(x=0, y=0, z=0)
     params.update({"localization_offset_" + axis: scalar(offset[axis]) for axis in ("x", "y", "z")})
-    if simulated and simulator == "xsim":
+    if simulated and simulator in ("xsim", "none"):
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
         params["localization_twist_topic"] = binding["namespace"] + "/twist"
     else:
@@ -149,9 +149,9 @@ def project_model(row, binding, context, kind, model_id, ordinal):
     arm, prefix, scene, package, description, visuals = MODELS[kind]
     mode, simulator = context["runMode"], context["simulator"]
     simulated = simulated_source(mode, binding)
-    if not simulated or simulator not in ("gazebo", "xsim"):
-        raise ValueError("model projection requires gazebo or xsim")
-    profile = prefix + "." + simulator + (".vrpn" if simulator == "gazebo" else ".ros")
+    if not simulated or simulator not in ("gazebo", "xsim", "none"):
+        raise ValueError("model projection requires gazebo, xsim or none")
+    profile = prefix + (".gazebo.vrpn" if simulator == "gazebo" else ".xsim.ros")
     params = {"positioning_frame_number": scalar(MODEL_POSITIONING_FRAME),
               "positioning_comparison_threshold_m": scalar(MODEL_POSITIONING_THRESHOLD_M)}
     derived = {}
@@ -191,8 +191,8 @@ def project_device(row, binding, context, kind, model_id, ordinal):
                       qgc_udp_port=scalar(endpoint["qgcUdpPort"]),
                       sdk_udp_port=scalar(endpoint["sdkUdpPort"]))
     profile = asset["profileId"]
-    if profile.startswith(prefix + ".") and simulated and context["simulator"] in ("gazebo", "xsim"):
-        profile = prefix + "." + context["simulator"] + (".vrpn" if context["simulator"] == "gazebo" else ".ros")
+    if profile.startswith(prefix + ".") and simulated and context["simulator"] in ("gazebo", "xsim", "none"):
+        profile = prefix + (".gazebo.vrpn" if context["simulator"] == "gazebo" else ".xsim.ros")
     return finish(binding, kind, model_id, ordinal, arm, profile, params, derived, context,
                   visualization(arm, scene, package, description, visuals), physical=copy.deepcopy(physical))
 

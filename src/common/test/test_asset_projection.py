@@ -40,6 +40,12 @@ def px4_asset():
         simulationLocalPort=20108, simulationRemotePort=20508))
 
 
+def mecanum_asset():
+    return dict(kind="mecanum_ugv", profileId="mecanum-ugv.physical.vrpn", mecanum=dict(
+        mocapRigidBodyName="tracked_mecanum", positioningFrameNumber=5,
+        positioningComparisonThresholdM=0.001))
+
+
 class AssetProjectionTest(unittest.TestCase):
     def test_body_returns_follows_scope_independently_of_sensor_enabled(self):
         local = {"enabled": True, "bodyReturns": False}
@@ -146,6 +152,79 @@ class AssetProjectionTest(unittest.TestCase):
                 self.assertNotIn("198.51.100.", blob)
                 self.assertNotIn("udp://", blob)
             self.assertEqual(len(topics), count)
+
+    def test_none_models_use_ros_observation_without_fcu(self):
+        prefixes = {"px4_multirotor": "px4-multirotor", "scout_mini": "scout-mini", "mecanum_ugv": "mecanum-ugv"}
+        for mode in ("simulation", "hybrid"):
+            for ordinal, kind in enumerate(prefixes):
+                for dynamics in (False, True):
+                    with self.subTest(mode=mode, kind=kind, dynamics=dynamics):
+                        request = dict(context=context(mode=mode, simulator="none"), robots=[dict(
+                            model=model(kind, ordinal),
+                            binding=binding("slot-%d" % ordinal, "/robot%d" % (ordinal + 1), dynamics=dynamics))])
+                        before = copy.deepcopy(request)
+                        row = projection.project_batch(request)[0]
+                        self.assertEqual(request, before)
+                        self.assertEqual(row["profileId"], prefixes[kind] + ".xsim.ros")
+                        self.assertEqual(row["derived"]["modelId"], EXPECTED_MODEL_IDS[kind])
+                        self.assertNotIn("model", row)
+                        self.assertNotIn("physicalBinding", row)
+                        self.assertNotIn("sitlInstanceId", row["derived"])
+                        self.assertEqual(row["parameters"]["localization_pose_topic"], "/robot%d/pose" % (ordinal + 1))
+                        self.assertEqual(row["parameters"]["localization_twist_topic"], "/robot%d/twist" % (ordinal + 1))
+                        for axis in ("x", "y", "z"):
+                            self.assertEqual(row["parameters"]["localization_offset_" + axis], "0")
+                        for port in ("mavlink_tcp_port", "mavlink_udp_port", "qgc_udp_port", "sdk_udp_port"):
+                            self.assertNotIn(port, row["parameters"])
+                        for key in ("simulationFcuUrl", "mavSystemId", "mav_system_id", *FAKE_ENDPOINTS):
+                            self.assertNotIn(key, row["parameters"])
+                            self.assertNotIn(key, row["derived"])
+
+    def test_none_asset_session_uses_ros_profile_without_mutating_inventory(self):
+        for factory in (px4_asset, scout_asset, mecanum_asset):
+            for mode in ("simulation", "hybrid"):
+                with self.subTest(kind=factory()["kind"], mode=mode):
+                    asset = factory()
+                    kind = asset["kind"]
+                    request = dict(context=context(mode=mode, simulator="none"), robots=[dict(
+                        model=model(kind, 4), binding=binding("slot", "/robot7", dynamics=False),
+                        physicalBinding=dict(assetId="real-asset", assetCommitId="saved-commit", asset=asset))])
+                    before = copy.deepcopy(request)
+                    row = projection.project_batch(request)[0]
+                    self.assertEqual(request, before)
+                    self.assertEqual(asset, before["robots"][0]["physicalBinding"]["asset"])
+                    self.assertEqual(row["physicalBinding"], before["robots"][0]["physicalBinding"])
+                    self.assertIsNot(row["physicalBinding"]["asset"], asset)
+                    self.assertEqual(row["profileId"], asset["profileId"].replace(".physical.vrpn", ".xsim.ros"))
+                    self.assertEqual(row["physicalBinding"]["asset"]["profileId"], asset["profileId"])
+                    self.assertEqual(row["parameters"]["localization_pose_topic"], "/robot7/pose")
+                    self.assertEqual(row["parameters"]["localization_twist_topic"], "/robot7/twist")
+                    self.assertNotIn("sitlInstanceId", row["derived"])
+                    for port in ("mavlink_tcp_port", "mavlink_udp_port", "qgc_udp_port", "sdk_udp_port"):
+                        self.assertNotIn(port, row["parameters"])
+
+    def test_physical_sources_keep_vrpn_profiles_and_observation(self):
+        for factory in (px4_asset, scout_asset, mecanum_asset):
+            for mode in ("physical", "hybrid"):
+                for simulator in ("none", "xsim", "gazebo"):
+                    with self.subTest(kind=factory()["kind"], mode=mode, simulator=simulator):
+                        asset = factory()
+                        kind = asset["kind"]
+                        request = dict(context=context(mode=mode, simulator=simulator), robots=[dict(
+                            model=model(kind, 4), binding=binding("slot", "/robot7", source="physical"),
+                            physicalBinding=dict(assetId="real-asset", assetCommitId="saved-commit", asset=asset))])
+                        before = copy.deepcopy(request)
+                        row = projection.project_batch(request)[0]
+                        arm = projection.MODELS[kind][0]
+                        root = "/vrpn_client_node" if mode == "physical" else "/vrpn_client_node_physical"
+                        topic = root + "/" + asset[arm]["mocapRigidBodyName"]
+                        self.assertEqual(request, before)
+                        self.assertEqual(row["profileId"], asset["profileId"])
+                        self.assertEqual(row["physicalBinding"], request["robots"][0]["physicalBinding"])
+                        self.assertEqual(row["parameters"]["localization_pose_topic"], topic + "/pose")
+                        self.assertEqual(row["parameters"]["localization_twist_topic"], topic + "/twist")
+                        self.assertNotIn("sitlInstanceId", row["derived"])
+                        self.assertEqual(row["parameters"]["localization_offset_y"], "-2")
 
     def test_gazebo_derives_local_sitl_endpoints_from_ordinal(self):
         robots = [dict(model=model("px4_multirotor", ordinal),
