@@ -10,13 +10,19 @@
 namespace {
 thread_local std::chrono::steady_clock::time_point master_deadline;
 thread_local bool master_failed = false;
+thread_local bool master_scope_active = false;
 }
 namespace xgc2_ros1_robot_adapter {
-RosMasterDeadline::RosMasterDeadline(std::chrono::milliseconds budget)
-    : previous_(master_deadline), previous_failed_(master_failed) {
-  master_deadline = std::chrono::steady_clock::now() + budget;
-  if (previous_ != std::chrono::steady_clock::time_point{})
-    master_deadline = std::min(master_deadline, previous_);
+RosMasterDeadline::RosMasterDeadline(
+    std::optional<std::chrono::milliseconds> budget)
+    : previous_(master_deadline), previous_failed_(master_failed),
+      previous_active_(master_scope_active) {
+  if (budget) {
+    master_deadline = std::chrono::steady_clock::now() + *budget;
+    if (previous_ != std::chrono::steady_clock::time_point{})
+      master_deadline = std::min(master_deadline, previous_);
+  }
+  master_scope_active = true;
   master_failed = false;
 }
 RosMasterDeadline::~RosMasterDeadline() {
@@ -24,8 +30,8 @@ RosMasterDeadline::~RosMasterDeadline() {
   // propagate failure; otherwise startup could publish a partial binding.
   const bool failed = master_failed;
   master_deadline = previous_;
-  master_failed = previous_failed_ ||
-                  (previous_ != std::chrono::steady_clock::time_point{} && failed);
+  master_failed = previous_failed_ || (previous_active_ && failed);
+  master_scope_active = previous_active_;
 }
 bool RosMasterDeadline::failed() const { return master_failed; }
 }

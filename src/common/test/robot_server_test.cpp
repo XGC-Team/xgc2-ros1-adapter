@@ -166,7 +166,10 @@ public:
     return std::unique_ptr<CommandIo>(new FakeIo(world_));
   }
   std::unique_ptr<MasterBudget>
-  BoundMasterCalls(std::chrono::milliseconds) override {
+  BoundMasterCalls(
+      std::optional<std::chrono::milliseconds> budget) override {
+    if (!budget)
+      world_.record("master-tracking");
     struct Budget final : MasterBudget {
       explicit Budget(bool failure) : failure_(failure) {}
       bool failed() const override { return failure_; }
@@ -637,6 +640,8 @@ TEST_F(ServerMembers, ApplyRegistersEveryRobotOfTheRunInOneCallAndReportsFailure
   EXPECT_EQ(2u, health.response.robots());
   EXPECT_TRUE(health.response.serving());
   EXPECT_FALSE(world_.contains("create:r3"));
+  const auto events = world_.snapshot();
+  EXPECT_EQ(3, std::count(events.begin(), events.end(), "master-tracking"));
 }
 
 TEST_F(ServerMembers, ApplyingTheSameMemberAgainChangesNothingAndAConflictingOneIsRefused) {

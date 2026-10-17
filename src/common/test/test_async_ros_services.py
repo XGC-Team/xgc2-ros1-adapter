@@ -137,6 +137,68 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         finally:
             transport.close()
 
+    async def registration_case(self, mode, *, delay=0, hung=False):
+        requests, tasks = [], []
+
+        async def master(reader, writer):
+            try:
+                while True:
+                    header = await reader.readuntil(b'\r\n\r\n')
+                    size = int(next(line.split(b':')[1] for line in header.split(b'\r\n')
+                                    if line.lower().startswith(b'content-length:')))
+                    params, method = xmlrpc.client.loads(await reader.readexactly(size))
+                    requests.append((method, params[1]))
+                    if hung and method == 'registerSubscriber':
+                        self.assertEqual(await reader.read(), b'')
+                        return
+                    await asyncio.sleep(delay if method == 'registerSubscriber' else 0)
+                    result = [1, '', [] if method == 'registerSubscriber' else 1]
+                    body = xmlrpc.client.dumps((result,), methodresponse=True).encode()
+                    writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(body)).encode()
+                                 + b'\r\nConnection: keep-alive\r\n\r\n' + body)
+                    await writer.drain()
+            except (asyncio.IncompleteReadError, ConnectionError):
+                pass
+            finally:
+                writer.close()
+
+        def accept(reader, writer):
+            tasks.append(asyncio.create_task(master(reader, writer)))
+
+        async with await asyncio.start_server(accept, '127.0.0.1', 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            began = asyncio.get_running_loop().time()
+            process = await asyncio.create_subprocess_exec(os.environ['ASYNC_ROS_SERVICES_DRIVER'],
+                f'http://127.0.0.1:{port}', '11', '3000', '', '0', mode,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 12)
+            elapsed = asyncio.get_running_loop().time() - began
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        return stdout.decode().splitlines(), requests, elapsed
+
+    async def test_tracking_registration_exceeds_three_seconds_without_shortening_healthy_calls(self):
+        rows, requests, elapsed = await self.registration_case('registration-tracking', delay=.32)
+        self.assertGreater(elapsed, 3)
+        self.assertEqual(rows[:11], ['register %d 1 0' % i for i in range(11)])
+        self.assertEqual(rows[-1], 'rollback 1 0')
+        self.assertEqual([method for method, _ in requests], ['registerSubscriber'] * 11 + ['unregisterSubscriber'])
+
+    async def test_cumulative_master_budget_still_expires_across_serial_calls(self):
+        rows, requests, elapsed = await self.registration_case('registration-cumulative', delay=.32)
+        self.assertLess(elapsed, 4)
+        self.assertTrue(rows[-2].endswith(' 0 1'))
+        self.assertEqual(rows[-1], 'rollback 0 1')
+        self.assertLess(len(requests), 11)
+
+    async def test_tracking_hung_call_is_bounded_without_replay_and_rollback_has_a_fresh_call_budget(self):
+        rows, requests, elapsed = await self.registration_case('registration-tracking', hung=True)
+        self.assertGreater(elapsed, 2.5)
+        self.assertLess(elapsed, 6)
+        self.assertEqual(rows, ['register 0 0 1', 'rollback 1 1'])
+        self.assertEqual(requests, [('registerSubscriber', '/robot0/pose'),
+                                    ('unregisterSubscriber', '/robot0/pose')])
+
     async def test_master_connection_reuse_close_and_transport_failure(self):
         connections, requests, tasks = [], [], []
 

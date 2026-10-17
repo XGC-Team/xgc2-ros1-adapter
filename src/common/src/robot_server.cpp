@@ -1359,7 +1359,7 @@ private:
       if (member && error.empty()) {
         try {
           auto node = binding_.CreateNode(member->lane);
-          auto budget = binding_.BoundMasterCalls(timings_.member_registration);
+          auto budget = binding_.BoundMasterCalls(std::nullopt);
           const std::weak_ptr<Member> weak = member;
           auto native = factory_(
               *node, config,

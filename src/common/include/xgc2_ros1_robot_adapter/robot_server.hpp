@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -120,8 +121,11 @@ public:
   virtual std::unique_ptr<RosNode> CreateNode(std::size_t lane) = 0;
 
   virtual std::unique_ptr<CommandIo> CreateCommandIo() = 0;
+  // A duration bounds the entire scope. nullopt only tracks failures; each
+  // native master call retains its independent finite transport bound.
   virtual std::unique_ptr<MasterBudget>
-  BoundMasterCalls(std::chrono::milliseconds budget) = 0;
+  BoundMasterCalls(
+      std::optional<std::chrono::milliseconds> budget) = 0;
 
   // Returns once everything the robots published so far has left the process,
   // or after the budget. Middleware hands a published message to a transport
@@ -155,7 +159,6 @@ using RobotFactory = std::function<std::shared_ptr<NativeRobot>(
 struct ServerTimings {
   std::chrono::milliseconds master_probe_interval{1000};
   std::chrono::milliseconds master_unreachable_after{5000};
-  std::chrono::milliseconds member_registration{3000};
   std::chrono::milliseconds member_removal{10000};
   std::chrono::milliseconds command_drain{2000};
   std::chrono::milliseconds member_drain{15000};

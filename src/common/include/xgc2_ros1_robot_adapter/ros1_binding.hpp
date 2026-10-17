@@ -14,17 +14,19 @@
 namespace xgc2_ros1_robot_adapter {
 
 // Bounds every ROS master call made by the calling thread while it is alive,
-// including roscpp's own registrations. Nothing in this scope blocks beyond
-// its budget; failed() tells whether a call ran out of it.
+// including roscpp's own registrations. A duration bounds the whole scope;
+// nullopt only tracks failures, retaining the independent per-call bound.
 class RosMasterDeadline final : public MasterBudget {
 public:
-  explicit RosMasterDeadline(std::chrono::milliseconds budget);
+  explicit RosMasterDeadline(
+      std::optional<std::chrono::milliseconds> budget);
   ~RosMasterDeadline() override;
   bool failed() const override;
 
 private:
   std::chrono::steady_clock::time_point previous_;
   bool previous_failed_;
+  bool previous_active_;
 };
 
 // The node a ROS1 robot factory receives: a handle whose callbacks run on one
@@ -55,7 +57,8 @@ public:
   std::unique_ptr<RosNode> CreateNode(std::size_t lane) override;
   std::unique_ptr<CommandIo> CreateCommandIo() override;
   std::unique_ptr<MasterBudget>
-  BoundMasterCalls(std::chrono::milliseconds budget) override;
+  BoundMasterCalls(
+      std::optional<std::chrono::milliseconds> budget) override;
   void FlushPublications(std::chrono::milliseconds budget) override;
 
 private:

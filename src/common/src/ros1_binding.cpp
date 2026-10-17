@@ -95,7 +95,8 @@ std::unique_ptr<CommandIo> Ros1Binding::CreateCommandIo() {
 }
 
 std::unique_ptr<MasterBudget>
-Ros1Binding::BoundMasterCalls(std::chrono::milliseconds budget) {
+Ros1Binding::BoundMasterCalls(
+      std::optional<std::chrono::milliseconds> budget) {
   return std::unique_ptr<MasterBudget>(new RosMasterDeadline(budget));
 }
 
