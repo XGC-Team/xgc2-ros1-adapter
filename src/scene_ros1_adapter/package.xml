@@ -23,7 +23,7 @@
   <depend>libssl-dev</depend>
   <depend>libassimp-dev</depend>
   <depend>libpugixml-dev</depend>
-  <depend version_gte="0.6.0-4~focal">libxgc2-math-dev</depend>
+  <depend version_gte="0.6.0-6~focal">libxgc2-math-dev</depend>
   <depend>libjsoncpp-dev</depend>
   <exec_depend>python3</exec_depend>
 
