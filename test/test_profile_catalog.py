@@ -68,6 +68,32 @@ class ProfileCatalogTest(unittest.TestCase):
                 ),
             )
 
+    def test_px4_xsim_localization_freshness_is_one_second_only(self):
+        files = [PROFILES / ("px4-multirotor-" + suffix + ".yaml")
+                 for suffix in ("physical-vrpn", "xsim-ros", "gazebo-vrpn")]
+        catalog = self.catalog(files=files, provider=FIXTURES.PX4_DEFINITION_ID)
+        installed = {entry["profileId"]: entry for entry in catalog["profiles"]}
+        xsim = installed["px4-multirotor.xsim.ros"]
+        localization = ("state.mocap.pose", "state.mocap.velocity",
+                        "state.mocap.speed", "state.localization.error")
+        for channel_id in localization:
+            self.assertEqual(xsim["semantics"]["channelStaleAfterMillis"][channel_id], 1000)
+        readiness = {entry["channelId"]: entry["maximumAgeMillis"]
+                     for entry in xsim["semantics"]["operationalReadyConditions"]}
+        self.assertEqual(readiness["state.mocap.pose"], 1000)
+        for profile_id in ("px4-multirotor.physical.vrpn", "px4-multirotor.gazebo.vrpn"):
+            for channel_id in localization:
+                self.assertEqual(installed[profile_id]["semantics"]["channelStaleAfterMillis"][channel_id], 500)
+        source = yaml.safe_load(files[1].read_text(encoding="utf-8"))
+        offboard = next(channel for channel in source["channels"]
+                        if channel["id"] == "diagnostic.offboard-input")
+        self.assertEqual(offboard["policy"]["source_timeout_ms"], 500)
+        fingerprint, messages = CONTRACT.load_registry(self.registry)
+        profiles = CONTRACT.load_profiles([str(path) for path in files], SCHEMA, messages)
+        header = CONTRACT.generate(fingerprint, messages, profiles,
+                                   FIXTURES.PX4_DEFINITION_ID, "fixture")
+        self.assertIn('"px4-multirotor.xsim.ros", "' + xsim["profileDigest"] + '"', header)
+
     def test_the_digest_binds_the_provider_identity(self):
         scout = self.catalog()
         other = self.catalog(provider="xgc2-other-ros1-adapter")

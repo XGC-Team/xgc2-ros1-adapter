@@ -44,10 +44,10 @@ semantic_traits:
   default_stale_after_ms: 2000
   channel_stale_after_ms:
     state.pose: 1000
-    state.mocap.pose: 500
-    state.mocap.velocity: 500
-    state.mocap.speed: 500
-    state.localization.error: 500
+    state.mocap.pose: 1000
+    state.mocap.velocity: 1000
+    state.mocap.speed: 1000
+    state.localization.error: 1000
   online_conditions:
   - channel_id: state.flight
     maximum_age_ms: 2000
@@ -56,7 +56,7 @@ semantic_traits:
   - channel_id: state.pose
     maximum_age_ms: 1000
   - channel_id: state.mocap.pose
-    maximum_age_ms: 500
+    maximum_age_ms: 1000
 channels:
 - id: state.pose
   kind: stream_out
