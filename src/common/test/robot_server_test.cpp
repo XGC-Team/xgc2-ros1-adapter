@@ -4,6 +4,7 @@
 #include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc2/xrpc/grpc.hpp"
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/async_ros_services.hpp"
 #include "xgc2_ros1_robot_adapter/master_retry.hpp"
 #include <algorithm>
 #include <atomic>
@@ -67,7 +68,10 @@ operation::OperationEvent event(const operation::OperationRequest &request,
 
 class FakeIo final : public CommandIo {
 public:
-  explicit FakeIo(World &world) : world_(world) {}
+  explicit FakeIo(World &world, bool real_wait = false) : world_(world) {
+    if (real_wait)
+      real_io_ = std::make_unique<AsyncRosServices>();
+  }
   void Cancel(std::uint64_t id) override {
     std::lock_guard<std::mutex> lock(world_.mutex);
     const auto found = world_.pending.find(id);
@@ -93,11 +97,20 @@ public:
     }
     for (auto &entry : ready)
       entry.first(std::move(entry.second));
-    std::this_thread::sleep_for(std::min(wait, milliseconds(2)));
+    if (real_io_) {
+      if (wait == milliseconds(100))
+        world_.record("idle-pump");
+      if (wait == milliseconds(0))
+        world_.record("fence-pump");
+      real_io_->Pump(wait);
+    } else {
+      std::this_thread::sleep_for(std::min(wait, milliseconds(2)));
+    }
   }
 
 private:
   World &world_;
+  std::unique_ptr<AsyncRosServices> real_io_;
 };
 
 class FakeBinding final : public RosBinding {
@@ -111,6 +124,7 @@ public:
   std::atomic<bool> master_calls_fail{false}; // BoundMasterCalls reports failure
   std::atomic<bool> running{true};
   std::atomic<bool> hold_connect{false};
+  bool real_command_wait = false;
   void releaseConnect() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -163,7 +177,7 @@ public:
     return std::unique_ptr<RosNode>(new RosNode());
   }
   std::unique_ptr<CommandIo> CreateCommandIo() override {
-    return std::unique_ptr<CommandIo>(new FakeIo(world_));
+    return std::unique_ptr<CommandIo>(new FakeIo(world_, real_command_wait));
   }
   std::unique_ptr<MasterBudget>
   BoundMasterCalls(
@@ -792,6 +806,73 @@ TEST_F(ServerShutdown, DrainsInOrderThenAnswersAndExitsCleanly) {
   EXPECT_LT(world_.position("destroy:r2"), world_.position("ros-shutdown"));
   // The subscribers saw the members removed.
   EXPECT_TRUE(watch.waitFinished());
+}
+
+TEST_F(ServerShutdown, FleetRetirementUsesOneSchedulerBarrierBeforeNativeStops) {
+  binding_->real_command_wait = true;
+  startReady();
+  wire::ApplyMembersRequest request;
+  for (int i = 1; i <= 100; ++i) {
+    const auto id = "r" + std::to_string(i);
+    *request.add_members() = registration(id, "/fleet/" + id);
+  }
+  ASSERT_TRUE(client_->apply(request).status.ok());
+
+  Reply<wire::ExecuteResponse> first, last;
+  std::thread first_executor([&] {
+    Client other(socket());
+    first = other.execute(command("r1", "slow", "first"), milliseconds(20000));
+  });
+  std::thread last_executor([&] {
+    Client other(socket());
+    last = other.execute(command("r100", "slow", "last"), milliseconds(20000));
+  });
+  for (int attempt = 0; attempt < 400 &&
+       (!world_.contains("execute:r1:slow") ||
+        !world_.contains("execute:r100:slow")); ++attempt)
+    std::this_thread::sleep_for(milliseconds(5));
+  EXPECT_TRUE(world_.contains("execute:r1:slow"));
+  EXPECT_TRUE(world_.contains("execute:r100:slow"));
+
+  const auto answer = client_->shutdown(milliseconds(20000));
+  first_executor.join();
+  last_executor.join();
+  ASSERT_TRUE(answer.status.ok()) << answer.status.error_message();
+  EXPECT_FALSE(answer.response.serving());
+  ASSERT_TRUE(first.status.ok()) << first.status.error_message();
+  ASSERT_TRUE(last.status.ok()) << last.status.error_message();
+  EXPECT_EQ(operation::OPERATION_PHASE_CANCELLED, first.response.event().phase());
+  EXPECT_EQ(operation::OPERATION_PHASE_CANCELLED, last.response.event().phase());
+  EXPECT_EQ(0, join());
+
+  const auto lines = world_.snapshot();
+  auto first_stop = std::find_if(lines.begin(), lines.end(), [](const auto &line) {
+    return line.compare(0, 5, "stop:") == 0;
+  });
+  auto last_stop = std::find_if(lines.rbegin(), lines.rend(), [](const auto &line) {
+    return line.compare(0, 5, "stop:") == 0;
+  });
+  ASSERT_NE(lines.end(), first_stop);
+  ASSERT_NE(lines.rend(), last_stop);
+  // Count the barrier's real zero-wait completion pump, before the final
+  // flush. The scheduler's final I/O cleanup pump happens after that flush.
+  const auto flush = lines.begin() + world_.position("flush");
+  const auto fences = std::count(lines.begin(), flush, "fence-pump");
+  RecordProperty("retirement_fence_pumps", fences);
+  RecordProperty("idle_pumps_during_native_stops",
+                 std::count(first_stop, last_stop.base(), "idle-pump"));
+  EXPECT_EQ(1, fences);
+  EXPECT_LT(world_.position("cancelled:first"), first_stop - lines.begin());
+  EXPECT_LT(world_.position("cancelled:last"), first_stop - lines.begin());
+  EXPECT_EQ(1, std::count(lines.begin(), lines.end(), "flush"));
+  for (int i = 1; i <= 100; ++i) {
+    const auto id = "r" + std::to_string(i);
+    EXPECT_EQ(1, std::count(lines.begin(), lines.end(), "stop:" + id));
+    EXPECT_EQ(1, std::count(lines.begin(), lines.end(), "destroy:" + id));
+    EXPECT_LT(world_.position("stop:" + id), world_.position("flush"));
+    EXPECT_LT(world_.position("flush"), world_.position("destroy:" + id));
+    EXPECT_LT(world_.position("destroy:" + id), world_.position("ros-shutdown"));
+  }
 }
 
 TEST_F(ServerShutdown, ACommandThatFinishesWithinTheBudgetIsNotCancelled) {

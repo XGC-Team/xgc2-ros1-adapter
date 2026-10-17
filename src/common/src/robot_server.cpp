@@ -675,12 +675,12 @@ private:
     }
     notifyStatus();
     auto budget = binding_.BoundMasterCalls(timings_.member_removal);
+    try {
+      fenceCommands(members);
+    } catch (...) {
+      workerFailed("native fence", std::current_exception());
+    }
     for (auto &member : members) {
-      try {
-        fenceCommands(member);
-      } catch (...) {
-        workerFailed("native fence", std::current_exception());
-      }
       try {
         if (member->native)
           member->native->Stop();
@@ -1488,40 +1488,49 @@ private:
       binding_.FlushPublications(timings_.publication_flush);
     return result;
   }
-  // Cancels the member's native call and fails its queued commands; returns
+  // Cancels each member's native call and fails its queued commands; returns
   // once the scheduler has done so.
   void fenceCommands(const std::shared_ptr<Member> &member) {
+    fenceCommands(std::vector<std::shared_ptr<Member>>{member});
+  }
+  void fenceCommands(const std::vector<std::shared_ptr<Member>> &members) {
+    if (members.empty())
+      return;
     auto done = std::make_shared<std::promise<void>>();
     auto ready = done->get_future();
     if (!scheduler_alive_.load(std::memory_order_acquire)) {
       // The scheduler flag changes only after its native services destruct.
-      if (member->active_call)
-        finishExecute(member->active_call,
-                      CommandError(member->active_call->request.operation(),
-                                   operation::ERROR_CLASS_UNCERTAIN,
-                                   "native-result-unknown",
-                                   "native scheduler exited; reconcile outcome"));
-      member->active_call.reset();
-      member->native_call = 0;
-      member->in_flight = false;
-      for (auto &call : member->commands)
-        finishExecute(call, CommandError(call->request.operation(),
-                                         operation::ERROR_CLASS_CANCELLED,
-                                         "server-stopped",
-                                         "not executed: native scheduler exited"));
-      member->commands.clear();
+      for (auto &member : members) {
+        if (member->active_call)
+          finishExecute(member->active_call,
+                        CommandError(member->active_call->request.operation(),
+                                     operation::ERROR_CLASS_UNCERTAIN,
+                                     "native-result-unknown",
+                                     "native scheduler exited; reconcile outcome"));
+        member->active_call.reset();
+        member->native_call = 0;
+        member->in_flight = false;
+        for (auto &call : member->commands)
+          finishExecute(call, CommandError(call->request.operation(),
+                                           operation::ERROR_CLASS_CANCELLED,
+                                           "server-stopped",
+                                           "not executed: native scheduler exited"));
+        member->commands.clear();
+      }
       return;
     }
     postFence(
-        {[this, member, done] {
-           if (member->native_call && io_)
-             io_->Cancel(member->native_call);
-           for (auto &call : member->commands)
-             finishExecute(call, CommandError(call->request.operation(),
-                                              operation::ERROR_CLASS_CANCELLED,
-                                              "member-removed",
-                                              "not executed: member removed"));
-           member->commands.clear();
+        {[this, members, done] {
+           for (auto &member : members) {
+             if (member->native_call && io_)
+               io_->Cancel(member->native_call);
+             for (auto &call : member->commands)
+               finishExecute(call, CommandError(call->request.operation(),
+                                                operation::ERROR_CLASS_CANCELLED,
+                                                "member-removed",
+                                                "not executed: member removed"));
+             member->commands.clear();
+           }
            if (io_)
              io_->Pump(Milliseconds(0));
            done->set_value();
@@ -1539,7 +1548,7 @@ private:
           fence_job_ = {};
         }
         abortJob(pending, false);
-        fenceCommands(member);
+        fenceCommands(members);
         return;
       }
     }

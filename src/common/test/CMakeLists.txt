@@ -8,7 +8,8 @@ catkin_add_gtest(${PROJECT_NAME}_server_test robot_server_test.cpp)
 if(TARGET ${PROJECT_NAME}_server_test)
   target_include_directories(${PROJECT_NAME}_server_test PRIVATE ${GRPC_INCLUDE_DIRS})
   target_link_libraries(${PROJECT_NAME}_server_test
-    xgc2_robot_server XgcXrpc::grpc nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
+    xgc2_robot_server xgc2_robot_server_ros1 XgcXrpc::grpc
+    nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
 endif()
 
 catkin_add_gtest(${PROJECT_NAME}_domain_test robot_domain_test.cpp)
