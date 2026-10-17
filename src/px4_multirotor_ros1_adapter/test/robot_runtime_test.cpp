@@ -160,6 +160,35 @@ TEST(InstalledProfile, RawVrpnAccelerationUsesTwistAndCanonicalUsesAccel) {
   }
 }
 
+TEST(InstalledProfile, XsimAdmitsCanonicalInputsWithoutLocalizationError) {
+  xgc2_ros1_robot_adapter::RobotConfig config;
+  config.robot_id = "uav1";
+  config.profile_id = "px4-multirotor.xsim.ros";
+  config.parameters["namespace"] = "/uav1";
+  config.parameters["localization_pose_topic"] = "/uav1/pose";
+  config.parameters["localization_twist_topic"] = "/uav1/twist";
+  config.parameters["positioning_frame_number"] = "5";
+  config.parameters["positioning_comparison_threshold_m"] = "1e-10";
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_EQ("/uav1/pose", native.mocap_endpoint);
+  EXPECT_EQ("/uav1/twist", native.mocap_velocity_endpoint);
+  EXPECT_FALSE(native.publish_vision);
+  contract::ChannelMetadata channel{};
+  EXPECT_FALSE(InstalledContract().channelMetadata(
+      config.profile_id, "state.localization.error", &channel));
+  for (const char *profile : {"px4-multirotor.physical.vrpn",
+                              "px4-multirotor.gazebo.vrpn"}) {
+    SCOPED_TRACE(profile);
+    EXPECT_TRUE(InstalledContract().channelMetadata(
+        profile, "state.localization.error", &channel));
+    auto other = makeProfileConfig();
+    other.profile_id = profile;
+    EXPECT_TRUE(BuildNativeProfileConfig(other, &native, &error)) << error;
+  }
+}
+
 TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   NativeProfileConfig native;
   std::string error;

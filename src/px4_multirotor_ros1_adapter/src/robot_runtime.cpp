@@ -542,11 +542,14 @@ bool BuildNativeProfileConfig(
   std::size_t channel_count = 0u;
   const auto *channels =
       InstalledContract().profileChannels(config.profile_id, &channel_count);
-  if (channels == nullptr || channel_count != kNativeBindings.size() - (canonical_input ? 2u : 0u))
+  if (channels == nullptr || channel_count != kNativeBindings.size() - (canonical_input ? 3u : 0u))
     return fail(error, "PX4 native channel binding is not exhaustive");
   for (const auto &binding : kNativeBindings) {
     const std::string id(binding.id);
-    if (canonical_input && (id == "state.vision.pose" || id == "state.mocap.acceleration")) continue;
+    if (canonical_input && (id == "state.vision.pose" ||
+                            id == "state.mocap.acceleration" ||
+                            id == "state.localization.error"))
+      continue;
     const auto endpoint_count = binding.endpoint_count - (canonical_input && (id == "state.mocap.pose" || id == "state.mocap.velocity") ? 1u : 0u);
     contract::ChannelMetadata channel{};
     if (!InstalledContract().channelMetadata(config.profile_id, binding.id, &channel) ||

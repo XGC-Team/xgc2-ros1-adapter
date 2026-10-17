@@ -75,14 +75,14 @@ class ProfileCatalogTest(unittest.TestCase):
         installed = {entry["profileId"]: entry for entry in catalog["profiles"]}
         xsim = installed["px4-multirotor.xsim.ros"]
         localization = ("state.mocap.pose", "state.mocap.velocity",
-                        "state.mocap.speed", "state.localization.error")
+                        "state.mocap.speed")
         for channel_id in localization:
             self.assertEqual(xsim["semantics"]["channelStaleAfterMillis"][channel_id], 1000)
         readiness = {entry["channelId"]: entry["maximumAgeMillis"]
                      for entry in xsim["semantics"]["operationalReadyConditions"]}
         self.assertEqual(readiness["state.mocap.pose"], 1000)
         for profile_id in ("px4-multirotor.physical.vrpn", "px4-multirotor.gazebo.vrpn"):
-            for channel_id in localization:
+            for channel_id in localization + ("state.localization.error",):
                 self.assertEqual(installed[profile_id]["semantics"]["channelStaleAfterMillis"][channel_id], 500)
         source = yaml.safe_load(files[1].read_text(encoding="utf-8"))
         offboard = next(channel for channel in source["channels"]
@@ -93,6 +93,25 @@ class ProfileCatalogTest(unittest.TestCase):
         header = CONTRACT.generate(fingerprint, messages, profiles,
                                    FIXTURES.PX4_DEFINITION_ID, "fixture")
         self.assertIn('"px4-multirotor.xsim.ros", "' + xsim["profileDigest"] + '"', header)
+
+    def test_only_px4_xsim_omits_localization_error_capability(self):
+        files = [PROFILES / ("px4-multirotor-" + suffix + ".yaml")
+                 for suffix in ("physical-vrpn", "xsim-ros", "gazebo-vrpn")]
+        catalog = self.catalog(files=files, provider=FIXTURES.PX4_DEFINITION_ID)
+        for source_path, profile in zip(files, catalog["profiles"]):
+            with self.subTest(profile=profile["profileId"]):
+                has_error = profile["profileId"] != "px4-multirotor.xsim.ros"
+                self.assertEqual("state.localization.error" in {
+                    channel["id"] for channel in profile["channels"]
+                }, has_error)
+                self.assertEqual("state.localization.error" in
+                                 profile["semantics"]["channelStaleAfterMillis"],
+                                 has_error)
+                source = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+                health = next(channel for channel in source["channels"]
+                              if channel["id"] == "diagnostic.stream-health")
+                self.assertEqual("state.localization.error" in health["observes"],
+                                 has_error)
 
     def test_the_digest_binds_the_provider_identity(self):
         scout = self.catalog()

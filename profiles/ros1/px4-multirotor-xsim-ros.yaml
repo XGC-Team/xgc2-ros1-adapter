@@ -47,7 +47,6 @@ semantic_traits:
     state.mocap.pose: 1000
     state.mocap.velocity: 1000
     state.mocap.speed: 1000
-    state.localization.error: 1000
   online_conditions:
   - channel_id: state.flight
     maximum_age_ms: 2000
@@ -108,14 +107,6 @@ channels:
       name: '{localization_twist_topic}'
       type: geometry_msgs/TwistStamped
       scope: global
-- id: state.localization.error
-  kind: stream_out
-  output_message_id: 2007
-  processor: px4.localization-position-error
-  output_rate_hz: 10
-  observes:
-  - state.pose
-  - state.mocap.pose
 - id: state.imu
   kind: stream_out
   output_message_id: 2003
@@ -218,7 +209,6 @@ channels:
   - state.mocap.pose
   - state.mocap.velocity
   - state.mocap.speed
-  - state.localization.error
   - state.velocity
   - state.imu
   - state.power
