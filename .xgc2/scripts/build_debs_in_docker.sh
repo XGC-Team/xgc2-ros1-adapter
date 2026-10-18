@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.8@sha256:fce2d76fddf4f6439bf0a188249b731650febdc163befc360bed186b269d252a}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.10@sha256:95f493947129f8f722af9b08fd1236601cb1a0dc39111ad8c8c025cb082b2f67}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
@@ -208,7 +208,8 @@ docker exec "${container_name}" bash -lc '
     for package in clang-10 nlohmann-json3-dev patch libgrpc++-dev libc-ares-dev \
         protobuf-compiler-grpc python3-grpcio python3-protobuf \
         ros-noetic-ros-babel-fish libjsoncpp-dev libyaml-cpp-dev libssl-dev libgtest-dev \
-        ros-noetic-tf2-ros ros-noetic-visualization-msgs; do
+        ros-noetic-tf2-ros ros-noetic-visualization-msgs \
+        libassimp-dev libpugixml-dev libsdformat9-dev; do
       dpkg-query -W -f="\${Status}" "${package}" 2>/dev/null \
         | grep -Fxq "install ok installed" \
         || missing_image_packages+=("${package}")
