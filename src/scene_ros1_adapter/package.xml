@@ -29,4 +29,5 @@
 
   <test_depend>rostest</test_depend>
   <test_depend>gtest</test_depend>
+  <test_depend>gazebo_sim_worlds</test_depend>
 </package>

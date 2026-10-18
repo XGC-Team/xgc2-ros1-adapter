@@ -152,11 +152,13 @@ release:
   - xgc2-xrpc
   - xgc2-protobuf
   - libxgc2-math-dev
+  - xgc2-gazebo-sim-scenes
   dependency_policy:
     xsim: rebuild
     xgc2-xrpc: rebuild
     xgc2-protobuf: rebuild
     libxgc2-math-dev: rebuild
     xgc2-ros-msgs: rebuild
+    xgc2-gazebo-sim-scenes: verify
   apt_versions:
     focal: 0.8.0-5

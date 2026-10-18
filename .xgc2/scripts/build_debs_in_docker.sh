@@ -17,6 +17,7 @@ XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_
 XGC2_XRPC_DEB_VERSION="0.2.0-1~focal"
 XGC2_MATH_DEB_VERSION="0.6.0-6~focal"
 XGC2_GEOMETRY_MSGS_DEB_VERSION="1.5.0-4"
+XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION="1.5.0-8"
 XGC2_DEPENDENCY_SET_DIGEST="${XGC2_DEPENDENCY_SET_DIGEST:-}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 XGC2_SOURCE_DIGEST="${XGC2_SOURCE_DIGEST:-}"
@@ -136,6 +137,7 @@ docker_env_args=(
   -e "XGC2_XRPC_DEB_VERSION=${XGC2_XRPC_DEB_VERSION}"
   -e "XGC2_MATH_DEB_VERSION=${XGC2_MATH_DEB_VERSION}"
   -e "XGC2_GEOMETRY_MSGS_DEB_VERSION=${XGC2_GEOMETRY_MSGS_DEB_VERSION}"
+  -e "XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION=${XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION}"
   -e "EXPECTED_PROTOBUF_PRODUCT_VERSION=${EXPECTED_PROTOBUF_PRODUCT_VERSION}"
 )
 
@@ -239,6 +241,7 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
       libxgc2-sensing-dev \
+      ros-noetic-xgc2-gazebo-sim-worlds \
       "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}")"
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
@@ -247,12 +250,17 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
       libxgc2-sensing-dev \
+      ros-noetic-xgc2-gazebo-sim-worlds \
       "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}"
     for package in libxgc2-xrpc-dev libxgc2-xrpc-grpc-dev; do
       test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"
     done
     test "$(dpkg-query -W -f="\${Version}" libxgc2-math-dev)" = "${XGC2_MATH_DEB_VERSION}"
     test "$(dpkg-query -W -f="\${Version}" ros-noetic-xgc2-geometry-msgs)" = "${XGC2_GEOMETRY_MSGS_DEB_VERSION}"
+    dpkg --compare-versions \
+      "$(dpkg-query -W -f="\${Version}" ros-noetic-xgc2-gazebo-sim-worlds)" \
+      ge "${XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION}"
+    test -f /opt/ros/noetic/share/gazebo_sim_worlds/worlds/scene_editable/scene_editable.world
     # Package selection is build metadata, not an SDK runtime setting.
     unset XGC2_XRPC_DEB_VERSION
 

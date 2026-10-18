@@ -127,8 +127,35 @@ bool nearVertex(const Json& vertices, double x, double y, double z) {
   return false;
 }
 
-TEST(Compiled, ReviewAffineScaleAndFrames) {
-  const fs::path assets = "/tmp/xgc-resource-compiler-review-20261017/assets";
+TEST_F(Asset, ReviewAffineScaleAndFrames) {
+  const auto mesh = [](const char* nodes) {
+    return std::string(R"({"asset":{"version":"2.0"},
+"buffers":[{"byteLength":72,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAAEAAAEBAAACAPwAAAAAAAAAAAAABAAIAAAACAAMAAAADAAEAAQADAAIA"}],
+"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":48,"target":34962},{"buffer":0,"byteOffset":48,"byteLength":24,"target":34963}],
+"accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,2,3]},
+{"bufferView":1,"componentType":5123,"count":12,"type":"SCALAR"}],
+"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"mode":4}]}],
+"nodes":)") + nodes + R"(,"scenes":[{"nodes":[0]}],"scene":0})";
+  };
+  write("unit.gltf", mesh(R"([{"mesh":0}])"));
+  write("nested.gltf", mesh(R"([{"translation":[9,17,25],"scale":[2,3,4],"children":[1]},
+{"rotation":[0,0,0.3826834323650898,0.9238795325112867],"mesh":0}])"));
+  write("scale.sdf", R"(<sdf version="1.7"><model name="scaled"><link name="body"><collision name="mesh">
+<geometry><mesh><uri>unit.gltf</uri><scale>2 3 4</scale></mesh></geometry>
+</collision></link></model></sdf>)");
+  write("nested-model.sdf", R"(<sdf version="1.7"><model name="parent">
+<link name="body"><collision name="box"><geometry><box><size>1 1 1</size></box></geometry></collision></link>
+<model name="child"><pose>5 0 0 0 0 0</pose><link name="body"><collision name="box">
+<geometry><box><size>1 1 1</size></box></geometry></collision></link></model></model></sdf>)");
+  write("relative-frame.sdf", R"(<sdf version="1.7"><model name="relative">
+<frame name="offset" attached_to="body"><pose relative_to="body">5 0 0 0 0 0</pose></frame>
+<link name="body"><collision name="box"><pose relative_to="offset">1 0 0 0 0 0</pose>
+<geometry><box><size>1 1 1</size></box></geometry></collision></link></model></sdf>)");
+  write("joint.sdf", R"(<sdf version="1.7"><model name="jointed">
+<link name="body"><collision name="box"><geometry><box><size>1 1 1</size></box></geometry></collision></link>
+<link name="child"/><joint name="j" type="fixed"><parent>body</parent><child>child</child></joint></model></sdf>)");
+  write("include.sdf", R"(<sdf version="1.7"><model name="included"><include><uri>nested-model.sdf</uri></include></model></sdf>)");
+  const fs::path assets = root;
   const auto load = [&](const std::string& file, const char* format) {
     return scene(std::string("\"models\":{\"resource\":{\"resource\":{\"format\":\"") + format +
                  "\",\"file\":\"" + file + "\"}}},\"obstacles\":[{\"id\":\"instance0\",\"model\":\"resource\",\"pose\":{\"position\":[100,200,300]}}]");

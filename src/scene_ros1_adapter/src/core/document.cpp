@@ -250,12 +250,13 @@ Json obstacle(const Json& value) {
       if (std::abs(start[i] - initial.at("position")[i].get<double>()) > 1e-6)
         throw SceneError("Initial obstacle position must match its motion path start");
   }
-  Json result{{"id", oid}, {"name", name}, {"pose", initial}, {"motion", movement}};
+  Json result{{"id", oid}, {"name", name}, {"pose", initial}};
   if (has_model) {
     result["model"] = identifier(value.at("model"), "Model ID");
-    return result;
+  } else {
+    result["parts"] = normalizeParts(value.at("parts"));
   }
-  result["parts"] = normalizeParts(value.at("parts"));
+  result["motion"] = movement;
   return result;
 }
 
