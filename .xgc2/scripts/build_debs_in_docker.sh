@@ -242,7 +242,11 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
       libxgc2-sensing-dev \
       ros-noetic-xgc2-gazebo-sim-worlds \
-      "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}")"
+      "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}" 2>&1)" || {
+      status=$?
+      printf "%s\n" "${planned_transaction}" >&2
+      exit "${status}"
+    }
     verify_firstparty_transaction <<<"${planned_transaction}"
     apt-get install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
