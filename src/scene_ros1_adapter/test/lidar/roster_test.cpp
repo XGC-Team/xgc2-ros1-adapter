@@ -437,6 +437,103 @@ TEST(Roster, SavedCloudDefaultFalseHasNoBodyRoster) {
   EXPECT_EQ("auto", fleet.robots[0].backend);
 }
 
+TEST(Roster, SavedXsimCloudInheritsSceneBackendWithoutChangingObservations) {
+  const auto original = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
+    "robots":[
+      {"namespace":"/rays","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","rateHz":25,"rangeMeters":12,"hRes":24,"vRes":8}}}},
+      {"namespace":"/samples","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"","preset":"zju_cpu_crop"}}}},
+      {"namespace":"/camera","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum"}}}}
+    ],"visualizationTopics":[]})json");
+  const auto baseline = buildFleetJson(original, true);
+  ASSERT_EQ(3u, baseline["robots"].size());
+  EXPECT_EQ("raycast", baseline["robots"][0]["mode"]);
+  EXPECT_EQ("penetrating", baseline["robots"][1]["mode"]);
+  EXPECT_EQ("depth_frustum", baseline["robots"][2]["mode"]);
+  for (const char* backend : {"cpu", "gpu", "auto"}) {
+    SCOPED_TRACE(backend);
+    auto input = original;
+    input.facts["scene"]["parameters"]["pointCloudBackend"] = backend;
+    const auto before = input.facts;
+    auto actual = buildFleetJson(input, true);
+    const auto fleet = buildFleet(input, {}, true);
+    ASSERT_EQ(3u, fleet.robots.size());
+    for (std::size_t i = 0; i < fleet.robots.size(); ++i) {
+      EXPECT_EQ(backend, fleet.robots[i].backend);
+      EXPECT_EQ(backend, actual["robots"][i]["backend"]);
+      actual["robots"][i]["backend"] = "auto";
+    }
+    EXPECT_EQ(baseline, actual);
+    EXPECT_EQ(before, input.facts);
+  }
+}
+
+TEST(Roster, SavedXsimCloudExplicitRobotBackendOverridesSceneDefault) {
+  auto input = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
+    "robots":[
+      {"namespace":"/cpu","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"cpu"}}}},
+      {"namespace":"/gpu","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"gpu"}}}},
+      {"namespace":"/auto","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"auto"}}}}
+    ],"visualizationTopics":[]})json");
+  for (const char* backend : {"cpu", "gpu", "auto"}) {
+    SCOPED_TRACE(backend);
+    input.facts["scene"]["parameters"]["pointCloudBackend"] = backend;
+    const auto fleet = buildFleet(input, {}, true);
+    ASSERT_EQ(3u, fleet.robots.size());
+    EXPECT_EQ("cpu", fleet.robots[0].backend);
+    EXPECT_EQ("gpu", fleet.robots[1].backend);
+    EXPECT_EQ("auto", fleet.robots[2].backend);
+  }
+}
+
+TEST(Roster, SavedXsimCloudRejectsMalformedSceneBackendBeforeSensorFiltering) {
+  const auto original = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
+    "robots":[],"visualizationTopics":[]})json");
+  const auto rejects = [](const SessionInput& input, const char* field) {
+    try {
+      buildFleetJson(input, true);
+      FAIL() << "accepted invalid " << field;
+    } catch (const SceneError& error) {
+      EXPECT_NE(std::string::npos, std::string(error.what()).find(field));
+    }
+  };
+  for (const auto& value : {Json(nullptr), Json(true), Json(1), Json("xsim"), Json::array()}) {
+    auto input = original;
+    input.facts["scene"] = value;
+    rejects(input, "scene");
+  }
+  for (const auto& value : {Json(nullptr), Json(true), Json(1), Json::object(), Json::array()}) {
+    auto input = original;
+    input.facts["scene"]["simulator"] = value;
+    rejects(input, "scene.simulator");
+  }
+  for (const auto& value : {Json(nullptr), Json(true), Json(1), Json("parameters"), Json::array()}) {
+    auto input = original;
+    input.facts["scene"]["parameters"] = value;
+    rejects(input, "scene.parameters");
+  }
+  for (const auto& value : {Json(nullptr), Json(true), Json(1), Json::object(), Json::array(), Json(""), Json("cuda")}) {
+    auto input = original;
+    input.facts["scene"]["parameters"]["pointCloudBackend"] = value;
+    rejects(input, "scene.parameters.pointCloudBackend");
+  }
+}
+
+TEST(Roster, SceneBackendDoesNotChangeGeometryOrGazeboFleet) {
+  auto input = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
+    "robots":[{"namespace":"/robot","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating"}}}}],
+    "visualizationTopics":[]})json");
+  const auto geometry = buildFleetJson(input, false);
+  input.facts["scene"]["simulator"] = "gazebo";
+  const auto gazebo = buildFleetJson(input, true);
+  for (const auto& backend : {Json("cpu"), Json("gpu"), Json("auto"), Json("invalid"), Json(nullptr)}) {
+    input.facts["scene"]["parameters"]["pointCloudBackend"] = backend;
+    EXPECT_EQ(gazebo, buildFleetJson(input, true));
+    input.facts["scene"]["simulator"] = "xsim";
+    EXPECT_EQ(geometry, buildFleetJson(input, false));
+    input.facts["scene"]["simulator"] = "gazebo";
+  }
+}
+
 TEST(Roster, CropFloatRoundTripsExactlyLikePython) {
   const auto input = parseSessionInput(R"json({"runMode":"simulation","robots":[
     {"namespace":"/crop","binding":{"simulationSensors":{"simpleLidar":{

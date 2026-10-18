@@ -106,8 +106,31 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
 
   const std::regex name_pattern(
       "/[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*");
-  const bool xsim_cloud = point_cloud &&
-      input.facts.value("scene", Json::object()).value("simulator", std::string{}) == "xsim";
+  bool xsim_cloud = false;
+  std::string default_backend = "auto";
+  if (point_cloud) {
+    const auto scene = input.facts.find("scene");
+    if (scene != input.facts.end()) {
+      if (!scene->is_object()) throw SceneError("scene must be an object");
+      const auto simulator = scene->find("simulator");
+      if (simulator != scene->end()) {
+        if (!simulator->is_string()) throw SceneError("scene.simulator must be a string");
+        xsim_cloud = *simulator == "xsim";
+      }
+      if (xsim_cloud) {
+        const auto parameters = scene->find("parameters");
+        if (parameters != scene->end()) {
+          if (!parameters->is_object()) throw SceneError("scene.parameters must be an object");
+          const auto backend = parameters->find("pointCloudBackend");
+          if (backend != parameters->end()) {
+            if (!backend->is_string() || (*backend != "auto" && *backend != "cpu" && *backend != "gpu"))
+              throw SceneError("scene.parameters.pointCloudBackend must be auto, cpu or gpu");
+            default_backend = backend->get<std::string>();
+          }
+        }
+      }
+    }
+  }
   std::size_t slot = 0;
   for (const auto &robot : input.robots) {
     const int body_id = static_cast<int>(++slot);
@@ -145,8 +168,9 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
       if (name_space.size() > 160 ||
           !std::regex_match(name_space, name_pattern))
         throw SceneError("invalid lidar namespace");
+      const auto acceleration = lidar.value("acceleration", std::string{});
       Json sensor = {{"namespace", name_space},
-                     {"backend", lidar.value("acceleration", std::string("auto")).empty() ? "auto" : lidar.value("acceleration", std::string("auto"))},
+                     {"backend", acceleration.empty() ? default_backend : acceleration},
                      {"mode", "raycast"},
                      {"rateHz", 10},
                      {"rangeMeters", 20},
