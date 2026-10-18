@@ -167,13 +167,7 @@ def main():
             wait_socket(('127.0.0.1', port), process)
             return process
         def start_node(profile):
-            command = [str(args.executable.resolve()), '--socket-path', str(scene_socket), '--target-id', 'fixture',
-                '--run-id', 'start-order', '--node-name', 'lf_start_order', '--ros-master-uri', env['ROS_MASTER_URI'],
-                '--ros-ip', '127.0.0.1', '_scene_file:=' + str(source), '_lidar_xrpc_socket:=' + str(lidar_socket), '_profile:=' + profile]
-            if profile == 'gazebo':
-                command += ['_simulation_endpoint:=' + str(world_socket), '--session-stdin']
-            with log.open('a') as output:
-                process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            scene_file = source
             if profile == 'gazebo':
                 # Gazebo owns robot scans. Scene owns only the reference layer.
                 document = {'runMode': 'simulation', 'robots': [{'namespace': '/lf_start_order',
@@ -181,6 +175,24 @@ def main():
                     'visualizationTopics': [{'topic': '/xgc/scene/reference_cloud',
                         'messageType': 'sensor_msgs/PointCloud2', 'role': 'semantic', 'visible3d': True}]}
                 scene_session(document, source, root, profile)
+                # Use this build's finite compiler, as the Run's scene workflow does.
+                prepared = json.loads(subprocess.check_output([
+                    str(args.executable.resolve().with_name('xgc2-scene-prepare')),
+                    '--context-json', json.dumps({key: document[key] for key in ['sessionId', 'experimentResourceId', 'scene']}),
+                    '--resource-root', document['runtime']['userFilesDir'],
+                    '--workspace-root', document['runtime']['workspaceDir']], env=env))
+                scene_file = Path(prepared['sceneFile'])
+            command = [str(args.executable.resolve()), '--socket-path', str(scene_socket), '--target-id', 'fixture',
+                '--run-id', 'start-order', '--node-name', 'lf_start_order', '--ros-master-uri', env['ROS_MASTER_URI'],
+                '--ros-ip', '127.0.0.1', '_scene_file:=' + str(scene_file), '_lidar_xrpc_socket:=' + str(lidar_socket), '_profile:=' + profile]
+            if profile == 'gazebo':
+                command += ['_simulation_endpoint:=' + str(world_socket), '--session-stdin',
+                    '_resource_root:=' + prepared['assetDirectory'],
+                    '_compiled_scene_file:=' + prepared['compiledSceneFile'],
+                    '_working_file:=' + prepared['workingFile'], '_frozen:=' + json.dumps(prepared['frozen'])]
+            with log.open('a') as output:
+                process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            if profile == 'gazebo':
                 process.stdin.write(json.dumps(document).encode())
             process.stdin.close()
             wait_socket(str(scene_socket), process, unix=True)
