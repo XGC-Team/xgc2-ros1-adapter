@@ -235,7 +235,7 @@ docker exec "${container_name}" bash -lc '
         >> /etc/apt/sources.list.d/xgc2.list
     fi
     apt_update
-    planned_transaction="$(apt-get --simulate install -y --no-install-recommends \
+    planned_transaction="$(apt-get -o Debug::pkgProblemResolver=yes --simulate install -y --no-install-recommends \
       "xgc2-protobuf-dev=${XGC2_PROTOBUF_DEB_VERSION}" \
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
