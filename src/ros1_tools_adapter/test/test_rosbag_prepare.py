@@ -121,6 +121,9 @@ class PreparationTests(unittest.TestCase):
                                               "asset": {"px4": {"mocapRigidBodyName": "Body1"}}}))
         self.assertEqual((device["robotAssetId"], device["robotAssetCommitId"], device["px4"]),
                          ("asset-1", "commit-1", {"mocapRigidBodyName": "Body1"}))
+        extension = read(frozen(physicalBinding={"assetId": "asset-2", "assetCommitId": "commit-2",
+                                                 "asset": {"extension": {"kind": "custom"}}}))
+        self.assertEqual(extension["extension"], {"kind": "custom"})
 
     def test_resolved_topic_bounds_admit_a_hundred_robot_roster_and_stay_closed(self):
         document = request()

@@ -111,7 +111,7 @@ def read_record_request():
                        "modelId": derived.get("modelId"),
                        "robotAssetId": physical.get("assetId"), "robotAssetCommitId": physical.get("assetCommitId"),
                        "visualization": derived.get("visualization", {}),
-                       **{key: asset[key] for key in ("px4", "scout", "mecanum") if key in asset}})
+                       **{key: asset[key] for key in ("px4", "scout", "mecanum", "extension") if key in asset}})
     document["robots"] = {"robots": robots, "experimentResourceId": session["experimentResourceId"],
                           "experimentCommitId": session["experimentCommitId"]}
     document["context"] = dict(session, rosMasterUri=session["simulation"]["rosMasterUri"],
@@ -259,7 +259,7 @@ def prepare(document, preview=False):
     for key in ("experimentResourceId", "experimentCommitId"):
         if p.get(key) and p[key] != robots.get(key):
             raise ValueError(key + " does not match the frozen robot selection")
-    resolved = resolve_recording_topics({"parameters": p, "robots": robots, "runMode": context["runMode"], "simulator": (context.get("scene") or {}).get("simulator", "")})
+    resolved = resolve_recording_topics({"parameters": p, "robots": robots})
     sidecar = []
     for robot in robots.get("robots") or []:
         item = {key: copy.deepcopy(robot.get(key)) for key in ("id", "kind", "namespace", "hybridSource", "modelId", "robotAssetId", "robotAssetCommitId", "robotAssetDigest", "profileId", "initialPose", "visualization")}
@@ -340,20 +340,12 @@ def require_archive_path(path, playback=False):
 require_archive_path(sys.argv[2])
 
 import datetime
-import json
-import math
-import os
-import re
-import stat
 import shutil
 import signal
 import subprocess
-import sys
 
 # Record fact evidence is subordinate to this recorder's session-manifest.
 # No current configuration is promoted to a producer application receipt.
-import copy
-import hashlib
 import queue
 import threading
 import multiprocessing
