@@ -275,7 +275,7 @@ def main():
                     world_socket.unlink()
                 world = World(world_socket, 'world-first')
                 until(lambda: envelope()['synchronized'])
-                assert len(world.applies) == 1 and world.applies[0]['document'] == current['document']
+                assert len(world.applies) == 1 and world.applies[0]['document'] == current['compiled']
                 assert world.applies[0]['epoch'] == current['epoch'] and world.applies[0]['revision'] == current['revision']
                 assert envelope()['consumers'][0]['instance_id'] == 'world-first'
                 time.sleep(0.15)
@@ -308,7 +308,7 @@ def main():
                 world = World(world_socket, 'world-second')
                 until(lambda: envelope()['synchronized'])
                 until(lambda: clouds and clouds[-1].width > 0)
-                assert len(world.applies) == 1 and world.applies[0]['document'] == current['document']
+                assert len(world.applies) == 1 and world.applies[0]['document'] == current['compiled']
                 assert world.applies[0]['epoch'] == current['epoch'] and world.applies[0]['revision'] == current['revision']
                 assert envelope()['consumers'][0]['instance_id'] == 'world-second'
                 time.sleep(0.3)
