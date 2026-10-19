@@ -23,6 +23,11 @@ ROBOT_PACKAGES = {
         "xgc2-mecanum-ugv-ros1-adapter",
     ],
 }
+ROBOT_NETWORK_PORTS = {
+    "xgc2-px4-multirotor-ros1-adapter": 48101,
+    "xgc2-scout-mini-ros1-adapter": 48102,
+    "xgc2-mecanum-ugv-ros1-adapter": 48103,
+}
 
 
 def flags_of(path, marker):
@@ -122,7 +127,7 @@ class ProcessDefinitionTest(unittest.TestCase):
         self.assertEqual(
             robot_flags,
             {"--socket-path", "--run-id", "--node-name", "--provider", "--target-id",
-             "--ros-master-uri", "--ros-ip"},
+             "--ros-master-uri", "--ros-ip", "--network-bootstrap"},
         )
         for path in DEFINITION_FILES:
             with self.subTest(definition=path.stem):
@@ -137,7 +142,8 @@ class ProcessDefinitionTest(unittest.TestCase):
                     self.assertEqual(len(remappings) + len(native_args) + 1, len(args))
                     self.assertEqual(len(native_args) % 2, 0)
                     self.assertEqual(len(native_args[0::2]), len(set(native_args[0::2])))
-                    self.assertEqual(set(native_args[0::2]), robot_flags - {"--provider"})
+                    self.assertEqual(set(native_args[0::2]),
+                                     robot_flags - {"--provider", "--network-bootstrap"})
                     self.assertEqual(dict(zip(native_args[0::2], native_args[1::2])), {
                         "--socket-path": "${socketPath}",
                         "--target-id": "${targetId}",
@@ -219,6 +225,11 @@ class ProcessDefinitionTest(unittest.TestCase):
                 self.assertEqual(arguments["--socket-path"], "${socketPath}")
                 if "--provider" in arguments:
                     self.assertEqual(arguments["--provider"], definition["id"])
+                    self.assertEqual(arguments["--network-bootstrap"], "${networkBootstrap}")
+                    self.assertNotIn("networkBootstrap", definition["parameters"]["required"])
+                    self.assertEqual(declared["networkBootstrap"], {
+                        "type": "string", "default": "", "fixedOnly": True, "sensitive": True,
+                    })
 
     def test_providers_are_served_by_the_executable_they_name(self):
         ugv = (SOURCES / "ugv_ros1_adapter" / "src" / "variant.cpp").read_text(encoding="utf-8")
@@ -240,7 +251,15 @@ class ProcessDefinitionTest(unittest.TestCase):
                 definition = load(path)
                 endpoints = set()
                 for service in definition["services"]:
-                    self.assertEqual(set(service), {"service", "api_version", "profile", "endpointParameter"})
+                    expected_keys = {"service", "api_version", "profile", "endpointParameter"}
+                    if path.stem in ROBOT_NETWORK_PORTS:
+                        expected_keys.add("network")
+                        self.assertEqual(service["network"], {
+                            "bootstrapParameter": "networkBootstrap",
+                            "hostParameter": "rosIp",
+                            "port": ROBOT_NETWORK_PORTS[path.stem],
+                        })
+                    self.assertEqual(set(service), expected_keys)
                     self.assertNotIn(service["endpointParameter"], endpoints)
                     endpoints.add(service["endpointParameter"])
                     socket = definition["parameters"]["properties"][service["endpointParameter"]]
