@@ -60,7 +60,7 @@ Characters of `--node-name` that are not legal in a ROS name become `_`, and the
 compared with the same replacement. A name without the Run id is an invalid command line
 (exit 2).
 
-### Source-side data gateway
+### Source-side Adapter
 
 Local sources keep the Unix-socket path and one shared server per type. On an Agent host,
 the same executable also exposes the service over TLS gRPC, using the supervisor-provided
@@ -68,8 +68,9 @@ the same executable also exposes the service over TLS gRPC, using the supervisor
 key or process is created per robot. Both endpoints share the same members and InstanceID.
 Agent readiness and shutdown use the local socket. `Describe.facts_json.direct_service_ref`
 is the public TLS reference used by Core for status and operations; it contains no secret.
-The ordinary `Describe.service_ref` remains the local socket reference. This deployment is
-called a Data Gateway; it does not relay telemetry through AgentLink or alter robot profiles.
+The ordinary `Describe.service_ref` remains the local socket reference. The service is
+called an Adapter on both station and robot hosts. It does not relay telemetry through
+AgentLink or alter robot profiles.
 
 ### Exit status
 
