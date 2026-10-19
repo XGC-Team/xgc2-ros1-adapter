@@ -62,5 +62,36 @@ TEST(FixedCloud, RejectsChangedBytesAndIncompletePointsInNativeOwner) {
   EXPECT_THROW(fixedPointCloud(asset.selected), SceneError);
 }
 
+TEST(FixedCloud, FrozenSessionIsTheOnlySourceOfTheCloudMetadata) {
+  CloudAsset asset;
+  const float points[] = {1.0f, 2.0f, 3.0f};
+  std::string data(sizeof(points), '\0');
+  std::memcpy(data.data(), points, sizeof(points));
+  asset.write(data);
+  // manifest.json is absent, then unreadable: the adapter must not open it.
+  Json session = Json::object();
+  session["sceneAsset"]["revisionId"] = "r";
+  session["sceneAsset"]["pointCloud"] = asset.selected.at("pointCloud");
+  for (const bool unreadable : {false, true}) {
+    if (unreadable) std::ofstream(asset.directory / "manifest.json") << "{ not json";
+    const auto message = frozenFixedCloud(session, asset.directory);
+    ASSERT_TRUE(message.has_value());
+    EXPECT_EQ(std::string(message->data.begin(), message->data.end()), data);
+    EXPECT_EQ(message->width, 1u);
+  }
+  // No saved cloud in the frozen fact: nothing is published, even if the
+  // directory happens to hold a file or a manifest that names one.
+  Json without = Json::object(), null_asset = Json::object();
+  without["sceneAsset"]["revisionId"] = "r";
+  null_asset["sceneAsset"] = nullptr;
+  EXPECT_FALSE(frozenFixedCloud(without, asset.directory).has_value());
+  EXPECT_FALSE(frozenFixedCloud(Json::object(), asset.directory).has_value());
+  EXPECT_FALSE(frozenFixedCloud(null_asset, asset.directory).has_value());
+  // The sealed digest still guards the bytes.
+  Json tampered = session;
+  tampered["sceneAsset"]["pointCloud"]["sha256"] = digest("different content");
+  EXPECT_THROW(frozenFixedCloud(tampered, asset.directory), SceneError);
+}
+
 }  // namespace
 }  // namespace xgc_scene

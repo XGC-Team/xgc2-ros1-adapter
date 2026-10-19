@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -672,7 +673,8 @@ TEST(Prepare, RandomInputsProduceOnePortableFlatAssetPerSession) {
   EXPECT_EQ(selected.at("workingFile"), selected.at("sceneFile"));
   EXPECT_EQ(selected.at("sceneDocumentFile"), filename);
   EXPECT_FALSE(selected.at("frozen").get<bool>());
-  EXPECT_EQ(selected.at("pointCloud"), manifest.at("pointCloud"));
+  // The saved cloud is a frozen Session fact (sceneAsset.pointCloud); the scene service no longer repeats it.
+  EXPECT_FALSE(selected.contains("pointCloud"));
   EXPECT_EQ(bytes(output / "fixed-cloud.pcd"), cloud);
   EXPECT_FALSE(fs::exists(output / "scene-document.yaml"));
   EXPECT_EQ(bytes(counter), "run\n");
@@ -775,7 +777,7 @@ TEST(Prepare, CliConsumesRelocatedRuntimeAssetWithoutResolvingTheLibrary) {
   EXPECT_EQ(value.at("assetDirectory"), asset.string());
   EXPECT_EQ(value.at("sceneFile"), (asset / "portable.yaml").string());
   EXPECT_EQ(value.at("sceneDocumentFile"), "portable.yaml");
-  EXPECT_EQ(value.at("pointCloud"), manifest.at("pointCloud"));
+  EXPECT_FALSE(value.contains("pointCloud"));
   EXPECT_EQ(bytes(asset / "points.pcd"), cloud);
   EXPECT_EQ(value.at("worldFile"), (workspace / "native-worlds/opening1/prepared-world.world").string());
   EXPECT_EQ(value.at("frozen"), true);
@@ -835,6 +837,186 @@ TEST(Prepare, CliRequiresExplicitAssetGrantAndGazeboModeForPreparation) {
   const auto no_run = cli(fixture.temporary.root, arguments(true, fixture.work));
   EXPECT_EQ(no_run.code, 1); EXPECT_TRUE(no_run.out.empty());
   EXPECT_EQ(no_run.err, "scene_prepare: World materialization requires the actual Session opening Run identity\n");
+}
+
+}  // namespace
+}  // namespace xgc_scene
+
+namespace xgc_scene {
+namespace {
+namespace fs = std::filesystem;
+
+// The Session freezes the revision it selected; both finite commands compare it
+// with the manifest they read and fail on any other revision.
+TEST(Prepare, ExpectedRevisionFromTheFrozenSessionIsEnforced) {
+  Fixture fixture("document-and-media", true);
+  Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}}},
+               {"experimentResourceId", "experiment1"}, {"sessionId", "session1"}};
+  const auto env = std::map<std::string, std::string>{{"XGC_USER_FILES_DIR", fixture.work.string()},
+                                                      {"XGC_JOB_ARTIFACT_ROOT", fixture.workspace().string()}};
+  const auto unpinned = inputs(context, fixture.work, fixture.workspace());
+  context["expectedRevisionId"] = "revision1";
+  EXPECT_EQ(inputs(context, fixture.work, fixture.workspace()), unpinned);
+  context["expectedRevisionId"] = "another-revision";
+  try { inputs(context, fixture.work, fixture.workspace()); FAIL() << "A replaced asset was accepted"; }
+  catch (const SceneError& error) { EXPECT_STREQ(error.what(), "Scene asset revision conflicts with the requested reference"); }
+  const auto conflict = cli(fixture.temporary.root, {"--context-json=" + context.dump()}, env);
+  EXPECT_EQ(conflict.code, 1); EXPECT_TRUE(conflict.out.empty());
+  EXPECT_EQ(conflict.err, "scene_prepare: Scene asset revision conflicts with the requested reference\n");
+  context["expectedRevisionId"] = 7;
+  EXPECT_THROW(inputs(context, fixture.work, fixture.workspace()), SceneError);
+  // An asset sealed before revisions existed freezes the empty revision and still matches itself.
+  auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
+  manifest.erase("revisionId");
+  write(fixture.asset() / "manifest.json", manifest.dump());
+  context["expectedRevisionId"] = "";
+  EXPECT_NO_THROW(inputs(context, fixture.work, fixture.workspace()));
+  context["expectedRevisionId"] = "revision1";
+  EXPECT_THROW(inputs(context, fixture.work, fixture.workspace()), SceneError);
+  manifest["revisionId"] = "revision1";
+  write(fixture.asset() / "manifest.json", manifest.dump());
+
+  // World preparation sends the same revision to prepare().
+  context["scene"]["simulator"] = "gazebo";
+  context["openingRunId"] = "opening1";
+  auto prepare_world = [&](const Json& value) {
+    return cli(fixture.temporary.root, {"--context-json", value.dump(), "--prepare-world", "--asset-directory", fixture.asset().string(),
+        "--resource-root", fixture.work.string(), "--workspace-root", fixture.workspace().string(),
+        "--socket-path", (fixture.workspace() / "world.sock").string(), "--target-id", "fixture", "--configuration-revision", "1"});
+  };
+  context["expectedRevisionId"] = "another-revision";
+  const auto wrong = prepare_world(context);
+  EXPECT_EQ(wrong.code, 1); EXPECT_TRUE(wrong.out.empty());
+  EXPECT_EQ(wrong.err, "scene_prepare: Scene asset revision conflicts with the requested reference\n");
+  EXPECT_FALSE(fs::exists(fixture.workspace() / "native-worlds" / "opening1" / "prepared-world.world"));
+  context["expectedRevisionId"] = "revision1";
+  const auto right = prepare_world(context);
+  EXPECT_EQ(right.code, 0) << right.err;
+  context.erase("expectedRevisionId");
+  EXPECT_EQ(prepare_world(context).code, 0);
+}
+
+// --validate is the write path's check: document() plus a dry compile of the
+// sealed document, finite and without writing anything.
+TEST(Prepare, ValidateParsesAndDryCompilesWithoutWritingFiles) {
+  Temporary temporary;
+  const auto asset = temporary.root / "asset";
+  fs::create_directories(asset);
+  auto snapshot = [&] {
+    std::map<std::string, std::string> files;
+    for (const auto& entry : fs::recursive_directory_iterator(temporary.root))
+      files[entry.path().string()] = entry.is_regular_file() ? bytes(entry.path()) : "";
+    return files;
+  };
+  auto document = [&](const std::string& text) { write(asset / "scene-document.yaml", text); return cli(temporary.root, {"--validate", "--asset-directory", asset.string()}); };
+  const std::string header = "schema: xgc2.scene.v1\nid: yard\nframe: world\nobstacles:\n";
+  const auto box = [](const std::string& size) {
+    return "  - id: wall\n    pose: {position: [1, 0, 0]}\n    parts:\n      - id: main\n        geometry: {type: box, size: " + size + "}\n";
+  };
+  const auto before = snapshot();
+  const auto accepted = document(header + box("[1, 2, 3]"));
+  ASSERT_EQ(accepted.code, 0) << accepted.err;
+  EXPECT_EQ(parseJson(accepted.out), (Json{{"valid", true}, {"mode", "fixed"}, {"obstacles", 1}}));
+  EXPECT_TRUE(accepted.err.empty());
+  auto written = snapshot();
+  written.erase((asset / "scene-document.yaml").string());
+  written.erase((temporary.root / "stdout").string());
+  written.erase((temporary.root / "stderr").string());
+  auto expected = before;
+  expected.erase((temporary.root / "stdout").string());
+  expected.erase((temporary.root / "stderr").string());
+  EXPECT_EQ(written, expected) << "--validate must not write files";
+
+  // The failing direction: each of these passes the writer's old substring check
+  // ("xgc2.scene.v1" plus an obstacle list) and fails every Session start.
+  struct Case { const char* name; std::string text; };
+  for (const auto& rejected : std::vector<Case>{
+         {"negative box size", header + box("[-1, 2, 3]")},
+         {"unknown geometry", header + "  - id: wall\n    parts:\n      - id: main\n        geometry: {type: dodecahedron}\n"},
+         {"nonfinite value", header + box("[.nan, 2, 3]")},
+         {"missing schema", "id: yard\nframe: world\nobstacles: []\n"},
+         {"malformed yaml", "schema: [xgc2.scene.v1\n"},
+         {"obstacle without parts", header + "  - id: wall\n"},
+       }) {
+    SCOPED_TRACE(rejected.name);
+    const auto result = document(rejected.text);
+    EXPECT_EQ(result.code, 1);
+    EXPECT_TRUE(result.out.empty());
+    EXPECT_EQ(result.err.rfind("scene_prepare: ", 0), 0u) << result.err;
+    EXPECT_GT(result.err.size(), std::string("scene_prepare: \n").size());
+  }
+  // A random source holds no geometry until its generator runs: only the
+  // declaration is checked, and the generator is never started.
+  const auto marker = temporary.root / "generator-ran";
+  const auto source = [&](const std::string& command) {
+    return "schema: xgc2.scene-source.v1\nformat: geometry\nmode: random\ngenerator:\n  command: " + command + "\n  parameters: {seed: 3}\n";
+  };
+  const auto random = document(source("['/bin/sh', '-c', 'touch " + marker.string() + "']"));
+  ASSERT_EQ(random.code, 0) << random.err;
+  EXPECT_EQ(parseJson(random.out), (Json{{"valid", true}, {"mode", "random"}}));
+  EXPECT_FALSE(fs::exists(marker));
+  EXPECT_EQ(document(source("[]")).code, 1);
+  EXPECT_EQ(document("schema: xgc2.scene-source.v1\nformat: geometry\nmode: random\ngenerator:\n  command: [/bin/true]\n  parameters: {seed: .inf}\n").code, 1);
+  // Usage errors are not verdicts on the document.
+  EXPECT_EQ(cli(temporary.root, {"--validate"}).code, 2);
+  EXPECT_EQ(cli(temporary.root, {"--validate", "--asset-directory", asset.string(), "--context-json", "{}"}).code, 2);
+  EXPECT_EQ(cli(temporary.root, {"--validate", "--prepare-world", "--asset-directory", asset.string()}).code, 2);
+  fs::remove(asset / "scene-document.yaml");
+  const auto absent = cli(temporary.root, {"--validate", "--asset-directory", asset.string()});
+  EXPECT_EQ(absent.code, 1);
+  EXPECT_EQ(absent.err, "scene_prepare: scene-document.yaml is required\n");
+}
+
+// The attachment-name rule is one table shared with the Go resolver and writer
+// (contracts/scene-attachment-names.json of the xgc2 product).
+TEST(Prepare, AttachmentNamesMatchTheSharedGolden) {
+  fs::path golden = fs::path(XGC_SCENE_GOLDEN_DIR) / "../../../../../xgc2/contracts/scene-attachment-names.json";
+  if (const char* configured = std::getenv("XGC_SCENE_ATTACHMENT_NAMES")) golden = configured;
+  if (!fs::is_regular_file(golden)) GTEST_SKIP() << "attachment name golden not found: " << golden;
+  const auto table = parseJson(bytes(golden));
+  ASSERT_EQ(table.at("schema"), "xgc2.scene-attachment-names.v1");
+  Temporary temporary;
+  std::size_t plain = 0, other = 0;
+  for (const auto& entry : table.at("names")) {
+    const auto name = entry.at("name").get<std::string>();
+    SCOPED_TRACE(name);
+    // A plain name passes the name rule and fails later, on the missing file; any other name fails the rule itself.
+    std::string message;
+    try { (void)attachment(temporary.root, Json{{"file", name}, {"sha256", std::string(64, '0')}}); }
+    catch (const std::exception& error) { message = error.what(); }
+    const bool named_plain = message.find("plain asset filename") == std::string::npos;
+    EXPECT_EQ(named_plain, entry.at("plain").get<bool>()) << message;
+    (named_plain ? plain : other)++;
+  }
+  EXPECT_GT(plain, 3u);
+  EXPECT_GT(other, 8u);
+}
+
+// One contract file names the scene.parameters keys of each simulator
+// (contracts/scene-parameters.json of the xgc2 product). The web simulator
+// switch, XSim's mapper and this Gazebo preparation are tested against it.
+TEST(Prepare, GazeboSceneParametersAreTheContractList) {
+  fs::path contract = fs::path(XGC_SCENE_GOLDEN_DIR) / "../../../../../xgc2/contracts/scene-parameters.json";
+  if (const char* configured = std::getenv("XGC_SCENE_PARAMETERS_CONTRACT")) contract = configured;
+  if (!fs::is_regular_file(contract)) GTEST_SKIP() << "scene parameter contract not found: " << contract;
+  const auto table = parseJson(bytes(contract));
+  ASSERT_EQ(table.at("schema"), "xgc2.scene-parameters.v1");
+  Fixture fixture("document-and-media", true);
+  auto accepts = [&](const std::string& key, const Json& value) {
+    Json context{{"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}, {"parameters", Json::object()}}},
+                 {"experimentResourceId", "experiment1"}, {"sessionId", "session1"}};
+    context["scene"]["parameters"][key] = value;
+    try { (void)inputs(context, fixture.work, fixture.workspace()); return true; }
+    catch (const SceneError&) { return false; }
+  };
+  std::size_t checked = 0;
+  for (const auto& group : {table.at("shared"), table.at("simulators").at("gazebo")})
+    for (auto it = group.begin(); it != group.end(); ++it, ++checked)
+      EXPECT_TRUE(accepts(it.key(), it.value().at("example"))) << "Gazebo rejects the contract key " << it.key();
+  for (auto it = table.at("simulators").at("xsim").begin(); it != table.at("simulators").at("xsim").end(); ++it)
+    EXPECT_FALSE(accepts(it.key(), it.value().at("example"))) << "Gazebo accepts the XSim-only key " << it.key();
+  EXPECT_FALSE(accepts("typo", 1));
+  EXPECT_GE(checked, 8u);
 }
 
 }  // namespace
