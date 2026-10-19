@@ -135,7 +135,15 @@ assert definition["command"]["executable"] == executable
 assert os.access(executable, os.X_OK)
 assert definition["services"][0]["service"] == "xgc.robot.v1.RobotAdapterServerService"
 assert definition["services"][0]["profile"] == "grpc.v1"
-assert set(definition["services"][0]) == {"service", "api_version", "profile", "endpointParameter"}
+assert set(definition["services"][0]) == {"service", "api_version", "profile", "endpointParameter", "network"}
+ports = {
+    "xgc2-px4-multirotor-ros1-adapter": 48101,
+    "xgc2-scout-mini-ros1-adapter": 48102,
+    "xgc2-mecanum-ugv-ros1-adapter": 48103,
+}
+assert definition["services"][0]["network"] == {
+    "bootstrapParameter": "networkBootstrap", "hostParameter": "rosIp", "port": ports[provider],
+}
 assert set(definition["parameters"]) <= {"properties", "required", "groups"}
 for parameter in definition["parameters"]["properties"].values():
     assert set(parameter) <= {"type", "default", "enum", "minimum", "maximum", "sensitive", "output", "fixedOnly"}
@@ -146,6 +154,11 @@ assert definition["stop"]["rpc"] == "Shutdown"
 assert set(definition["stop"]) <= {"graceMs", "rpc"}
 args = definition["command"]["args"]
 assert args[args.index("--provider") + 1] == provider
+assert args[args.index("--network-bootstrap") + 1] == "${networkBootstrap}"
+assert "networkBootstrap" not in definition["parameters"]["required"]
+assert definition["parameters"]["properties"]["networkBootstrap"] == {
+    "type": "string", "default": "", "fixedOnly": True, "sensitive": True,
+}
 PYTHON
     # scout-mini, mecanum-ugv, px4-multirotor: the profile files of the type
     profile_name="${provider#xgc2-}"
