@@ -6,10 +6,11 @@ endif()
 # The server core against a fake RosBinding, over real gRPC on a Unix socket.
 catkin_add_gtest(${PROJECT_NAME}_server_test robot_server_test.cpp)
 if(TARGET ${PROJECT_NAME}_server_test)
+  find_package(OpenSSL 1.1.1 REQUIRED COMPONENTS Crypto)
   target_include_directories(${PROJECT_NAME}_server_test PRIVATE ${GRPC_INCLUDE_DIRS})
   target_link_libraries(${PROJECT_NAME}_server_test
     xgc2_robot_server xgc2_robot_server_ros1 XgcXrpc::grpc
-    nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
+    nlohmann_json::nlohmann_json OpenSSL::Crypto ${GRPC_LDFLAGS})
 endif()
 
 catkin_add_gtest(${PROJECT_NAME}_domain_test robot_domain_test.cpp)

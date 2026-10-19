@@ -77,7 +77,7 @@ ServerOptions ParseServerOptions(int argc, char **argv,
                                  const std::vector<std::string> &providers) {
   static const std::set<std::string> flags{
       "--socket-path", "--run-id",         "--node-name", "--provider",
-      "--target-id",   "--ros-master-uri", "--ros-ip"};
+      "--target-id",   "--ros-master-uri", "--ros-ip", "--network-bootstrap"};
   ServerOptions options;
   std::set<std::string> seen;
   for (int index = 1; index < argc; ++index) {
@@ -90,7 +90,7 @@ ServerOptions ParseServerOptions(int argc, char **argv,
       throw std::invalid_argument("missing value for " + flag);
     const std::string value(argv[++index]);
     if (value.find('\0') != std::string::npos ||
-        (value.empty() && flag != "--ros-ip"))
+        (value.empty() && flag != "--ros-ip" && flag != "--network-bootstrap"))
       throw std::invalid_argument("empty value for " + flag);
     if (flag == "--socket-path")
       options.socket_path = value;
@@ -104,11 +104,13 @@ ServerOptions ParseServerOptions(int argc, char **argv,
       options.target_id = value;
     else if (flag == "--ros-master-uri")
       options.ros_master_uri = value;
+    else if (flag == "--network-bootstrap")
+      options.network_bootstrap = value;
     else
       options.ros_ip = value;
   }
   for (const auto &flag : flags)
-    if (flag != "--ros-ip" && !seen.count(flag))
+    if (flag != "--ros-ip" && flag != "--network-bootstrap" && !seen.count(flag))
       throw std::invalid_argument("missing required argument: " + flag);
   requireSocketPath(options.socket_path);
   requireIdentifier("--run-id", options.run_id);
@@ -127,13 +129,17 @@ ServerOptions ParseServerOptions(int argc, char **argv,
   requireMasterUri(options.ros_master_uri);
   if (options.ros_ip.size() > 253)
     throw std::invalid_argument("--ros-ip is too long");
+  if (!options.network_bootstrap.empty() &&
+      (options.network_bootstrap.front() != '/' || options.network_bootstrap.size() > 4096))
+    throw std::invalid_argument("--network-bootstrap must be an absolute file path");
   return options;
 }
 
 std::string ServerUsage(const char *program) {
   return std::string("usage: ") + program +
          " --socket-path PATH --run-id ID --node-name NAME --provider TYPE\n"
-         "         --target-id ID --ros-master-uri URI [--ros-ip ADDRESS]";
+         "         --target-id ID --ros-master-uri URI [--ros-ip ADDRESS]\n"
+         "         [--network-bootstrap PATH]";
 }
 
 std::string RosNodeName(const std::string &node_name) {

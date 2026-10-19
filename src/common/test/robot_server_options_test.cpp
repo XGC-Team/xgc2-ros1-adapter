@@ -53,6 +53,19 @@ TEST(ServerOptions, TheRosAddressMayBeEmptyButNothingElse) {
   }
 }
 
+TEST(ServerOptions, NetworkListenerRequiresAnExplicitBootstrapFile) {
+  EXPECT_TRUE(parseAll(complete()).network_bootstrap.empty());
+  auto flags = complete();
+  flags.insert(flags.end(), {"--network-bootstrap", ""});
+  EXPECT_TRUE(parseAll(flags).network_bootstrap.empty());
+  flags.back() = "/run/xgc2/gateway/bootstrap.json";
+  EXPECT_EQ(flags.back(), parseAll(flags).network_bootstrap);
+  flags.back() = "relative/bootstrap.json";
+  EXPECT_THROW(parseAll(flags), std::invalid_argument);
+  flags.back() = "/" + std::string(4096, 'x');
+  EXPECT_THROW(parseAll(flags), std::invalid_argument);
+}
+
 TEST(ServerOptions, EveryRequiredFlagMustBePresentAndNotRepeated) {
   for (std::size_t flag = 0; flag < complete().size(); flag += 2) {
     auto flags = complete();

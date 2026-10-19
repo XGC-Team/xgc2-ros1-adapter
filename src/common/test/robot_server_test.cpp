@@ -6,16 +6,22 @@
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
 #include "xgc2_ros1_robot_adapter/async_ros_services.hpp"
 #include "xgc2_ros1_robot_adapter/master_retry.hpp"
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
+#include <arpa/inet.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <dirent.h>
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <netinet/in.h>
 #include <set>
+#include <stdexcept>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -280,6 +286,146 @@ std::string makePrivateDirectory() {
   return mkdtemp(pattern);
 }
 
+void requireTlsFixture(bool valid) {
+  if (!valid)
+    throw std::runtime_error("could not create private TLS test fixture");
+}
+
+struct TestPem {
+  std::string certificate, key;
+};
+
+TestPem testCertificate(const char *name, const TestPem *issuer = nullptr) {
+  using Context = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
+  using Key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+  using Certificate = std::unique_ptr<X509, decltype(&X509_free)>;
+  using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
+  using Extension = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>;
+  Context context(EVP_PKEY_CTX_new_id(issuer ? EVP_PKEY_ED25519 : EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+  requireTlsFixture(context && EVP_PKEY_keygen_init(context.get()) == 1);
+  if (!issuer)
+    requireTlsFixture(EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) == 1);
+  EVP_PKEY *generated = nullptr;
+  requireTlsFixture(EVP_PKEY_keygen(context.get(), &generated) == 1);
+  Key key(generated, EVP_PKEY_free), issuer_key(nullptr, EVP_PKEY_free);
+  Certificate cert(X509_new(), X509_free), parent(nullptr, X509_free);
+  requireTlsFixture(cert && X509_set_version(cert.get(), 2) == 1);
+  static long serial = 1;
+  requireTlsFixture(ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), serial++) == 1);
+  requireTlsFixture(X509_gmtime_adj(X509_get_notBefore(cert.get()), -60) != nullptr);
+  requireTlsFixture(X509_gmtime_adj(X509_get_notAfter(cert.get()), 3600) != nullptr);
+  requireTlsFixture(X509_set_pubkey(cert.get(), key.get()) == 1);
+  auto *subject = X509_get_subject_name(cert.get());
+  requireTlsFixture(X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+      reinterpret_cast<const unsigned char *>(name), -1, -1, 0) == 1);
+  if (issuer) {
+    Bio ca(BIO_new_mem_buf(issuer->certificate.data(), static_cast<int>(issuer->certificate.size())), BIO_free);
+    Bio private_key(BIO_new_mem_buf(issuer->key.data(), static_cast<int>(issuer->key.size())), BIO_free);
+    parent.reset(PEM_read_bio_X509(ca.get(), nullptr, nullptr, nullptr));
+    issuer_key.reset(PEM_read_bio_PrivateKey(private_key.get(), nullptr, nullptr, nullptr));
+    requireTlsFixture(parent && issuer_key);
+  }
+  requireTlsFixture(X509_set_issuer_name(cert.get(), parent ? X509_get_subject_name(parent.get()) : subject) == 1);
+  const auto extension = [&](int id, const char *value) {
+    Extension item(X509V3_EXT_conf_nid(nullptr, nullptr, id, const_cast<char *>(value)), X509_EXTENSION_free);
+    requireTlsFixture(item && X509_add_ext(cert.get(), item.get(), -1) == 1);
+  };
+  extension(NID_basic_constraints, issuer ? "critical,CA:FALSE" : "critical,CA:TRUE");
+  extension(NID_key_usage, issuer ? "critical,digitalSignature" : "critical,keyCertSign,cRLSign");
+  if (issuer) {
+    extension(NID_ext_key_usage, "serverAuth,clientAuth");
+    extension(NID_subject_alt_name, "DNS:localhost,IP:127.0.0.1");
+  }
+  requireTlsFixture(X509_sign(cert.get(), issuer_key ? issuer_key.get() : key.get(), EVP_sha256()) > 0);
+  Bio certificate(BIO_new(BIO_s_mem()), BIO_free), private_key(BIO_new(BIO_s_mem()), BIO_free);
+  requireTlsFixture(certificate && private_key);
+  requireTlsFixture(PEM_write_bio_X509(certificate.get(), cert.get()) == 1);
+  requireTlsFixture(PEM_write_bio_PrivateKey(private_key.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1);
+  const auto bytes = [](BIO *bio) {
+    char *data = nullptr;
+    const auto size = BIO_get_mem_data(bio, &data);
+    requireTlsFixture(size > 0);
+    return std::string(data, static_cast<std::size_t>(size));
+  };
+  return {bytes(certificate.get()), bytes(private_key.get())};
+}
+
+struct TlsDirectory {
+  std::string path = makePrivateDirectory();
+  ~TlsDirectory() {
+    if (DIR *directory = opendir(path.c_str())) {
+      while (auto *entry = readdir(directory)) {
+        const std::string name(entry->d_name);
+        if (name != "." && name != "..")
+          unlink((path + "/" + name).c_str());
+      }
+      closedir(directory);
+    }
+    rmdir(path.c_str());
+  }
+};
+
+struct TlsFixture {
+  TlsDirectory directory;
+  TestPem ca = testCertificate("adapter test CA");
+  TestPem server = testCertificate("localhost", &ca);
+  TestPem client = testCertificate("Core test client", &ca);
+  int port = 0;
+  unsigned files = 0;
+  TlsFixture() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    requireTlsFixture(fd >= 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    requireTlsFixture(bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+    socklen_t size = sizeof(address);
+    requireTlsFixture(getsockname(fd, reinterpret_cast<sockaddr *>(&address), &size) == 0);
+    port = ntohs(address.sin_port);
+    requireTlsFixture(close(fd) == 0);
+  }
+  std::string file(const std::string &value) {
+    const auto path = directory.path + "/" + std::to_string(files++);
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    requireTlsFixture(fd >= 0);
+    std::size_t offset = 0;
+    while (offset != value.size()) {
+      const auto count = write(fd, value.data() + offset, value.size() - offset);
+      requireTlsFixture(count > 0);
+      offset += static_cast<std::size_t>(count);
+    }
+    requireTlsFixture(close(fd) == 0);
+    return path;
+  }
+  std::string bootstrap(const std::string &target = "local",
+                        const std::string &service = "xgc.robot.v1.RobotAdapterServerService") {
+    const auto certificate = file(server.certificate), key = file(server.key);
+    const auto trust = file(ca.certificate), token = file("test-gateway-token");
+    return file(nlohmann::json{
+        {"schema_version", 1},
+        {"binding", {{"schema_version", 1}, {"target_id", target}, {"service", service},
+                     {"api_version", "v1"}, {"profile", "grpc.v1"},
+                     {"endpoint", {{"kind", "tls"}, {"address", "127.0.0.1:" + std::to_string(port)}}},
+                     {"runtime_grant", "owner.runtime"}, {"authentication", "mutual_tls"},
+                     {"secret_handles", {{"tls_identity", "owner.identity"}, {"tls_trust", "owner.trust"},
+                                          {"authorization", "owner.auth"}}},
+                     {"storage_grants", nlohmann::json::array()}}},
+        {"grants", {{"owner.identity", {{"kind", "tls_identity"}, {"cert_file", certificate}, {"key_file", key}}},
+                    {"owner.trust", {{"kind", "tls_trust"}, {"ca_file", trust}}},
+                    {"owner.auth", {{"kind", "bearer"}, {"token_file", token}}}}}}
+                    .dump());
+  }
+  std::shared_ptr<grpc::Channel> channel(const std::string &address) const {
+    grpc::SslCredentialsOptions credentials;
+    credentials.pem_root_certs = ca.certificate;
+    credentials.pem_cert_chain = client.certificate;
+    credentials.pem_private_key = client.key;
+    grpc::ChannelArguments arguments;
+    arguments.SetInt(GRPC_ARG_ENABLE_RETRIES, 0);
+    return grpc::CreateCustomChannel(address, grpc::SslCredentials(credentials), arguments);
+  }
+};
+
 wire::MemberIdentity identity(const std::string &robot, std::uint64_t epoch = 1,
                               const std::string &run = "run-test") {
   wire::MemberIdentity result;
@@ -332,13 +478,17 @@ template <class Response> struct Reply {
 class Client {
 public:
   explicit Client(const std::string &socket)
-      : stub_(wire::RobotAdapterServerService::NewStub(
-            xgc2::xrpc::make_grpc_unix_channel(socket))) {}
+      : Client(xgc2::xrpc::make_grpc_unix_channel(socket)) {}
+  explicit Client(std::shared_ptr<grpc::Channel> channel,
+                  std::string authorization = {}, std::string instance = {})
+      : stub_(wire::RobotAdapterServerService::NewStub(std::move(channel))),
+        instance_(std::move(instance)), authorization_(std::move(authorization)) {}
 
   Reply<wire::DescribeResponse> describe(std::uint32_t wait_ms = 0,
                                          milliseconds deadline = milliseconds(10000)) {
     Reply<wire::DescribeResponse> reply;
     grpc::ClientContext context;
+    authorize(context);
     GrpcClientCall call(context, "", GrpcClock::now() + deadline, {}, "", true);
     wire::DescribeRequest request;
     request.set_wait_ready_ms(wait_ms);
@@ -356,6 +506,7 @@ public:
       describe();
     Reply<Response> reply;
     grpc::ClientContext context;
+    authorize(context);
     GrpcClientCall call(context, instance_, GrpcClock::now() + deadline);
     reply.status = call.invoke([&] {
       return (stub_.get()->*method)(&context, request, &reply.response);
@@ -392,6 +543,7 @@ public:
     Watch(Client &client, milliseconds duration) {
       if (client.instance_.empty())
         client.describe();
+      client.authorize(context_);
       call_ = std::make_unique<GrpcClientCall>(
           context_, client.instance_,
           xgc2::xrpc::grpc_stream_deadline(xgc2::xrpc::GrpcLimits{},
@@ -454,8 +606,13 @@ public:
   };
 
 private:
+  void authorize(grpc::ClientContext &context) const {
+    if (!authorization_.empty())
+      context.AddMetadata("authorization", authorization_);
+  }
   std::unique_ptr<wire::RobotAdapterServerService::Stub> stub_;
   std::string instance_;
+  std::string authorization_;
 };
 
 // One server on its own thread.
@@ -488,8 +645,11 @@ protected:
     result.ros_ip = "127.0.0.1";
     return result;
   }
-  void start(ServerTimings timings = quickTimings()) {
-    server_ = std::make_unique<RobotServer>(options(), *binding_,
+  void start(ServerTimings timings = quickTimings(),
+             const std::string &network_bootstrap = {}) {
+    auto configured = options();
+    configured.network_bootstrap = network_bootstrap;
+    server_ = std::make_unique<RobotServer>(std::move(configured), *binding_,
                                             factoryFor(world_), timings);
     finished_ = false;
     thread_ = std::thread([this] {
@@ -526,6 +686,96 @@ protected:
 };
 
 using ServerLifecycle = Fixture;
+using ServerNetwork = Fixture;
+
+TEST_F(ServerNetwork, TlsAndUnixShareIdentityTelemetryOperationsAndShutdown) {
+  TlsFixture network;
+  start(quickTimings(), network.bootstrap());
+  const auto local = client_->describe(10000);
+  ASSERT_TRUE(local.status.ok()) << local.status.error_message();
+  ASSERT_TRUE(local.response.ready());
+  const auto local_facts = facts(local.response);
+  ASSERT_TRUE(local_facts.contains("direct_service_ref"));
+  const auto &direct = local_facts.at("direct_service_ref");
+  EXPECT_EQ("local", direct.at("target_id"));
+  EXPECT_EQ(local.response.service_ref().service(), direct.at("service"));
+  EXPECT_EQ("v1", direct.at("api_version"));
+  EXPECT_EQ("grpc.v1", direct.at("profile"));
+  EXPECT_EQ("tls", direct.at("endpoint").at("kind"));
+  EXPECT_EQ("127.0.0.1:" + std::to_string(network.port), direct.at("endpoint").at("address"));
+  const auto instance = direct.at("instance_id").get<std::string>();
+  EXPECT_EQ(local.response.service_ref().instance_id(), instance);
+  EXPECT_EQ("unix", local.response.service_ref().endpoint().kind());
+  EXPECT_EQ(socket(), local.response.service_ref().endpoint().address());
+
+  const auto channel = network.channel(direct.at("endpoint").at("address").get<std::string>());
+  Client remote(channel, "Bearer test-gateway-token", instance);
+  const auto described = remote.describe(10000);
+  ASSERT_TRUE(described.status.ok()) << described.status.error_message();
+  ASSERT_TRUE(described.response.ready());
+  EXPECT_EQ(local.response.service_ref().SerializeAsString(), described.response.service_ref().SerializeAsString());
+  EXPECT_EQ(direct, facts(described.response).at("direct_service_ref"));
+
+  wire::ApplyMembersRequest add;
+  *add.add_members() = registration("robot-1", "/robot_1");
+  const auto applied = client_->apply(add);
+  ASSERT_TRUE(applied.status.ok());
+  ASSERT_EQ(1, applied.response.members_size());
+  ASSERT_FALSE(applied.response.members(0).has_error());
+  Client::Watch watch(remote, milliseconds(10000));
+  ASSERT_TRUE(watch.wait([](const wire::SubscribeStatusResponse &frame) {
+    for (const auto &member : frame.members())
+      if (member.identity().robot_id() == "robot-1" &&
+          member.identity().target_id() == "local" &&
+          member.identity().run_id() == "run-test" &&
+          member.identity().connection_epoch() == 1)
+        for (const auto &message : member.messages())
+          if (message.channel_id() == "state.test" && message.message().sequence() > 0)
+            return true;
+    return false;
+  }));
+  const auto executed = remote.execute(command("robot-1", "instant", "remote-work"));
+  ASSERT_TRUE(executed.status.ok()) << executed.status.error_message();
+  EXPECT_EQ(operation::OPERATION_PHASE_SUCCEEDED, executed.response.event().phase());
+  auto calls = world_.snapshot();
+  EXPECT_EQ(1, std::count(calls.begin(), calls.end(), "execute:robot-1:instant"));
+
+  Client unauthorized(channel, "Bearer wrong-token", instance);
+  const auto refused = unauthorized.execute(command("robot-1", "instant", "forbidden-work"));
+  EXPECT_EQ(grpc::StatusCode::UNAUTHENTICATED, refused.status.error_code());
+  calls = world_.snapshot();
+  EXPECT_EQ(1, std::count(calls.begin(), calls.end(), "execute:robot-1:instant"));
+  const auto stopped = client_->shutdown();
+  ASSERT_TRUE(stopped.status.ok()) << stopped.status.error_message();
+  EXPECT_TRUE(watch.waitFinished());
+  EXPECT_EQ(kExitOk, join());
+  EXPECT_TRUE(world_.contains("stop:robot-1"));
+  const auto after = remote.call<wire::HealthResponse>(wire::HealthRequest(),
+      &wire::RobotAdapterServerService::Stub::Health, milliseconds(250));
+  EXPECT_FALSE(after.status.ok());
+}
+
+TEST_F(ServerNetwork, PlainUnixDoesNotAdvertiseADirectService) {
+  startReady();
+  const auto described = client_->describe();
+  ASSERT_TRUE(described.status.ok());
+  EXPECT_EQ("unix", described.response.service_ref().endpoint().kind());
+  EXPECT_FALSE(facts(described.response).contains("direct_service_ref"));
+  ASSERT_TRUE(client_->shutdown().status.ok());
+  EXPECT_EQ(kExitOk, join());
+}
+
+TEST_F(ServerNetwork, RejectsNetworkBootstrapForAnotherTargetOrService) {
+  TlsFixture network;
+  for (const auto &path : {network.bootstrap("another-target"),
+                           network.bootstrap("local", "another.Service")}) {
+    auto configured = options();
+    configured.network_bootstrap = path;
+    EXPECT_THROW({ RobotServer server(std::move(configured), *binding_, factoryFor(world_)); },
+                 std::invalid_argument);
+  }
+  EXPECT_TRUE(world_.snapshot().empty());
+}
 
 TEST(MasterRetry, UsesFullJitterExponentialCeilingsAndResetsAfterSuccess) {
   MasterRetry retry;

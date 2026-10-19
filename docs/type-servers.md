@@ -1,7 +1,7 @@
 # Robot type servers
 
-One process per robot type and ROS master, started by the experiment workflow of a Run
-and ended with it. It serves every robot of that type in the Run over one gRPC service on a
+One process per robot type, source host and ROS master, started by the experiment workflow
+of a Run and ended with it. It serves all assigned robots over one gRPC service on a
 Unix socket (`xgc.robot.v1.RobotAdapterServerService`, XRPC grpc.v1, service name
 `xgc.robot.v1.RobotAdapterServerService`). No server outlives its Run and none keeps state from one Run to the
 next: a Run that starts again starts a new process, registers its robots again and gets fresh
@@ -24,8 +24,8 @@ ROS registrations.
    Failures are reported per robot; the other robots are unaffected.
 4. During the Run the workflow reads telemetry with one `SubscribeStatus` stream and sends
    robot operations with `Execute`.
-5. The Run ends the server with `RemoveMembers` (optional), then `Shutdown`, then SIGTERM,
-   then SIGKILL after the grace of the process definition. `Shutdown` and SIGTERM do the same
+5. The Run ends the server with `Shutdown`, then SIGTERM, then SIGKILL after the grace of
+   the process definition; normal teardown does not send `RemoveMembers`. `Shutdown` and SIGTERM do the same
    drain (below) and the process exits 0.
 
 The server uses the ROS master URI supplied at process start (`--ros-master-uri`, `--ros-ip`)
@@ -53,11 +53,23 @@ explicitly.
 --target-id ID       XRPC target the service is published on
 --ros-master-uri URI the Run's ROS master
 [--ros-ip ADDRESS]   ROS_IP of this host
+[--network-bootstrap PATH] authenticated XRPC network listener startup contract
 ```
 
 Characters of `--node-name` that are not legal in a ROS name become `_`, and the Run id is
 compared with the same replacement. A name without the Run id is an invalid command line
 (exit 2).
+
+### Source-side data gateway
+
+Local sources keep the Unix-socket path and one shared server per type. On an Agent host,
+the same executable also exposes the service over TLS gRPC, using the supervisor-provided
+`networkBootstrap` file. It reuses the enrolled Agent identity and authorization; no listener,
+key or process is created per robot. Both endpoints share the same members and InstanceID.
+Agent readiness and shutdown use the local socket. `Describe.facts_json.direct_service_ref`
+is the public TLS reference used by Core for status and operations; it contains no secret.
+The ordinary `Describe.service_ref` remains the local socket reference. This deployment is
+called a Data Gateway; it does not relay telemetry through AgentLink or alter robot profiles.
 
 ### Exit status
 

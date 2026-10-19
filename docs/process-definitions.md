@@ -69,6 +69,12 @@ parameters and optional stdin; there is no wrapper script, probe command or envi
   `socketPath` and `xgc2.sensor.lidar` v1 on `lidarSocketPath`, both with `http.v1`
   in every profile. Each service needs a unique, non-sensitive string endpoint
   parameter. Both Scene socket parameters are required and `fixedOnly`.
+- **Source-host network listener.** Robot type server definitions optionally declare
+  `services[].network` with the bootstrap parameter, ROS host parameter and listening port.
+  An Agent supervisor supplies the sensitive, fixed-only `networkBootstrap` path using its
+  existing identity before exec. A local Core supervisor leaves it empty and only binds UDS.
+  Neither Run input nor an operator form supplies credentials. The child consumes the XRPC
+  bootstrap format once; its supervisor removes the private files after confirmed exit.
 - **Readiness.** Kind `describe`: Core holds one outstanding Describe with `wait_ready_ms`
   (gRPC `Describe`, HTTP `GET /v1/describe?wait_ready_ms=N`). The service answers once its
   ROS node is registered with the master; Scene also loads its document, opens its store

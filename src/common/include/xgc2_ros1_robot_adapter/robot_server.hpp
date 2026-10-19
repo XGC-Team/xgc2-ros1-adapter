@@ -24,6 +24,7 @@ struct ServerOptions {
   std::string target_id;      // XRPC target the service is published on
   std::string ros_master_uri; // the one master this process binds to
   std::string ros_ip;         // optional ROS_IP of this host
+  std::string network_bootstrap; // optional private XRPC TLS bootstrap file
 };
 
 // 1-128 characters of [A-Za-z0-9._:-]: the grammar of every identifier the

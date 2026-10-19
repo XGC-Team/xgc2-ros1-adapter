@@ -28,6 +28,12 @@
           "rosIp": {
             "type": "string",
             "default": ""
+          },
+          "networkBootstrap": {
+            "type": "string",
+            "default": "",
+            "fixedOnly": true,
+            "sensitive": true
           }
         },
         "required": [
@@ -53,7 +59,9 @@
           "--ros-master-uri",
           "${rosMasterUri}",
           "--ros-ip",
-          "${rosIp}"
+          "${rosIp}",
+          "--network-bootstrap",
+          "${networkBootstrap}"
         ]
       },
       "services": [
@@ -61,7 +69,12 @@
           "service": "xgc.robot.v1.RobotAdapterServerService",
           "profile": "grpc.v1",
           "endpointParameter": "socketPath",
-          "api_version": "v1"
+          "api_version": "v1",
+          "network": {
+            "bootstrapParameter": "networkBootstrap",
+            "hostParameter": "rosIp",
+            "port": 48103
+          }
         }
       ],
       "readiness": {

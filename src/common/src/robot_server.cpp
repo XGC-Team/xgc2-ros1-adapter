@@ -2,6 +2,7 @@
 #include "xgc2_ros1_robot_adapter/master_retry.hpp"
 #include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
+#include "xgc2/xrpc/bootstrap.hpp"
 #include "xgc2/xrpc/grpc.hpp"
 #include <algorithm>
 #include <array>
@@ -324,6 +325,20 @@ public:
     reference_.set_profile("grpc.v1");
     reference_.mutable_endpoint()->set_kind("unix");
     reference_.mutable_endpoint()->set_address(options_.socket_path);
+    if (!options_.network_bootstrap.empty()) {
+      network_bootstrap_ = std::make_unique<xgc2::xrpc::BootstrapInput>(
+          xgc2::xrpc::loadBootstrapInput(options_.network_bootstrap));
+      const auto &binding = network_bootstrap_->binding();
+      if (binding.target_id() != options_.target_id ||
+          binding.service() != reference_.service() ||
+          binding.api_version() != reference_.api_version() ||
+          binding.profile() != reference_.profile() ||
+          binding.endpoint().kind != "tls")
+        throw std::invalid_argument("network bootstrap does not identify this service");
+      network_reference_ = reference_;
+      network_reference_->mutable_endpoint()->set_kind(binding.endpoint().kind);
+      network_reference_->mutable_endpoint()->set_address(binding.endpoint().address);
+    }
     ros_node_name_ = RosNodeName(options_.node_name);
     command_jobs_.reserve(kMaximumCommandJobs);
     wake_ = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
@@ -339,9 +354,14 @@ public:
     try {
       binding_.Init(options_, ros_node_name_);
       // The socket exists before ROS is up; Describe holds readiness callers.
-      server_ = std::make_unique<xgc2::xrpc::GrpcUnixServer>(
-          xgc2::xrpc::UnixOptions{options_.socket_path}, admission_,
-          std::vector<grpc::Service *>{&service_});
+      if (network_bootstrap_)
+        server_ = std::make_unique<xgc2::xrpc::GrpcUnixServer>(
+            xgc2::xrpc::UnixOptions{options_.socket_path}, admission_,
+            std::vector<grpc::Service *>{&service_}, *network_bootstrap_);
+      else
+        server_ = std::make_unique<xgc2::xrpc::GrpcUnixServer>(
+            xgc2::xrpc::UnixOptions{options_.socket_path}, admission_,
+            std::vector<grpc::Service *>{&service_});
       startWorkers();
       serve();
     } catch (...) {
@@ -761,6 +781,15 @@ private:
     facts["ros_node"] = "/" + ros_node_name_;
     facts["run_id"] = options_.run_id;
     facts["provider"] = options_.provider;
+    if (network_reference_) {
+      const auto &ref = *network_reference_;
+      facts["direct_service_ref"] = {
+          {"target_id", ref.target_id()}, {"service", ref.service()},
+          {"api_version", ref.api_version()}, {"instance_id", ref.instance_id()},
+          {"profile", ref.profile()},
+          {"endpoint", {{"kind", ref.endpoint().kind()},
+                        {"address", ref.endpoint().address()}}}};
+    }
     std::vector<std::shared_ptr<Member>> members;
     {
       std::lock_guard<std::mutex> lock(table_mutex_);
@@ -1562,6 +1591,8 @@ private:
   xgc2::xrpc::GrpcAdmission admission_;
   Service service_;
   operation::RuntimeServiceReference reference_;
+  std::optional<operation::RuntimeServiceReference> network_reference_;
+  std::unique_ptr<xgc2::xrpc::BootstrapInput> network_bootstrap_;
   std::string ros_node_name_;
   std::unique_ptr<xgc2::xrpc::GrpcUnixServer> server_;
   int wake_ = -1;
