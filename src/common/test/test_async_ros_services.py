@@ -199,6 +199,61 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests, [('registerSubscriber', '/robot0/pose'),
                                     ('unregisterSubscriber', '/robot0/pose')])
 
+    async def test_failed_scope_skips_internal_calls_and_restores_independent_budgets(self):
+        requests, tasks = [], []
+
+        async def master(reader, writer):
+            try:
+                while True:
+                    header = await reader.readuntil(b'\r\n\r\n')
+                    size = int(next(line.split(b':')[1] for line in header.split(b'\r\n')
+                                    if line.lower().startswith(b'content-length:')))
+                    params, method = xmlrpc.client.loads(await reader.readexactly(size))
+                    requests.append((method, params[1]))
+                    if method == 'hasParam':
+                        self.assertEqual(await reader.read(), b'')
+                        return
+                    reply = [0, 'missing', 0] if params[1] == '/refused' else [1, '', 1]
+                    response = xmlrpc.client.dumps((reply,), methodresponse=True).encode()
+                    writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(response)).encode()
+                                 + b'\r\nConnection: keep-alive\r\n\r\n' + response)
+                    await writer.drain()
+            except (asyncio.IncompleteReadError, ConnectionError):
+                pass
+            finally:
+                writer.close()
+
+        def accept(reader, writer):
+            tasks.append(asyncio.create_task(master(reader, writer)))
+
+        async with await asyncio.start_server(accept, '127.0.0.1', 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            process = await asyncio.create_subprocess_exec(
+                os.environ['ASYNC_ROS_SERVICES_DRIVER'], f'http://127.0.0.1:{port}',
+                '1', '3000', '', '0', 'scope-failure',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 12)
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        self.assertEqual(stdout.decode().splitlines(), [
+            'first 0 1', 'skip registerSubscriber 0', 'skip subscribeParam 0',
+            'skip getParam 0',
+            'same-scope-cleanup unregisterPublisher 1',
+            'same-scope-cleanup unregisterSubscriber 1',
+            'same-scope-cleanup unregisterService 1',
+            'same-scope-cleanup unsubscribeParam 1',
+            'rollback 1 1', 'new-scope 1 0', 'refused 0 0', 'after-refused 1 0',
+            'unscoped-first 0', 'unscoped-next 1'])
+        self.assertEqual(requests, [
+            ('hasParam', '/hung-scoped'),
+            ('unregisterPublisher', '/cleanup'), ('unregisterSubscriber', '/cleanup'),
+            ('unregisterService', '/cleanup'), ('unsubscribeParam', '/cleanup'),
+            ('unregisterSubscriber', '/rollback'),
+            ('getParam', '/new-scope'), ('getParam', '/refused'),
+            ('getParam', '/after-refused'), ('hasParam', '/hung-unscoped'),
+            ('getParam', '/independent')])
+
+
     async def test_master_connection_reuse_close_and_transport_failure(self):
         connections, requests, tasks = [], [], []
 

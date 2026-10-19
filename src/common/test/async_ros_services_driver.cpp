@@ -45,6 +45,42 @@ int main(int argc, char **argv) {
     std::cout << "rollback " << removed << " " << budget.failed() << std::endl;
     return 0;
   }
+  if (mode == "scope-failure") {
+    ros::M_string remappings;
+    remappings["__master"] = argv[1];
+    ros::init(remappings, "registration_scope_failure_test",
+              ros::init_options::NoSigintHandler);
+    auto call = [](const std::string &method, const std::string &label) {
+      XmlRpc::XmlRpcValue request, response, payload;
+      request[0] = "/registration_scope_failure_test";
+      request[1] = label;
+      return ros::master::execute(method, request, response, payload, false);
+    };
+    {
+      xgc2_ros1_robot_adapter::RosMasterDeadline tracking(std::nullopt);
+      {
+        xgc2_ros1_robot_adapter::RosMasterDeadline nested(std::nullopt);
+        std::cout << "first " << call("hasParam", "/hung-scoped") << " "
+                  << tracking.failed() << std::endl;
+        for (const std::string method : {"registerSubscriber", "subscribeParam", "getParam"})
+          std::cout << "skip " << method << " " << call(method, "/skipped") << std::endl;
+        for (const std::string method : {"unregisterPublisher", "unregisterSubscriber", "unregisterService", "unsubscribeParam"})
+          std::cout << "same-scope-cleanup " << method << " " << call(method, "/cleanup") << std::endl;
+      }
+      std::cout << "rollback " << call("unregisterSubscriber", "/rollback")
+                << " " << tracking.failed() << std::endl;
+    }
+    {
+      xgc2_ros1_robot_adapter::RosMasterDeadline fresh(std::nullopt);
+      std::cout << "new-scope " << call("getParam", "/new-scope")
+                << " " << fresh.failed() << std::endl;
+      std::cout << "refused " << call("getParam", "/refused") << " " << fresh.failed() << std::endl;
+      std::cout << "after-refused " << call("getParam", "/after-refused") << " " << fresh.failed() << std::endl;
+    }
+    std::cout << "unscoped-first " << call("hasParam", "/hung-unscoped") << std::endl;
+    std::cout << "unscoped-next " << call("getParam", "/independent") << std::endl;
+    return 0;
+  }
   Services client(argc > 4 ? argv[4] : "");
   std::uint64_t first = 0;
   const auto cancel_at = Services::Clock::now() + std::chrono::milliseconds(argc > 5 ? std::stoi(argv[5]) : 0);

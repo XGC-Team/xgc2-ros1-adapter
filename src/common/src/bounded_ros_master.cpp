@@ -39,6 +39,13 @@ namespace ros { namespace master {
 bool execute(const std::string &method, const XmlRpc::XmlRpcValue &request,
              XmlRpc::XmlRpcValue &response, XmlRpc::XmlRpcValue &payload, bool) {
   using Services = xgc2_ros1_robot_adapter::AsyncRosServices;
+  const bool cleanup = method == "unregisterPublisher" ||
+                       method == "unregisterSubscriber" ||
+                       method == "unregisterService" ||
+                       method == "unsubscribeParam";
+  // roscpp may keep probing parameters after a lost reply. Abort the rest of
+  // this registration scope, but retain a fresh per-call budget for cleanup.
+  if (master_scope_active && master_failed && !cleanup) return false;
   thread_local Services services;
   Services::Request call;
   call.master_uri = getURI();

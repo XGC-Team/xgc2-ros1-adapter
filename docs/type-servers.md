@@ -118,10 +118,14 @@ has one entry per robot, in order, with an `AdapterError` when that robot failed
 
 | Code | Cause |
 |---|---|
-| `member-registration-failed` | invalid identity, other target, **other Run**, unknown profile or digest mismatch, missing namespace or parameter, a ROS environment other than the server's, the ROS registration failing or ending the budget (3 s per robot) |
+| `member-registration-failed` | invalid identity, other target, **other Run**, unknown profile or digest mismatch, missing namespace or parameter, a ROS environment other than the server's, a ROS endpoint registration failing (each master call is bounded to 3 s) |
 | `namespace-conflict` | another robot of the Run uses the namespace |
 | `member-configuration-conflict` | the robot is registered with another configuration |
 | `member-epoch-conflict` | the robot is registered with another `connection_epoch` |
+
+Healthy serial registrations have no additional three-second member-wide deadline.
+After a lost master reply, the current registration scope stops sending further
+forward requests. Cleanup retains its per-call budget within any explicit scope deadline.
 
 Applying a registration that is already in place changes nothing. A new configuration for
 a robot needs `RemoveMembers` first. `connection_epoch` must not be 0.

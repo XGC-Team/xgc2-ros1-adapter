@@ -15,7 +15,9 @@ namespace xgc2_ros1_robot_adapter {
 
 // Bounds every ROS master call made by the calling thread while it is alive,
 // including roscpp's own registrations. A duration bounds the whole scope;
-// nullopt only tracks failures, retaining the independent per-call bound.
+// nullopt tracks failures without an additional scope-wide deadline.
+// A lost reply stops further forward calls in the scope; unregister and
+// unsubscribe calls retain their remaining per-call/scope budget for cleanup.
 class RosMasterDeadline final : public MasterBudget {
 public:
   explicit RosMasterDeadline(
