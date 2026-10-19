@@ -104,6 +104,38 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate field"):
                 namespace["read_record_request"]()
 
+    def test_frozen_robots_are_model_backed_with_optional_physical_binding(self):
+        def frozen(**extra):
+            return dict({"slotId": "uav1", "namespace": "/uav1", "kind": "px4-multirotor",
+                         "profile": {"id": "p", "parameters": {}},
+                         "binding": {"hybridSource": None, "initialPose": {}},
+                         "derived": {"modelId": "fs150", "visualization": {}}}, **extra)
+        def read(robot):
+            session = {"parameters": {}, "context": {"robots": [robot], "experimentResourceId": "experiment-a",
+                       "experimentCommitId": "commit-a", "simulation": {"rosMasterUri": "http://master.test:27181", "rosIp": ""}}}
+            with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(json.dumps(session).encode()))):
+                return namespace["read_record_request"]()["robots"]["robots"][0]
+        model = read(frozen())
+        self.assertEqual((model["modelId"], model["robotAssetId"], model["robotAssetCommitId"]), ("fs150", None, None))
+        device = read(frozen(physicalBinding={"assetId": "asset-1", "assetCommitId": "commit-1",
+                                              "asset": {"px4": {"mocapRigidBodyName": "Body1"}}}))
+        self.assertEqual((device["robotAssetId"], device["robotAssetCommitId"], device["px4"]),
+                         ("asset-1", "commit-1", {"mocapRigidBodyName": "Body1"}))
+
+    def test_resolved_topic_bounds_admit_a_hundred_robot_roster_and_stay_closed(self):
+        document = request()
+        document["parameters"]["globalTopics"] = ["/g%d" % index for index in range(1024)]
+        self.assertEqual(len(prepare(document)[1]["topics"]), 1024)
+        document["parameters"]["globalTopics"].append("/g1024")
+        with self.assertRaisesRegex(ValueError, "globalTopics"):
+            prepare(document)
+        document = request()
+        document["parameters"]["robotTopics"] = ["t%d" % index for index in range(256)]
+        document["robots"]["robots"] = [dict(document["robots"]["robots"][0], id="uav-%d" % index, namespace="/uav%d" % index)
+                                         for index in range(9)]
+        with self.assertRaisesRegex(ValueError, "between 1 and 2048"):
+            prepare(document)
+
     def test_scientific_facts_must_be_explicit_and_agree(self):
         document = request()
         document["parameters"].update(recordingProfile="camera_scientific", cameras=[{"root": "/camera", "topics": ["video", "frame_timing"]}])

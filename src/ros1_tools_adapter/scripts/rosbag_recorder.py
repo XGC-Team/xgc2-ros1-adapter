@@ -47,13 +47,13 @@ def resolve_recording_topics(document):
     for excluded in parameters.get("excludedTopics") or []:
         if excluded["topic"] in topics:
             raise ValueError("ROS bag topic %r is both recorded and excluded" % excluded["topic"])
-    if not 1 <= len(topics) <= 512:
-        raise ValueError("ROS bag resolved topic count must be between 1 and 512")
+    if not 1 <= len(topics) <= 2048:
+        raise ValueError("ROS bag resolved topic count must be between 1 and 2048")
     for topic in topics:
         if len(topic.encode("utf-8")) > 1024 or not absolute.fullmatch(topic):
             raise ValueError("resolved ROS bag topic %r is invalid" % topic)
-    if sum(len(topic.encode("utf-8")) for topic in topics) > 32768:
-        raise ValueError("ROS bag resolved topics exceed 32768 bytes")
+    if sum(len(topic.encode("utf-8")) for topic in topics) > 131072:
+        raise ValueError("ROS bag resolved topics exceed 131072 bytes")
     return {"slotIds": [robot["id"] for robot in selected], "topics": sorted(topics)}
 
 
@@ -101,12 +101,17 @@ def read_record_request():
     session = document["context"]
     robots = []
     for robot in session["robots"]:
+        # Model-backed simulation slots have no physicalBinding; the Core freeze
+        # emits one only for a real device attachment.
+        derived, physical = robot.get("derived") or {}, robot.get("physicalBinding") or {}
+        asset = physical.get("asset") or {}
         robots.append({"id": robot["slotId"], "namespace": robot["namespace"], "kind": robot["kind"],
                        "profileId": robot["profile"]["id"], "runtimeParameters": robot["profile"]["parameters"],
                        "hybridSource": robot["binding"]["hybridSource"], "initialPose": robot["binding"]["initialPose"],
-                       "robotAssetId": robot["assetId"], "robotAssetCommitId": robot["assetCommitId"],
-                       "visualization": robot.get("derived", {}).get("visualization", {}),
-                       **{key: robot["asset"][key] for key in ("px4", "scout", "mecanum") if key in robot["asset"]}})
+                       "modelId": derived.get("modelId"),
+                       "robotAssetId": physical.get("assetId"), "robotAssetCommitId": physical.get("assetCommitId"),
+                       "visualization": derived.get("visualization", {}),
+                       **{key: asset[key] for key in ("px4", "scout", "mecanum") if key in asset}})
     document["robots"] = {"robots": robots, "experimentResourceId": session["experimentResourceId"],
                           "experimentCommitId": session["experimentCommitId"]}
     document["context"] = dict(session, rosMasterUri=session["simulation"]["rosMasterUri"],
@@ -170,7 +175,7 @@ def normalize_parameters(value, context, preview):
             raise ValueError(name + " contains an invalid ROS graph name")
         return values
     p["robotTopics"] = topics("robotTopics", p.get("robotTopics", []), relative, 256)
-    p["globalTopics"] = topics("globalTopics", p.get("globalTopics", ["/tf", "/tf_static", "/clock"]), absolute, 256)
+    p["globalTopics"] = topics("globalTopics", p.get("globalTopics", ["/tf", "/tf_static", "/clock"]), absolute, 1024)
     p["slotIds"] = topics("slotIds", p.get("slotIds", []), re.compile(r"[a-z][a-z0-9-]{0,63}"), 256)
     cameras = p.setdefault("cameras", [])
     if not isinstance(cameras, list) or len(cameras) > 32:
@@ -257,7 +262,7 @@ def prepare(document, preview=False):
     resolved = resolve_recording_topics({"parameters": p, "robots": robots, "runMode": context["runMode"], "simulator": (context.get("scene") or {}).get("simulator", "")})
     sidecar = []
     for robot in robots.get("robots") or []:
-        item = {key: copy.deepcopy(robot.get(key)) for key in ("id", "kind", "namespace", "hybridSource", "robotAssetId", "robotAssetCommitId", "robotAssetDigest", "profileId", "initialPose", "visualization")}
+        item = {key: copy.deepcopy(robot.get(key)) for key in ("id", "kind", "namespace", "hybridSource", "modelId", "robotAssetId", "robotAssetCommitId", "robotAssetDigest", "profileId", "initialPose", "visualization")}
         item["visualizationDigest"] = hashlib.sha256(json_bytes(item["visualization"])).hexdigest()
         for kind in ("px4", "scout", "mecanum"):
             if robot.get(kind) is not None:
@@ -304,7 +309,7 @@ try:
         raise ValueError("usage: xgc_ros1_tools_adapter_rosbag_recorder --prepare|--record")
     sys.argv = record_arguments(read_record_request())
 except (ValueError, TypeError, KeyError) as error:
-    sys.stderr.write(str(error) + "\n")
+    sys.stderr.write("%s: %s\n" % (type(error).__name__, error))
     raise SystemExit(2)
 
 
