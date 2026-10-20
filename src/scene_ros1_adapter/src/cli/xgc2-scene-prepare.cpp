@@ -160,6 +160,8 @@ int main(int argc, char** argv) {
       value["simulator"] = "gazebo";
       value["worldAttachment"] = !manifest.value("gazeboWorld", Json()).empty();
       value["generationParametersJson"] = compact(authored.value("generation", Json::object()));
+      // Published consumer contract (see core inputs()): workflows bind facts.pointCloud.* of scene-inputs.
+      if (manifest.contains("pointCloud")) value["pointCloud"] = manifest.at("pointCloud");
     }
     std::cout << compact(value) << '\n';
   } catch (const std::exception& error) {

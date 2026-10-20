@@ -673,8 +673,10 @@ TEST(Prepare, RandomInputsProduceOnePortableFlatAssetPerSession) {
   EXPECT_EQ(selected.at("workingFile"), selected.at("sceneFile"));
   EXPECT_EQ(selected.at("sceneDocumentFile"), filename);
   EXPECT_FALSE(selected.at("frozen").get<bool>());
-  // The saved cloud is a frozen Session fact (sceneAsset.pointCloud); the scene service no longer repeats it.
-  EXPECT_FALSE(selected.contains("pointCloud"));
+  // The saved cloud is also a frozen Session fact (sceneAsset.pointCloud), but scene-inputs keeps publishing it:
+  // workflows bind facts.pointCloud.file (point-cloud convex cover).
+  ASSERT_TRUE(selected.contains("pointCloud"));
+  EXPECT_EQ(selected.at("pointCloud"), manifest.at("pointCloud"));
   EXPECT_EQ(bytes(output / "fixed-cloud.pcd"), cloud);
   EXPECT_FALSE(fs::exists(output / "scene-document.yaml"));
   EXPECT_EQ(bytes(counter), "run\n");
@@ -777,7 +779,8 @@ TEST(Prepare, CliConsumesRelocatedRuntimeAssetWithoutResolvingTheLibrary) {
   EXPECT_EQ(value.at("assetDirectory"), asset.string());
   EXPECT_EQ(value.at("sceneFile"), (asset / "portable.yaml").string());
   EXPECT_EQ(value.at("sceneDocumentFile"), "portable.yaml");
-  EXPECT_FALSE(value.contains("pointCloud"));
+  ASSERT_TRUE(value.contains("pointCloud"));
+  EXPECT_EQ(value.at("pointCloud").at("file"), "points.pcd");
   EXPECT_EQ(bytes(asset / "points.pcd"), cloud);
   EXPECT_EQ(value.at("worldFile"), (workspace / "native-worlds/opening1/prepared-world.world").string());
   EXPECT_EQ(value.at("frozen"), true);
