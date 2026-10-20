@@ -521,6 +521,18 @@ def validate_profile_document(profile_path, profile, schema, messages):
                     )
                 )
             operation_ids.add(operation_id)
+            # Only the operation that releases a held motion intent may say so:
+            # `safety` is what keeps an operation dispatchable after an unknown
+            # result, so it must not be claimable by an arbitrary operation.
+            safety = (operation_contract or {}).get("safety")
+            if (safety == "release") != (operation_id == "release-motion-intent"):
+                raise ValueError(
+                    "{}: operation {} must declare safety {} (release-motion-intent is the only release operation)".format(
+                        profile_path,
+                        operation_id,
+                        "release" if operation_id == "release-motion-intent" else "none",
+                    )
+                )
         elif operation_id is not None or operation_contract is not None:
             raise ValueError(
                 "{}: channel {} kind {} cannot declare operation metadata".format(
@@ -1150,7 +1162,7 @@ def generate(
             policy_pointer, policy_count = policy_initializer(channel, prefix, lines)
             operation = channel["operation_contract"]
             channel_rows.append(
-                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}}}}},".format(
+                "      {{{}, {}, {}, {}, {}u, {}u, {}, {}u, {}u, {}, {}, {}, {}, {}, {}, {{{}, {}, {}, {}, {}}}}},".format(
                     cpp_string(channel["id"]),
                     KIND_ENUM[channel["kind"]],
                     cpp_string(channel["processor"]),
@@ -1170,6 +1182,7 @@ def generate(
                     cpp_string(operation.get("idempotency", "")),
                     cpp_bool(operation.get("cancellation_supported", False)),
                     cpp_bool(operation.get("deadline_required", False)),
+                    cpp_string(operation.get("safety", "")),
                 )
             )
         lines.append(

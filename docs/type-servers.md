@@ -163,7 +163,9 @@ profile channel) and carries the typed input payload.
   (`robot-queue-full`). A command whose deadline has passed is not run (`deadline-exceeded`).
 - A command whose outcome is not known (`OPERATION_PHASE_UNCERTAIN`) latches the robot: the
   following commands are rejected with `previous-result-unknown` until the robot is removed
-  and registered again. A command is never repeated by the server.
+  and registered again. A command is never repeated by the server. An operation whose profile
+  declares `operation_contract.safety` other than `none` (today `release-motion-intent`:
+  `release`) is exempt: the operator can always release a held motion intent.
 - While the server drains, new commands are rejected with `server-draining`.
 
 ### SubscribeStatus
@@ -172,6 +174,16 @@ One stream of `SubscribeStatusResponse` frames, at most four streams. The first 
 the latest message of every channel of every robot; later frames carry what changed, as
 `MemberStatus {identity, messages[]}`. A removed robot is announced once with `removed: true`.
 The stream ends when the server stops, after the subscribers have been given the removals.
+
+The server tracks how long no status stream has existed (Core's liveness: a stream renewed
+by Core overlaps, a crashed or unreachable Core ends it). A robot that holds a motion intent
+(republished locally at 10 Hz) releases it like an operator `release-motion-intent` once that
+silence reaches `core_silence_ms` of its `operation.motion-intent` channel policy (3000 in every
+profile, 0 disables): the UGV publishes one zero Twist, the PX4 one zero setpoint, and the stream
+ends. The adapter runs next to the robot and no longer dies with Core, so this is what bounds a
+moving robot after Core is gone. A silent peer that never closes its connection is only noticed
+once the transport reports it; the 3 s bound is exact for a Core that exits or a connection that
+is reset.
 
 ### Health
 

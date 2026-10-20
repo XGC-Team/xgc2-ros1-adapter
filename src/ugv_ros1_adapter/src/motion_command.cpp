@@ -59,7 +59,9 @@ bool motionIntentCommand(const MotionLimits &limits, std::uint32_t gear,
 std::shared_ptr<MotionCommandPublisher>
 MotionCommandPublisher::Create(ros::NodeHandle node_handle,
                                const std::string &topic,
-                               const MotionLimits &limits, std::string *error) {
+                               const MotionLimits &limits,
+                               std::chrono::milliseconds core_silence_limit,
+                               std::string *error) {
   if (topic.empty()) {
     fail(error, "motion command topic must not be empty");
     return nullptr;
@@ -78,7 +80,7 @@ MotionCommandPublisher::Create(ros::NodeHandle node_handle,
         [publisher](const geometry_msgs::Twist &command) {
           publisher->publish(command);
         },
-        limits);
+        limits, core_silence_limit);
   } catch (const std::exception &exception) {
     fail(error, "cannot create motion command publisher " + topic + ": " +
                     exception.what());
@@ -86,9 +88,11 @@ MotionCommandPublisher::Create(ros::NodeHandle node_handle,
   }
 }
 
-MotionCommandPublisher::MotionCommandPublisher(PublishFunction publish,
-                                               MotionLimits limits)
-    : publish_(std::move(publish)), limits_(limits) {}
+MotionCommandPublisher::MotionCommandPublisher(
+    PublishFunction publish, MotionLimits limits,
+    std::chrono::milliseconds core_silence_limit)
+    : publish_(std::move(publish)), limits_(limits),
+      core_silence_limit_(core_silence_limit) {}
 
 MotionCommandPublisher::~MotionCommandPublisher() { Stop(); }
 
@@ -159,6 +163,26 @@ bool MotionCommandPublisher::Release(std::string *error) {
     return false;
   command_ = stop;
   active_ = false;
+  return true;
+}
+
+bool MotionCommandPublisher::CoreSilent(std::chrono::milliseconds silent_for) {
+  if (core_silence_limit_ <= std::chrono::milliseconds::zero() ||
+      silent_for < core_silence_limit_)
+    return false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_ || !active_)
+    return false;
+  // Same effect as the operator's release: one last zero, then the stream
+  // ends. A failed publication leaves the intent active; the next tick tries
+  // again.
+  geometry_msgs::Twist stop;
+  if (!publishLocked(stop, nullptr))
+    return false;
+  command_ = stop;
+  active_ = false;
+  ROS_WARN("motion intent released: Core has not been subscribed for %ld ms",
+           static_cast<long>(silent_for.count()));
   return true;
 }
 

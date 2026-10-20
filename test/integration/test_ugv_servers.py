@@ -201,6 +201,7 @@ class UgvServerTests:
         robot, other = self.robots(server, "xsim.ros", "physical.vrpn")
         fake = self.start_fake_robots([robot, other])
         self.apply_all(server, [robot, other])
+        self.watch(server)  # Core's status subscription; without it the intent would be released
 
         event = self.execute(server, robot, "set-motion-intent", (3, 1, 1, -1))
         self.assertEqual(event["phase"], SUCCEEDED, event)
@@ -229,6 +230,43 @@ class UgvServerTests:
             motion_intent_payload(1, 0, 0, 0))
         self.assertNotEqual(unregistered["response"]["event"]["phase"], SUCCEEDED, unregistered)
 
+    # Core gone --------------------------------------------------------------------
+
+    def test_a_killed_core_releases_the_motion_intent_and_the_vehicle_stops(self):
+        """The adapter runs next to the robot, not under Core. When Core is gone
+        nobody refreshes or ends the intent, so the adapter does after 3 s."""
+        server = self.start_server(self.provider)
+        self.ready(server)
+        robot, = self.robots(server, "xsim.ros")
+        fake = self.start_fake_robots([robot])
+        self.apply_all(server, [robot])
+        core = self.watch(server)  # the stand-in for Core's status subscription
+        wait_until(lambda: robot.robot_id in core.members()[0], 10, 0.05, "the status stream")
+
+        event = self.execute(server, robot, "set-motion-intent", (3, 1, 1, -1))
+        self.assertEqual(event["phase"], SUCCEEDED, event)
+        self.wait_for_command(fake, robot, self.full_intent)
+        # Control: while Core is subscribed the intent holds well past the limit.
+        time.sleep(4.5)
+        self.assertEqual(self.last_command(fake, robot)["linear"], self.full_intent["linear"])
+
+        core.process.kill()  # no goodbye, no Release
+        killed = time.monotonic()
+        wait_until(lambda: is_zero(self.last_command(fake, robot)), 8, 0.05, "the zero command")
+        silence = time.monotonic() - killed
+        self.assertGreater(silence, 2.0, "released before the core silence limit")
+        self.assertLess(silence, 5.0)
+        count = len(fake.received(self.command_topic(robot)))
+        time.sleep(1.0)
+        self.assertEqual(len(fake.received(self.command_topic(robot))), count, "the stream went on")
+        self.assertIn("motion intent released", server.output())
+
+        # Core returns: the vehicle can be driven again.
+        self.watch(server)
+        event = self.execute(server, robot, "set-motion-intent", (3, 1, 1, -1))
+        self.assertEqual(event["phase"], SUCCEEDED, event)
+        self.wait_for_command(fake, robot, self.full_intent)
+
     # Stopping -------------------------------------------------------------------
 
     def drive(self, server):
@@ -237,6 +275,7 @@ class UgvServerTests:
         moving, idle = self.robots(server, "gazebo.vrpn", "xsim.ros")
         fake = self.start_fake_robots([moving, idle])
         self.apply_all(server, [moving, idle])
+        self.watch(server)  # Core's status subscription
         event = self.execute(server, moving, "set-motion-intent", (3, 1, 1, -1))
         self.assertEqual(event["phase"], SUCCEEDED, event)
         self.wait_for_command(fake, moving, self.full_intent)

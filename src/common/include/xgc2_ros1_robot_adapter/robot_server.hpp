@@ -150,6 +150,19 @@ public:
   // the robot is destroyed, which the core does after FlushPublications.
   virtual void Stop() = 0;
   virtual void Periodic() = 0;
+  // Called before every Periodic() while no Core status subscription exists,
+  // with the time since the last one ended. A robot that holds a continuous
+  // output (a motion intent republished at 10 Hz) releases it once the silence
+  // exceeds its limit: nobody is left to refresh or end the intent. Never
+  // called while Core is subscribed.
+  virtual void CoreSilent(std::chrono::milliseconds /*silent_for*/) {}
+  // True when the operation makes the robot safer (releases, holds or stops a
+  // continuous output). Such an operation is dispatched even after an earlier
+  // result of this robot was unknown, which otherwise rejects every command
+  // until the member is registered again.
+  virtual bool IsSafetyOperation(const xgc::adapter::v1::OperationRequest &) const {
+    return false;
+  }
   virtual std::uint64_t Execute(const xgc::adapter::v1::OperationRequest &,
                                 CommandIo &, CommandCompletion) = 0;
 };

@@ -251,7 +251,15 @@ class ContractGeneratorTest(unittest.TestCase):
                 "idempotency": "required",
                 "cancellation_supported": False,
                 "deadline_required": True,
+                "safety": "none",
             },
+        )
+        self.assertEqual(
+            channels["operation.motion-intent-release"]["operation_contract"]["safety"],
+            "release",
+        )
+        self.assertEqual(
+            channels["operation.motion-intent"]["policy"]["core_silence_ms"], 3000
         )
         self.assertEqual(
             channels["operation.mode"]["policy"]["allowed_modes"],
@@ -917,6 +925,7 @@ int main() {
             ("idempotency", "optional"),
             ("cancellation_supported", True),
             ("deadline_required", False),
+            ("safety", "maybe"),
         ):
             with self.subTest(field=field):
                 profile = yaml.safe_load(
@@ -926,6 +935,35 @@ int main() {
                 path = self.write_profile(profile)
                 with self.assertRaisesRegex(ValueError, "schema validation failed"):
                     GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+    def test_only_the_release_operation_may_declare_safety_release(self):
+        # `safety` keeps an operation dispatchable after an unknown result; an
+        # arbitrary operation must not be able to claim it, and the release
+        # operation must not lose it.
+        for operation_id, safety in (
+            ("arm", "release"),
+            ("release-motion-intent", "none"),
+        ):
+            with self.subTest(operation=operation_id):
+                profile = yaml.safe_load(
+                    PX4_PROFILE_PATH.read_text(encoding="utf-8")
+                )
+                channel = next(
+                    channel
+                    for channel in profile["channels"]
+                    if channel.get("operation_id") == operation_id
+                )
+                channel["operation_contract"]["safety"] = safety
+                path = self.write_profile(profile)
+                with self.assertRaisesRegex(ValueError, "must declare safety"):
+                    GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
+
+    def test_every_operation_declares_safety(self):
+        profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))
+        del profile["channels"][-1]["operation_contract"]["safety"]
+        path = self.write_profile(profile)
+        with self.assertRaisesRegex(ValueError, "schema validation failed"):
+            GENERATOR.load_profile(path, SCHEMA_PATH, self.messages)
 
     def test_typed_policy_values_must_be_cxx14_representable(self):
         profile = yaml.safe_load(PX4_PROFILE_PATH.read_text(encoding="utf-8"))

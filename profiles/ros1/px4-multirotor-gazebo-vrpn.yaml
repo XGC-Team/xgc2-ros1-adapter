@@ -311,6 +311,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   service:
     name: mavros/cmd/arming
     type: mavros_msgs/CommandBool
@@ -327,6 +328,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   service:
     name: mavros/set_mode
     type: mavros_msgs/SetMode
@@ -348,6 +350,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   service:
     name: mavros/cmd/command
     type: mavros_msgs/CommandLong
@@ -371,6 +374,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   service:
     name: mavros/cmd/command
     type: mavros_msgs/CommandLong
@@ -389,6 +393,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   output:
     name: mavros/setpoint_raw/local
     type: mavros_msgs/PositionTarget
@@ -398,6 +403,7 @@ channels:
     maximum_yaw_rate_rps: 1.0
     publish_rate_hz: 10
     timeout_ms: 1000
+    core_silence_ms: 3000
 - id: operation.motion-intent-release
   kind: operation
   operation_id: release-motion-intent
@@ -409,6 +415,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: release
   output:
     name: mavros/setpoint_raw/local
     type: mavros_msgs/PositionTarget
