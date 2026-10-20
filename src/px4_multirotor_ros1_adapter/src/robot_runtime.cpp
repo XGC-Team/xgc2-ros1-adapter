@@ -2017,7 +2017,10 @@ void RobotRuntime::emitPx4PeriodicLocked(
     recordOutputLocked("state.health");
   }
 
-  if (channelEnabled("state.flight") && shouldEmitLocked("state.flight", now)) {
+  // An unobserved source has no flight state. Publishing default false/empty
+  // fields would turn unknown ARM/MODE into fresh semantic measurements.
+  if (has_mavros_state_ && channelEnabled("state.flight") &&
+      shouldEmitLocked("state.flight", now)) {
     xgc::semantic::aerial::v1::FlightStatus payload;
     payload.set_connected(flight_state_fresh && mavros_state_.connected);
     payload.set_armed(flight_state_fresh && mavros_state_.armed);
