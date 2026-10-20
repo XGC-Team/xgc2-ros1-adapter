@@ -3,6 +3,7 @@
 // server does to its robots, so the lifecycle can be asserted exactly.
 #include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc2/xrpc/grpc.hpp"
+#include "xgc2_ros1_robot_adapter/core_silence.hpp"
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
 #include "xgc2_ros1_robot_adapter/async_ros_services.hpp"
 #include "xgc2_ros1_robot_adapter/master_retry.hpp"
@@ -47,6 +48,14 @@ struct World {
   std::map<std::uint64_t, Pending> pending;
   std::uint64_t next_call = 0;
   std::set<std::string> stopped;
+  // CoreSilent() calls per robot and the longest silence reported.
+  std::map<std::string, int> silent_calls;
+  std::chrono::milliseconds longest_silence{0};
+
+  int silentCalls(const std::string &robot) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return silent_calls[robot];
+  }
 
   void record(const std::string &line) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -212,6 +221,7 @@ private:
 //   "instant"   succeeds at once
 //   "slow"      stays in flight until the test finishes it
 //   "uncertain" ends with an uncertain outcome
+//   "release"   succeeds at once and counts as a safety operation
 class FakeRobot final : public NativeRobot {
 public:
   FakeRobot(World &world, RobotConfig config, TelemetryEmitter emit)
@@ -225,11 +235,19 @@ public:
     world_.stopped.insert(config_.robot_id);
   }
   void Periodic() override { ++ticks_; if (ticks_ % 5 == 0) publish(); }
+  void CoreSilent(std::chrono::milliseconds silent_for) override {
+    std::lock_guard<std::mutex> lock(world_.mutex);
+    ++world_.silent_calls[config_.robot_id];
+    world_.longest_silence = std::max(world_.longest_silence, silent_for);
+  }
+  bool IsSafetyOperation(const operation::OperationRequest &request) const override {
+    return request.context().endpoint_id() == "release";
+  }
   std::uint64_t Execute(const operation::OperationRequest &request, CommandIo &,
                         CommandCompletion complete) override {
     const auto &kind = request.context().endpoint_id();
     world_.record("execute:" + config_.robot_id + ":" + kind);
-    if (kind == "instant") {
+    if (kind == "instant" || kind == "release") {
       complete(event(request, operation::OPERATION_PHASE_SUCCEEDED));
       return 0;
     }
@@ -995,6 +1013,96 @@ TEST_F(ServerCommands, ExecuteRunsOnTheMembersQueueAndAnUncertainResultBlocksOnl
   EXPECT_EQ("previous-result-unknown", blocked.response.event().error().code());
   auto other = client_->execute(command("r2", "instant", "w4"));
   EXPECT_EQ(operation::OPERATION_PHASE_SUCCEEDED, other.response.event().phase());
+}
+
+// An unknown result latches the robot, but never the way out: the operator
+// must still be able to release a held motion intent.
+TEST_F(ServerCommands, AnUncertainResultDoesNotBlockASafetyOperation) {
+  startReady();
+  wire::ApplyMembersRequest request;
+  *request.add_members() = registration("r1", "/fleet/r1");
+  ASSERT_TRUE(client_->apply(request).status.ok());
+
+  EXPECT_EQ(operation::OPERATION_PHASE_UNCERTAIN,
+            client_->execute(command("r1", "uncertain", "w1")).response.event().phase());
+  EXPECT_EQ("previous-result-unknown",
+            client_->execute(command("r1", "instant", "w2")).response.event().error().code());
+  const auto released = client_->execute(command("r1", "release", "w3"));
+  ASSERT_TRUE(released.status.ok());
+  EXPECT_EQ(operation::OPERATION_PHASE_SUCCEEDED, released.response.event().phase());
+  // The latch itself stays until the member is registered again.
+  EXPECT_EQ("previous-result-unknown",
+            client_->execute(command("r1", "instant", "w4")).response.event().error().code());
+}
+
+using ServerCoreSilence = Fixture;
+
+// While Core holds a status stream no robot is told about silence; when the
+// last stream ends the robots hear the growing silence on every tick, and a
+// new stream ends it again.
+TEST_F(ServerCoreSilence, RobotsHearTheSilenceOnlyWhileNoStatusStreamExists) {
+  startReady();
+  wire::ApplyMembersRequest request;
+  *request.add_members() = registration("r1", "/fleet/r1");
+  ASSERT_TRUE(client_->apply(request).status.ok());
+  {
+    Client::Watch watch(*client_, milliseconds(20000));
+    ASSERT_TRUE(watch.wait([](const wire::SubscribeStatusResponse &frame) {
+      return frame.members_size() > 0;
+    }));
+    std::this_thread::sleep_for(milliseconds(400));
+    EXPECT_EQ(0, world_.silentCalls("r1"));
+  }
+  // The stream ended (client cancel): the robot is told, with the silence so
+  // far growing.
+  for (int attempt = 0; attempt < 200 && world_.silentCalls("r1") < 3; ++attempt)
+    std::this_thread::sleep_for(milliseconds(10));
+  EXPECT_GE(world_.silentCalls("r1"), 3);
+  {
+    std::lock_guard<std::mutex> lock(world_.mutex);
+    EXPECT_GT(world_.longest_silence, milliseconds(0));
+  }
+  // Core is back: no further call.
+  Client::Watch again(*client_, milliseconds(20000));
+  ASSERT_TRUE(again.wait([](const wire::SubscribeStatusResponse &frame) {
+    return frame.members_size() > 0;
+  }));
+  std::this_thread::sleep_for(milliseconds(200));
+  const auto calls = world_.silentCalls("r1");
+  std::this_thread::sleep_for(milliseconds(400));
+  EXPECT_EQ(calls, world_.silentCalls("r1"));
+}
+
+// The silence clock is injectable: time moves without sleeping.
+TEST(CoreSilenceClock, MeasuresFromTheEndOfTheLastStreamAndStreamsMayOverlap) {
+  auto now = Clock::time_point{} + std::chrono::hours(1);
+  CoreSilence silence([&now] { return now; });
+  // Core never subscribed: silence runs from construction.
+  now += std::chrono::seconds(2);
+  EXPECT_EQ(milliseconds(2000), silence.SilentFor());
+
+  silence.Opened();
+  now += std::chrono::seconds(30);
+  EXPECT_EQ(milliseconds(0), silence.SilentFor());
+  // Renewal: the new stream opens before the old one ends; no silence between.
+  silence.Opened();
+  silence.Closed();
+  now += std::chrono::seconds(5);
+  EXPECT_EQ(milliseconds(0), silence.SilentFor());
+
+  silence.Closed();
+  EXPECT_EQ(milliseconds(0), silence.SilentFor());
+  now += std::chrono::milliseconds(2999);
+  EXPECT_EQ(milliseconds(2999), silence.SilentFor());
+  now += std::chrono::milliseconds(1);
+  EXPECT_EQ(milliseconds(3000), silence.SilentFor());
+  silence.Opened();
+  EXPECT_EQ(milliseconds(0), silence.SilentFor());
+  // An unmatched Closed does not underflow the count.
+  silence.Closed();
+  silence.Closed();
+  silence.Opened();
+  EXPECT_EQ(milliseconds(0), silence.SilentFor());
 }
 
 TEST_F(ServerCommands, ExecuteNeedsTheActiveMemberOfThisEpoch) {

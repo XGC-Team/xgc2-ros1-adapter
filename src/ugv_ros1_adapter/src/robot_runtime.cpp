@@ -545,6 +545,7 @@ bool validateNativeProfileContract(const UgvVariant &variant,
         std::string(channel.operation_id).size() != 0u ||
         std::string(channel.operation_contract.side_effect).size() != 0u ||
         std::string(channel.operation_contract.idempotency).size() != 0u ||
+        std::string(channel.operation_contract.safety).size() != 0u ||
         channel.operation_contract.cancellation_supported ||
         channel.operation_contract.deadline_required) {
       return fail(error, name + " native channel binding drifted: " +
@@ -626,6 +627,7 @@ bool validateNativeProfileContract(const UgvVariant &variant,
   contract::MessageMetadata motion_input{};
   contract::MessageMetadata motion_output{};
   std::int64_t operation_timeout_millis = 0;
+  std::int64_t core_silence_millis = 0;
   if (!installed.channelMetadata(primary, "operation.motion-intent", &motion) ||
       motion.kind != contract::ChannelKind::kOperation ||
       std::string(motion.processor) != prefix + ".set-motion-intent" ||
@@ -634,14 +636,18 @@ bool validateNativeProfileContract(const UgvVariant &variant,
       motion.output_rate_hz != 0.0 ||
       motion.operation_timeout_millis != 1000u ||
       motion.stale_after_millis != 0u || motion.endpoint_count != 1u ||
-      motion.observes_count != 0u || motion.policy_count != 1u ||
+      motion.observes_count != 0u || motion.policy_count != 2u ||
       std::string(motion.operation_contract.side_effect) != "idempotent" ||
+      std::string(motion.operation_contract.safety) != "none" ||
       std::string(motion.operation_contract.idempotency) != "required" ||
       motion.operation_contract.cancellation_supported ||
       !motion.operation_contract.deadline_required ||
       !contract::channelPolicyInteger(motion, "timeout_ms",
                                       &operation_timeout_millis) ||
       operation_timeout_millis != 1000 ||
+      !contract::channelPolicyInteger(motion, "core_silence_ms",
+                                      &core_silence_millis) ||
+      core_silence_millis < 0 || core_silence_millis > 60000 ||
       !installed.messageMetadata(motion.input_message_id, &motion_input) ||
       std::string(motion_input.type_name) !=
           "xgc.semantic.common.v1.RemoteControlIntentRequest" ||
@@ -670,6 +676,7 @@ bool validateNativeProfileContract(const UgvVariant &variant,
       release.stale_after_millis != 0u || release.endpoint_count != 1u ||
       release.observes_count != 0u || release.policy_count != 1u ||
       std::string(release.operation_contract.side_effect) != "idempotent" ||
+      std::string(release.operation_contract.safety) != "release" ||
       std::string(release.operation_contract.idempotency) != "required" ||
       release.operation_contract.cancellation_supported ||
       !release.operation_contract.deadline_required ||

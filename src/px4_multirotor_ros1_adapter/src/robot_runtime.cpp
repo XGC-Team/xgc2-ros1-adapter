@@ -270,7 +270,7 @@ const std::array<NativeChannelBinding, 24u> kNativeBindings{{
     {"operation.force-disarm", "px4.force-disarm",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 3u, false},
     {"operation.motion-intent", "px4.set-motion-intent",
-     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 5u, false},
+     contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 6u, false},
     {"operation.motion-intent-release", "px4.release-motion-intent",
      contract::ChannelKind::kOperation, "xgc.v1.Empty", 1u, 1u, false},
 }};
@@ -580,6 +580,13 @@ bool BuildNativeProfileConfig(
         return fail(error, std::string("PX4 operation binding drifted: ") +
                                binding.id);
       }
+      // Only the release operation makes the robot safer; it must say so,
+      // since that is what keeps it dispatchable after an unknown result.
+      if (std::string(channel.operation_contract.safety) !=
+          (std::string(binding.id) == "operation.motion-intent-release"
+               ? "release"
+               : "none"))
+        return fail(error, "PX4 operation safety contract drifted");
       const std::string expected_side_effect =
           (std::string(binding.id) == "operation.autopilot-reboot" ||
            std::string(binding.id) == "operation.force-disarm")
@@ -750,6 +757,7 @@ bool BuildNativeProfileConfig(
   double remote_yaw = 0.0;
   std::int64_t remote_publish_rate = 0;
   std::int64_t remote_timeout = 0;
+  std::int64_t remote_core_silence = 0;
   std::int64_t vision_publish_rate = 30;
   if (!contract::channelPolicyNumber(offboard, "minimum_rate_hz",
                                      &offboard_rate) ||
@@ -784,12 +792,15 @@ bool BuildNativeProfileConfig(
       !contract::channelPolicyInteger(remote, "publish_rate_hz",
                                       &remote_publish_rate) ||
       !contract::channelPolicyInteger(remote, "timeout_ms", &remote_timeout) ||
+      !contract::channelPolicyInteger(remote, "core_silence_ms",
+                                      &remote_core_silence) ||
       (!canonical_input && !contract::channelPolicyInteger(vision, "publish_rate_hz",
                                       &vision_publish_rate)) ||
       mav_command != 246 || reboot_param != 1 || !require_known ||
       !require_fresh || !require_connected || !require_disarmed ||
       remote_altitude != 1.0 || remote_linear <= 0.0 || remote_yaw <= 0.0 ||
       remote_publish_rate != 10 || remote_timeout != 1000 ||
+      remote_core_silence < 0 || remote_core_silence > 60000 ||
       vision_publish_rate != 30) {
     return fail(error, "PX4 native policy binding is incomplete or unsafe");
   }
@@ -808,6 +819,7 @@ bool BuildNativeProfileConfig(
   candidate.remote_control_altitude_meters = remote_altitude;
   candidate.remote_control_maximum_linear_velocity_mps = remote_linear;
   candidate.remote_control_maximum_yaw_rate_rps = remote_yaw;
+  candidate.remote_control_core_silence_ms = remote_core_silence;
   candidate.vision_publish_rate_hz =
       static_cast<double>(vision_publish_rate);
   candidate.allowed_modes.reserve(allowed_mode_count);

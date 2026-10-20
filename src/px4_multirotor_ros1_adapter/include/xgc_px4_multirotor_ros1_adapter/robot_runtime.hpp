@@ -63,6 +63,8 @@ struct NativeProfileConfig {
   double remote_control_altitude_meters = 0.0;
   double remote_control_maximum_linear_velocity_mps = 0.0;
   double remote_control_maximum_yaw_rate_rps = 0.0;
+  // Core silence after which an active motion intent is released; 0 = never.
+  std::int64_t remote_control_core_silence_ms = 0;
   bool publish_vision = true;
   double vision_publish_rate_hz = 30.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;

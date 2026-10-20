@@ -204,11 +204,13 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: none
   output:
     name: cmd_vel
     type: geometry_msgs/Twist
   policy:
     timeout_ms: 1000
+    core_silence_ms: 3000
 - id: operation.motion-intent-release
   kind: operation
   operation_id: release-motion-intent
@@ -220,6 +222,7 @@ channels:
     idempotency: required
     cancellation_supported: false
     deadline_required: true
+    safety: release
   output:
     name: cmd_vel
     type: geometry_msgs/Twist

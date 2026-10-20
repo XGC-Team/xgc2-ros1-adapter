@@ -85,6 +85,10 @@ struct OperationContractMetadata {
   const char *idempotency;
   bool cancellation_supported;
   bool deadline_required;
+  // "release", "hold" or "stop" when the operation makes the robot safer and
+  // so stays dispatchable after an unknown result; "none" for every other
+  // operation, "" for a stream.
+  const char *safety;
 };
 
 struct OperationMetadata {
@@ -168,6 +172,12 @@ private:
   const ProfileMetadata *profiles_;
   std::size_t profile_count_;
 };
+
+// True when the channel is an operation that releases, holds or stops.
+inline bool SafetyOperation(const ChannelMetadata &channel) {
+  const std::string safety(channel.operation_contract.safety);
+  return safety == "release" || safety == "hold" || safety == "stop";
+}
 
 const EndpointMetadata *channelEndpoint(const ChannelMetadata &channel,
                                         EndpointKind kind,

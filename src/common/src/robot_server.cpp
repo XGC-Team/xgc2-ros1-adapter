@@ -1,4 +1,5 @@
 #include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/core_silence.hpp"
 #include "xgc2_ros1_robot_adapter/master_retry.hpp"
 #include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
@@ -999,6 +1000,7 @@ private:
           const bool periodic = Steady::now() >= next_periodic;
           if (periodic)
             next_periodic = Steady::now() + Milliseconds(100);
+          const auto silent_for = periodic ? core_silence_.SilentFor() : Milliseconds(0);
           for (auto &member : members) {
             if (member->closing) {
               if (member->native_call)
@@ -1011,8 +1013,11 @@ private:
               io->Cancel(member->native_call);
             if (periodic && !shutdown_) {
               std::lock_guard<std::mutex> lock(member->native_mutex);
-              if (!member->closing)
+              if (!member->closing) {
+                if (silent_for > Milliseconds(0))
+                  member->native->CoreSilent(silent_for);
                 member->native->Periodic();
+              }
             }
             if (!shutdown_ && !member->in_flight && !member->commands.empty())
               dispatch(member, *io);
@@ -1107,7 +1112,10 @@ private:
                                        "not executed: server is draining"));
       return;
     }
-    if (member->uncertain) {
+    // An unknown result blocks further commands of this robot until it is
+    // registered again, except the ones that make it safe: the operator must
+    // still be able to release a held motion intent.
+    if (member->uncertain && !member->native->IsSafetyOperation(request)) {
       finishExecute(call, CommandError(request, operation::ERROR_CLASS_REJECTED,
                                        "previous-result-unknown",
                                        "not executed: previous native result is unknown"));
@@ -1204,14 +1212,18 @@ private:
       std::lock_guard<std::mutex> lock(subscribers_mutex_);
       subscribers_.push_back(&subscriber);
     }
+    core_silence_.Opened();
     struct Registration {
       Impl &owner;
       Subscriber &subscriber;
       ~Registration() {
-        std::lock_guard<std::mutex> lock(owner.subscribers_mutex_);
-        owner.subscribers_.erase(std::find(owner.subscribers_.begin(),
-                                           owner.subscribers_.end(),
-                                           &subscriber));
+        {
+          std::lock_guard<std::mutex> lock(owner.subscribers_mutex_);
+          owner.subscribers_.erase(std::find(owner.subscribers_.begin(),
+                                             owner.subscribers_.end(),
+                                             &subscriber));
+        }
+        owner.core_silence_.Closed();
         owner.subscribers_changed_.notify_all();
       }
     } registration{*this, subscriber};
@@ -1619,6 +1631,9 @@ private:
   std::mutex status_mutex_;
   std::condition_variable status_changed_;
   std::atomic<std::uint64_t> status_version_{0};
+  // Time since Core's status stream last existed; robots release continuous
+  // output when it grows past their limit.
+  CoreSilence core_silence_;
   std::mutex subscribers_mutex_;
   std::condition_variable subscribers_changed_;
   std::vector<Subscriber *> subscribers_;

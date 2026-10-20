@@ -18,6 +18,15 @@ public:
   ~Native() override { Stop(); }
   void Stop() override { if (runtime) runtime->Stop(); if (motion) motion->Stop(); }
   void Periodic() override { runtime->emitPeriodic(ros::WallTime::now()); if (motion) motion->PublishPeriodic(); }
+  void CoreSilent(std::chrono::milliseconds silent_for) override { if (motion) motion->CoreSilent(silent_for); }
+  bool IsSafetyOperation(const wire::OperationRequest &request) const override {
+    std::size_t count = 0;
+    const auto *channels = variant.contract.profileChannels(config.profile_id, &count);
+    for (std::size_t i = 0; i < count; ++i)
+      if (channels[i].kind == contract::ChannelKind::kOperation && request.context().endpoint_id() == channels[i].operation_id)
+        return contract::SafetyOperation(channels[i]);
+    return false;
+  }
   std::uint64_t Execute(const wire::OperationRequest &request, shared::CommandIo &, shared::CommandCompletion complete) override {
     std::size_t count = 0;
     const auto *channels = variant.contract.profileChannels(config.profile_id, &count);
@@ -57,7 +66,13 @@ shared::RobotFactory factoryFor(const UgvVariant &variant) {
     if (shared::Enabled(config, "operation.motion-intent") || shared::Enabled(config, "operation.motion-intent-release")) {
       std::string topic;
       if (!resolveMotionCommandTopic(variant, config, &topic, error)) return nullptr;
-      native->motion = MotionCommandPublisher::Create(node, topic, variant.motion, error);
+      contract::ChannelMetadata motion_channel{};
+      std::int64_t silence_ms = 0;
+      if (!variant.contract.channelMetadata(config.profile_id, "operation.motion-intent", &motion_channel) ||
+          !contract::channelPolicyInteger(motion_channel, "core_silence_ms", &silence_ms) || silence_ms < 0 || silence_ms > 60000) {
+        *error = "motion-intent policy core_silence_ms is missing or out of range"; return nullptr;
+      }
+      native->motion = MotionCommandPublisher::Create(node, topic, variant.motion, std::chrono::milliseconds(silence_ms), error);
       if (!native->motion) return nullptr;
     }
     return native;

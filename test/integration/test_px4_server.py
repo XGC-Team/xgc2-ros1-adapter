@@ -118,6 +118,7 @@ class Px4ServerTest(MasterCase):
         moving, idle = self.robots(server, "gazebo.vrpn", "xsim.ros")
         fake = self.start_fake_robots([moving, idle])
         self.apply_all(server, [moving, idle])
+        self.watch(server)  # Core's status subscription; without it the intent would be released
         event = self.execute(server, moving, "set-motion-intent", motion_intent_payload(3, 1, 1, -1))
         self.assertEqual(event["phase"], SUCCEEDED, event)
 
@@ -166,6 +167,44 @@ class Px4ServerTest(MasterCase):
         self.assertEqual(server.client.health()["response"]["members"], 1)
         server.signal(signal.SIGTERM)
         self.assert_gone(server, EXIT_OK)
+
+    # Core gone --------------------------------------------------------------
+
+    def test_a_killed_core_ends_the_setpoint_stream_with_a_zero_setpoint(self):
+        """The adapter runs next to the vehicle, not under Core. When Core is
+        gone nobody refreshes or ends the intent, so the adapter does after 3 s."""
+        server = self.start_server(self.provider)
+        self.ready(server)
+        robot, = self.robots(server, "xsim.ros")
+        fake = self.start_fake_robots([robot])
+        self.apply_all(server, [robot])
+        core = self.watch(server)  # the stand-in for Core's status subscription
+        wait_until(lambda: robot.robot_id in core.members()[0], 10, 0.05, "the status stream")
+
+        event = self.execute(server, robot, "set-motion-intent", motion_intent_payload(3, 1, 1, -1))
+        self.assertEqual(event["phase"], SUCCEEDED, event)
+        wait_until(lambda: not stopped(self.last_setpoint(fake, robot) or {"velocity": [0, 0, 0], "yaw_rate": 0.0}),
+                   10, 0.05, "the setpoint stream")
+        # Control: while Core is subscribed the stream holds well past the limit.
+        time.sleep(4.5)
+        self.assertFalse(stopped(self.last_setpoint(fake, robot)))
+
+        core.process.kill()  # no goodbye, no Release
+        killed = time.monotonic()
+        wait_until(lambda: stopped(self.last_setpoint(fake, robot)), 8, 0.05, "the zero setpoint")
+        silence = time.monotonic() - killed
+        self.assertGreater(silence, 2.0, "released before the core silence limit")
+        self.assertLess(silence, 5.0)
+        count = len(self.setpoints(fake, robot))
+        time.sleep(1.0)
+        self.assertEqual(len(self.setpoints(fake, robot)), count, "the stream went on")
+        self.assertIn("motion intent released", server.output())
+
+        # Core returns: the vehicle can be driven again.
+        self.watch(server)
+        event = self.execute(server, robot, "set-motion-intent", motion_intent_payload(3, 1, 1, -1))
+        self.assertEqual(event["phase"], SUCCEEDED, event)
+        wait_until(lambda: not stopped(self.last_setpoint(fake, robot)), 10, 0.05, "the setpoint stream")
 
     # Commands in flight when the Run ends -----------------------------------
 

@@ -207,7 +207,8 @@
         "side_effect",
         "idempotency",
         "cancellation_supported",
-        "deadline_required"
+        "deadline_required",
+        "safety"
       ],
       "properties": {
         "side_effect": {
@@ -222,6 +223,10 @@
         },
         "deadline_required": {
           "const": true
+        },
+        "safety": {
+          "description": "release, hold and stop operations make the robot safer: they stay dispatchable after an unknown result of an earlier command. Every other operation is none.",
+          "enum": ["none", "release", "hold", "stop"]
         }
       }
     },

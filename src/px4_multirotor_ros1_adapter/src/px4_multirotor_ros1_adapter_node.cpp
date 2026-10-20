@@ -25,6 +25,15 @@ public:
   ~Native() override { Stop(); }
   void Stop() override { if (runtime) runtime->Stop(); if (remote) remote->Stop(); state_subscriber.shutdown(); }
   void Periodic() override { runtime->emitPeriodic(ros::WallTime::now()); if (remote) remote->PublishPeriodic(); }
+  void CoreSilent(std::chrono::milliseconds silent_for) override { if (remote) remote->CoreSilent(silent_for); }
+  bool IsSafetyOperation(const wire::OperationRequest &request) const override {
+    std::size_t count = 0;
+    const auto *channels = InstalledContract().profileChannels(config.profile_id, &count);
+    for (std::size_t i = 0; i < count; ++i)
+      if (channels[i].kind == contract::ChannelKind::kOperation && request.context().endpoint_id() == channels[i].operation_id)
+        return contract::SafetyOperation(channels[i]);
+    return false;
+  }
   template<class Service, class Interpret> std::uint64_t call(Service command, const std::string &endpoint,
       const wire::OperationRequest &request, const contract::ChannelMetadata &channel, const contract::MessageMetadata &output,
       shared::AsyncRosServices &services, shared::CommandCompletion complete, Interpret interpret) {
@@ -127,7 +136,8 @@ std::shared_ptr<shared::NativeRobot> create(shared::RosNode &ros_node, const sha
   if (shared::Enabled(config, "operation.motion-intent") || shared::Enabled(config, "operation.motion-intent-release")) {
     native->remote = RemoteControlPublisher::Create(node, native->profile.remote_control_endpoint,
         native->profile.remote_control_altitude_meters, native->profile.remote_control_maximum_linear_velocity_mps,
-        native->profile.remote_control_maximum_yaw_rate_rps, error);
+        native->profile.remote_control_maximum_yaw_rate_rps,
+        std::chrono::milliseconds(native->profile.remote_control_core_silence_ms), error);
     if (!native->remote) return nullptr;
   }
   if (shared::Enabled(config, "operation.autopilot-reboot")) {

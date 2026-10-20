@@ -23,7 +23,8 @@ double clamp(double value, double limit) {
 std::shared_ptr<RemoteControlPublisher> RemoteControlPublisher::Create(
     ros::NodeHandle node_handle, const std::string &topic,
     double altitude_meters, double maximum_linear_velocity_mps,
-    double maximum_yaw_rate_rps, std::string *error) {
+    double maximum_yaw_rate_rps, std::chrono::milliseconds core_silence_limit,
+    std::string *error) {
   if (topic.empty() || !std::isfinite(altitude_meters) ||
       altitude_meters <= 0.0 ||
       !std::isfinite(maximum_linear_velocity_mps) ||
@@ -46,7 +47,7 @@ std::shared_ptr<RemoteControlPublisher> RemoteControlPublisher::Create(
           publisher->publish(target);
         },
         altitude_meters, maximum_linear_velocity_mps,
-        maximum_yaw_rate_rps);
+        maximum_yaw_rate_rps, core_silence_limit);
   } catch (const std::exception &exception) {
     fail(error, std::string("cannot create PX4 remote-control publisher: ") +
                     exception.what());
@@ -56,10 +57,12 @@ std::shared_ptr<RemoteControlPublisher> RemoteControlPublisher::Create(
 
 RemoteControlPublisher::RemoteControlPublisher(
     PublishFunction publish, double altitude_meters,
-    double maximum_linear_velocity_mps, double maximum_yaw_rate_rps)
+    double maximum_linear_velocity_mps, double maximum_yaw_rate_rps,
+    std::chrono::milliseconds core_silence_limit)
     : publish_(std::move(publish)), altitude_meters_(altitude_meters),
       maximum_linear_velocity_mps_(maximum_linear_velocity_mps),
-      maximum_yaw_rate_rps_(maximum_yaw_rate_rps) {
+      maximum_yaw_rate_rps_(maximum_yaw_rate_rps),
+      core_silence_limit_(core_silence_limit) {
   target_.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
   // Match xgc1 XMinidroneRemoteControlSubRosModule: ignore PX/PY/VZ/AF*/YAW,
   // hold altitude, stream velocity + yaw_rate. An open-window zero intent is
@@ -130,6 +133,27 @@ bool RemoteControlPublisher::publishLocked(std::string *error) {
   } catch (...) {
     return fail(error, "PX4 remote-control publication failed");
   }
+}
+
+bool RemoteControlPublisher::CoreSilent(std::chrono::milliseconds silent_for) {
+  if (core_silence_limit_ <= std::chrono::milliseconds::zero() ||
+      silent_for < core_silence_limit_)
+    return false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopped_ || !active_)
+    return false;
+  // One zero setpoint (as at Stop), then the stream ends like the operator's
+  // release. A failed publication leaves the intent active; the next tick
+  // tries again.
+  target_.velocity.x = 0.0;
+  target_.velocity.y = 0.0;
+  target_.yaw_rate = 0.0;
+  if (!publishLocked(nullptr))
+    return false;
+  active_ = false;
+  ROS_WARN("motion intent released: Core has not been subscribed for %ld ms",
+           static_cast<long>(silent_for.count()));
+  return true;
 }
 
 void RemoteControlPublisher::PublishPeriodic() {
