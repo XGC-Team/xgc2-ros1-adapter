@@ -79,6 +79,16 @@ Json manifestAt(const fs::path& directory) {
   return result;
 }
 
+// The Session froze the revision it selected. Assets sealed before revisions
+// existed carry none, which freezes (and compares) as the empty string.
+void expectRevision(const Json& manifest, const Json& expected) {
+  if (expected.is_null()) return;
+  if (!expected.is_string()) throw SceneError("The expected scene asset revision must be a string");
+  const auto actual = manifest.value("revisionId", Json(""));
+  if (!actual.is_string() || actual != expected)
+    throw SceneError("Scene asset revision conflicts with the requested reference");
+}
+
 void workspaceChildren(const fs::path& grant, const fs::path& output) {
   const auto root = fs::canonical(grant);
   const auto relative = output.lexically_relative(root);
@@ -597,9 +607,7 @@ Json prepare(const Json& request) {
     const auto directory = checkedPath(request.at("asset_directory"), root, true);
     asset_directory = directory.string();
     manifest = manifestAt(directory);
-    const auto expected = request.value("expected_revision_id", Json());
-    if (!expected.is_null() && manifest.value("revisionId", Json()) != expected)
-      throw SceneError("Scene asset revision conflicts with the requested reference");
+    expectRevision(manifest, request.value("expected_revision_id", Json()));
     const auto simulators = manifest.value("simulators", Json::object());
     if (!simulators.is_object() || !simulators.value("gazebo", Json()).is_object())
       throw SceneError("The asset must declare Gazebo geometry support");
@@ -702,6 +710,7 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   const auto root = fs::canonical(resource_root);
   auto directory = checkedPath((root / "Shared" / "Scenes" / name.get<std::string>()).string(), root / "Shared" / "Scenes", true);
   auto manifest = manifestAt(directory);
+  expectRevision(manifest, context.value("expectedRevisionId", Json()));
   const auto supports = manifest.value("simulators", simulator == "none" ? Json::object() : Json());
   const bool physical = simulator == "none";
   if (!supports.is_object() || (!physical && (simulator != "gazebo" && simulator != "xsim")) ||
@@ -828,8 +837,32 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
   value["mediaFile"] = attachment(directory, manifest.value("media", Json()));
   value["cameraInfoFile"] = attachment(directory, manifest.value("cameraInfo", Json()));
   value["extrinsicFile"] = attachment(directory, manifest.value("extrinsic", Json()));
-  if (manifest.contains("pointCloud")) value["pointCloud"] = manifest.at("pointCloud");
   return value;
+}
+
+Json validate(const fs::path& directory) {
+  const auto source = directory / "scene-document.yaml";
+  if (fs::is_symlink(source) || !fs::is_regular_file(source)) throw SceneError("scene-document.yaml is required");
+  const auto raw = read(source, kMaxDocumentBytes);
+  const auto value = parseYaml(raw);
+  if (value.is_object() && value.value("schema", Json()) == "xgc2.scene-source.v1" && value.value("mode", Json()) == "random") {
+    // A random source has no geometry until its generator runs for a Session.
+    // Check the declaration that resolve() checks before it would run it.
+    if (value.value("format", Json()) != "geometry") throw SceneError("Scene source requires explicit geometry format and fixed/random mode");
+    const auto& generator = value.value("generator", Json());
+    const auto command = generator.is_object() ? generator.value("command", Json()) : Json();
+    if (!command.is_array() || command.empty() || std::any_of(command.begin(), command.end(), [](const Json& argument) {
+          return !argument.is_string() || argument.get_ref<const std::string&>().find('\0') != std::string::npos;
+        }))
+      throw SceneError("Scene generator requires an explicit argument vector");
+    const auto params = generator.value("parameters", Json::object());
+    if (!params.is_object() || std::any_of(params.begin(), params.end(), [](const Json& item) { return !finite(item); }))
+      throw SceneError("Generator parameter must be a finite number");
+    return Json{{"valid", true}, {"mode", "random"}};
+  }
+  const auto scene = resolve(source).first.first;
+  (void)compile(scene, directory.string());
+  return Json{{"valid", true}, {"mode", "fixed"}, {"obstacles", scene.at("obstacles").size()}};
 }
 
 }  // namespace xgc_scene

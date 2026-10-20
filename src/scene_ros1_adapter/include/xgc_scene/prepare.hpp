@@ -23,6 +23,11 @@ void atomic(const std::filesystem::path& path, const std::string& data);
 Json prepare(const Json& request);
 Json inputs(const Json& context, const std::filesystem::path& resource_root,
             const std::filesystem::path& workspace_root);
+// Finite write-path check of the sealed document in <directory>/scene-document.yaml:
+// the same document() validation and a dry compile (resources are read from
+// <directory>) that every Session runs in inputs(). Nothing is written and no
+// generator runs. Throws SceneError (or a parser/IO exception) with the reason.
+Json validate(const std::filesystem::path& directory);
 
 }  // namespace xgc_scene
 

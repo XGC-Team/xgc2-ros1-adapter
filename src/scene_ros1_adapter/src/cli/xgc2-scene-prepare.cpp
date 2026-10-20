@@ -43,15 +43,19 @@ int main(int argc, char** argv) {
                                            {"--asset-directory", ""},
                                            {"--socket-path", ""}, {"--target-id", ""},
                                            {"--configuration-revision", ""}};
-  bool prepare_world = false, asset_directory_given = false;
+  bool prepare_world = false, validate = false, asset_directory_given = false;
   for (int i = 1; i < argc; ++i) {
     std::string argument(argv[i]);
     if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: xgc2-scene-prepare --context-json JSON [--resource-root PATH] [--workspace-root PATH]\n"
-                   "       [--prepare-world --asset-directory PATH --socket-path PATH --target-id ID --configuration-revision INTEGER]\n";
+                   "       [--prepare-world --asset-directory PATH --socket-path PATH --target-id ID --configuration-revision INTEGER]\n"
+                   "       xgc2-scene-prepare --validate --asset-directory PATH\n"
+                   "The context's expectedRevisionId, when present, must equal the asset manifest's revisionId.\n"
+                   "--validate parses and dry-compiles PATH/scene-document.yaml; it writes nothing and exits 1 with the reason.\n";
       return 0;
     }
     if (argument == "--prepare-world") { prepare_world = true; continue; }
+    if (argument == "--validate") { validate = true; continue; }
     const auto equals = argument.find('=');
     const auto name = argument.substr(0, equals);
     if ((name != "--context-json" && !options.count(name)) || (equals == std::string::npos && i + 1 == argc)) {
@@ -60,6 +64,19 @@ int main(int argc, char** argv) {
     }
     if (name == "--asset-directory") asset_directory_given = true;
     options[name] = equals == std::string::npos ? argv[++i] : argument.substr(equals + 1);
+  }
+  if (validate) {
+    if (prepare_world || options.count("--context-json") || !asset_directory_given || options.at("--asset-directory").empty()) {
+      std::cerr << "scene_prepare: --validate takes only --asset-directory\n";
+      return 2;
+    }
+    try {
+      std::cout << compact(xgc_scene::validate(options.at("--asset-directory"))) << '\n';
+      return 0;
+    } catch (const std::exception& error) {
+      std::cerr << "scene_prepare: " << error.what() << '\n';
+      return 1;
+    }
   }
   if (!options.count("--context-json")) {
     std::cerr << "scene_prepare: the following arguments are required: --context-json\n";
@@ -128,18 +145,21 @@ int main(int argc, char** argv) {
         if (::mkdir(current.c_str(), 0750) != 0 && (errno != EEXIST || !fs::is_directory(current)))
           throw std::system_error(errno, std::generic_category(), current.string());
       }
-      value = xgc_scene::prepare(Json{{"schema", xgc_scene::kPrepareSchema}, {"configuration_revision", revision},
-                                          {"resource_root", options.at("--resource-root")}, {"asset_directory", options.at("--asset-directory")},
-                                          {"socket_path", options.at("--socket-path")}, {"target_id", options.at("--target-id")},
-                                          {"output_grant", {{"directory", output.string()}, {"max_bytes", 16 * 1024 * 1024}}},
-                                          {"parameters", authored}, {"editable", !locked}, {"run_id", run}});
+      Json request{{"schema", xgc_scene::kPrepareSchema}, {"configuration_revision", revision},
+                   {"resource_root", options.at("--resource-root")}, {"asset_directory", options.at("--asset-directory")},
+                   {"socket_path", options.at("--socket-path")}, {"target_id", options.at("--target-id")},
+                   {"output_grant", {{"directory", output.string()}, {"max_bytes", 16 * 1024 * 1024}}},
+                   {"parameters", authored}, {"editable", !locked}, {"run_id", run}};
+      // The revision the Session froze at open (sceneAsset.revisionId).
+      const auto expected = context.value("expectedRevisionId", Json());
+      if (!expected.is_null()) request["expected_revision_id"] = expected;
+      value = xgc_scene::prepare(request);
       const auto manifest = xgc_scene::parseJson(xgc_scene::read(fs::path(value.at("assetDirectory").get<std::string>()) / "manifest.json", 65536));
       const auto document = manifest.value("sceneDocument", Json());
       value["sceneDocumentFile"] = document.is_object() ? document.value("file", "") : "";
       value["simulator"] = "gazebo";
       value["worldAttachment"] = !manifest.value("gazeboWorld", Json()).empty();
       value["generationParametersJson"] = compact(authored.value("generation", Json::object()));
-      if (manifest.contains("pointCloud")) value["pointCloud"] = manifest.at("pointCloud");
     }
     std::cout << compact(value) << '\n';
   } catch (const std::exception& error) {

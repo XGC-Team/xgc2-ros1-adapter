@@ -35,4 +35,11 @@ sensor_msgs::PointCloud2 fixedPointCloud(const Json& selected) {
   return message;
 }
 
+std::optional<sensor_msgs::PointCloud2> frozenFixedCloud(const Json& session,
+                                                         const std::filesystem::path& asset_directory) {
+  const auto asset = session.find("sceneAsset");
+  if (asset == session.end() || !asset->is_object() || !asset->contains("pointCloud")) return std::nullopt;
+  return fixedPointCloud(Json{{"assetDirectory", asset_directory.string()}, {"pointCloud", asset->at("pointCloud")}});
+}
+
 }  // namespace xgc_scene

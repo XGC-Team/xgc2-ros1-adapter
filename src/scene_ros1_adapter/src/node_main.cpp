@@ -268,13 +268,12 @@ int main(int argc, char** argv) {
         if (session) {
           if (!config.resource_root.is_absolute() || config.compiled_scene_file.empty())
             throw xgc_scene::SceneError("Run scene requires its selected resource root and compiled scene file");
-          // The workflow already selected and compiled this Run's scene. Read
-          // only the fixed-cloud metadata here; repeating inputs() would run
-          // resource compilation (and potentially generation) a second time.
-          const auto manifest = xgc_scene::parseJson(xgc_scene::read(config.resource_root / "manifest.json", 65536));
-          if (manifest.contains("pointCloud")) {
-            fixed_cloud = xgc_scene::fixedPointCloud(xgc_scene::Json{
-                {"assetDirectory", config.resource_root.string()}, {"pointCloud", manifest.at("pointCloud")}});
+          // The workflow already selected and compiled this Run's scene, and the
+          // Session froze the asset's saved cloud (sceneAsset.pointCloud) from
+          // its manifest at open. Neither manifest.json nor inputs() is read
+          // again (inputs() would repeat resource compilation and generation).
+          fixed_cloud = xgc_scene::frozenFixedCloud(session->facts, config.resource_root);
+          if (fixed_cloud) {
             lidar_parameters = xgc_scene::lidar_ros::Parameters::parse(lidar_values, profile, session, true);
             // The canonical reference topic has one owner. A fixed original
             // cloud is never replaced by the geometry fleet's surface sample.
