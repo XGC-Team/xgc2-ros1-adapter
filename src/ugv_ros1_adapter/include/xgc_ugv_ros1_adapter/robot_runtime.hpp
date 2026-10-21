@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -19,6 +20,8 @@
 #include <std_msgs/Float32.h>
 #include <std_msgs/String.h>
 #include <std_msgs/UInt32.h>
+#include <ugv_reset_msgs/ResetResult.h>
+#include <ugv_reset_msgs/ResetSession.h>
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/common/v1/acceleration.pb.h"
@@ -80,6 +83,8 @@ bool unpackChassisState(std::uint32_t word, ChassisState *out);
 // payloads and operations the runtime implements.
 bool validateNativeProfileContract(const UgvVariant &variant,
                                    std::string *error);
+class ResetObservationHarness;
+
 class RobotRuntime : public std::enable_shared_from_this<RobotRuntime> {
 public:
   using EnvelopeEmitter = std::function<void(xgc::robot::v1::RobotMessage)>;
@@ -102,6 +107,8 @@ public:
   void emitPeriodic(const ros::WallTime &now);
 
 private:
+  friend class ResetObservationHarness;
+
   class CallbackGuard {
   public:
     explicit CallbackGuard(RobotRuntime *runtime);
@@ -111,6 +118,34 @@ private:
   private:
     RobotRuntime *runtime_;
     bool active_;
+  };
+
+  struct ResetSessionSlot {
+    bool present = false;
+    std::uint32_t session = 0;
+    std::uint8_t phase = 0;
+    ros::Time source_stamp;
+  };
+
+  struct ResetResultSlot {
+    bool present = false;
+    std::uint32_t session = 0;
+    std::uint32_t outcome = 0;
+    std::uint32_t reason = 0;
+    double final_planar_error_m = 0.0;
+    double final_yaw_error_rad = 0.0;
+    double duration_s = 0.0;
+    std::string detail;
+    ros::Time source_stamp;
+  };
+
+  struct ResetTuple {
+    bool valid = false;
+    std::uint32_t generation = 0;
+    int phase = 0;
+    bool matched = false;
+    int outcome = 0;
+    int reason = 0;
   };
 
   struct SourceTracker {
@@ -139,6 +174,8 @@ private:
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint, std::string chassis_state_endpoint,
                std::string controller_status_endpoint,
+               std::string reset_session_endpoint,
+               std::string reset_result_endpoint,
                xgc2_ros1_robot_adapter::PositioningHealthConfig positioning_config,
                std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve,
                EnvelopeEmitter emitter);
@@ -173,6 +210,18 @@ private:
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);
   void chassisStateCallback(const std_msgs::UInt32::ConstPtr &message);
   void controllerStatusCallback(const std_msgs::String::ConstPtr &message);
+  void resetSessionCallback(
+      const ugv_reset_msgs::ResetSession::ConstPtr &message);
+  void resetResultCallback(
+      const ugv_reset_msgs::ResetResult::ConstPtr &message);
+  void noteResetSessionLocked(const ugv_reset_msgs::ResetSession &message,
+                              const ros::WallTime &now,
+                              std::vector<xgc::robot::v1::RobotMessage> *output);
+  void noteResetResultLocked(const ugv_reset_msgs::ResetResult &message,
+                             const ros::WallTime &now,
+                             std::vector<xgc::robot::v1::RobotMessage> *output);
+  void publishResetLocked(const ros::WallTime &now,
+                          std::vector<xgc::robot::v1::RobotMessage> *output);
   void emitHealthLocked(const ros::WallTime &now,
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitStreamHealthLocked(const ros::WallTime &now,
@@ -200,6 +249,8 @@ private:
   const std::string voltage_endpoint_;
   const std::string chassis_state_endpoint_;
   const std::string controller_status_endpoint_;
+  const std::string reset_session_endpoint_;
+  const std::string reset_result_endpoint_;
   const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
@@ -219,6 +270,11 @@ private:
   bool has_chassis_ = false;
   geometry_msgs::Quaternion vrpn_orientation_;
   bool has_vrpn_orientation_ = false;
+  ResetSessionSlot reset_session_;
+  // Oldest result receipt is [0]. A non-zero current session protects its
+  // equal slot; the other slot holds one unmatched candidate.
+  std::array<ResetResultSlot, 2> reset_results_{};
+  ResetTuple last_reset_tuple_;
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber vrpn_velocity_subscriber_;
@@ -228,6 +284,8 @@ private:
   ros::Subscriber voltage_subscriber_;
   ros::Subscriber chassis_state_subscriber_;
   ros::Subscriber controller_status_subscriber_;
+  ros::Subscriber reset_session_subscriber_;
+  ros::Subscriber reset_result_subscriber_;
   ros::Publisher canonical_pose_publisher_;
   ros::Publisher canonical_velocity_publisher_;
   ros::Publisher canonical_acceleration_publisher_;

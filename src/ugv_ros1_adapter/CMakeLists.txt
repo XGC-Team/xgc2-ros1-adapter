@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   std_msgs
+  ugv_reset_msgs
   xgc_ros1_adapter_common
 )
 find_package(Protobuf REQUIRED)
@@ -43,7 +44,7 @@ xgc2_add_robot_profiles(
 )
 
 catkin_package(
-  CATKIN_DEPENDS roscpp xgc_ros1_adapter_common
+  CATKIN_DEPENDS roscpp ugv_reset_msgs xgc_ros1_adapter_common
 )
 
 include_directories(
@@ -86,5 +87,12 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(${PROJECT_NAME}_motion_command_test test/motion_command_test.cpp)
   if(TARGET ${PROJECT_NAME}_motion_command_test)
     target_link_libraries(${PROJECT_NAME}_motion_command_test ${PROJECT_NAME}_runtime)
+  endif()
+  find_package(rostest REQUIRED)
+  add_rostest_gtest(${PROJECT_NAME}_reset_observation_test
+    test/reset_observation.test
+    test/reset_observation_test.cpp)
+  if(TARGET ${PROJECT_NAME}_reset_observation_test)
+    target_link_libraries(${PROJECT_NAME}_reset_observation_test ${PROJECT_NAME}_runtime)
   endif()
 endif()

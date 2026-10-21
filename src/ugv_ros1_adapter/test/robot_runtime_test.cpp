@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
-#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include <ros/ros.h>
 #include "xgc_ugv_ros1_adapter/motion_command.hpp"
 #include "xgc_ugv_ros1_adapter/robot_runtime.hpp"
 #include "xgc_ugv_ros1_adapter/variant.hpp"
@@ -602,6 +604,31 @@ TEST_P(EveryUgv, StreamsPositionVelocityAccelerationAndSpeedFromTheMocapSource) 
   EXPECT_DOUBLE_EQ(5.0, controller.output_rate_hz);
   EXPECT_EQ(std::string(variant().processor_prefix) + ".controller-status",
             std::string(controller.processor));
+
+  contract::ChannelMetadata reset;
+  ASSERT_TRUE(variant().contract.channelMetadata(profile, "state.reset", &reset));
+  EXPECT_EQ(3105u, reset.output_message_id);
+  EXPECT_DOUBLE_EQ(5.0, reset.output_rate_hz);
+  EXPECT_EQ(2000u, reset.stale_after_millis);
+  EXPECT_EQ(std::string(variant().processor_prefix) + ".reset-status",
+            std::string(reset.processor));
+  EXPECT_EQ(2u, reset.endpoint_count);
+  const auto *session = contract::channelEndpoint(
+      reset, contract::EndpointKind::kInput, "session");
+  const auto *result = contract::channelEndpoint(
+      reset, contract::EndpointKind::kInput, "result");
+  ASSERT_NE(nullptr, session);
+  ASSERT_NE(nullptr, result);
+  EXPECT_EQ("reset/session", std::string(session->name_template));
+  EXPECT_EQ("ugv_reset_msgs/ResetSession", std::string(session->ros_type));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, session->scope);
+  EXPECT_EQ("reset/result", std::string(result->name_template));
+  EXPECT_EQ("ugv_reset_msgs/ResetResult", std::string(result->ros_type));
+  EXPECT_EQ(contract::EndpointScope::kRobotNamespace, result->scope);
+  contract::MessageMetadata reset_message{};
+  ASSERT_TRUE(variant().contract.messageMetadata(3105u, &reset_message));
+  EXPECT_EQ("xgc.semantic.ground.v1.ResetStatus",
+            std::string(reset_message.type_name));
 }
 
 TEST(InstalledProfile, ScoutReportsHealthAndChassisFromTheChassisStateWord) {
@@ -620,14 +647,14 @@ TEST(InstalledProfile, ScoutReportsHealthAndChassisFromTheChassisStateWord) {
   EXPECT_EQ(3102u, chassis.output_message_id);
   std::size_t channel_count = 0u;
   scoutMini().contract.profileChannels(profile, &channel_count);
-  EXPECT_EQ(13u, channel_count);
+  EXPECT_EQ(14u, channel_count);
 }
 
 TEST(InstalledProfile, MecanumIsTheMinimalContractAtTenHertzWithoutChassisState) {
   const std::string profile = physicalProfile(mecanumUgv());
   std::size_t channel_count = 0u;
   ASSERT_NE(nullptr, mecanumUgv().contract.profileChannels(profile, &channel_count));
-  ASSERT_EQ(12u, channel_count);
+  ASSERT_EQ(13u, channel_count);
   for (const char *channel_id :
        {"vrpn.position", "vrpn.velocity", "vrpn.acceleration", "vrpn.speed",
         "command.velocity", "diagnostic.stream-health"}) {

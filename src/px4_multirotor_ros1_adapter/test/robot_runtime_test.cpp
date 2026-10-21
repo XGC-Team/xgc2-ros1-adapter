@@ -348,7 +348,7 @@ TEST(InstalledProfile, ContainsExactSemanticMessageMetadata) {
 }
 
 TEST(InstalledContract, PinsTheRegistryItWasGeneratedFrom) {
-  EXPECT_EQ(6362961126724301134ULL, InstalledContract().registryFingerprint());
+  EXPECT_EQ(13142820175755956498ULL, InstalledContract().registryFingerprint());
   EXPECT_EQ(std::string("xgc2-px4-multirotor-ros1-adapter"),
             InstalledContract().providerDefinitionId());
 }

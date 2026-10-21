@@ -347,7 +347,7 @@ package_type_server \
 package_type_server \
   "${UGV_PACKAGE}" \
   "${UGV_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-xgc2-ugv-reset-msgs (>= 2.0.0-1)" \
   "XGC2 Scout Mini and Mecanum UGV ROS1 type servers" \
   "Run-owned type servers for Scout Mini and Mecanum UGVs: VRPN acceleration telemetry, discrete motion control, and channel-diagnostic capabilities." \
   "xgc2-scout-mini-ros1-adapter" \

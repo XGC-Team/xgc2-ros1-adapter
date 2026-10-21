@@ -13,6 +13,7 @@
 
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
+#include "xgc/semantic/ground/v1/reset.pb.h"
 
 namespace xgc_ugv_ros1_adapter {
 namespace {
@@ -127,6 +128,9 @@ std::vector<NativeChannelBinding> nativeBindings(const UgvVariant &variant) {
   bindings.push_back({"state.controller", prefix + ".controller-status",
                       "status", "std_msgs/String",
                       "xgc.semantic.common.v1.ControllerStatus", false});
+  bindings.push_back({"state.reset", prefix + ".reset-status", "session",
+                      "ugv_reset_msgs/ResetSession",
+                      "xgc.semantic.ground.v1.ResetStatus", false});
   bindings.push_back({"diagnostic.stream-health", "common.stream-health-report",
                       nullptr, nullptr,
                       "xgc.semantic.common.v1.StreamHealthReport", true});
@@ -576,7 +580,9 @@ bool validateNativeProfileContract(const UgvVariant &variant,
       const bool localization_projection = channel_id == "vrpn.position" ||
                                            channel_id == "vrpn.velocity" ||
                                            channel_id == "vrpn.acceleration";
-      if (channel.endpoint_count != (fused_speed ? 2u : localization_projection ? 2u : 1u) ||
+      const bool reset_observation = channel_id == "state.reset";
+      if (channel.endpoint_count !=
+              ((fused_speed || localization_projection || reset_observation) ? 2u : 1u) ||
           channel.observes_count != (positioning_health ? 3u : 0u)) {
         return fail(error, name + " endpoint binding drifted: " +
                                binding.channel_id);
@@ -608,6 +614,18 @@ bool validateNativeProfileContract(const UgvVariant &variant,
                 "geometry_msgs/PoseStamped" ||
             std::string(pose_endpoint->name_template).empty()) {
           return fail(error, name + " VRPN speed pose binding drifted");
+        }
+      }
+      if (reset_observation) {
+        const auto *result_endpoint = contract::channelEndpoint(
+            channel, contract::EndpointKind::kInput, "result");
+        if (result_endpoint == nullptr ||
+            std::string(result_endpoint->ros_type) != "ugv_reset_msgs/ResetResult" ||
+            std::string(result_endpoint->name_template) != "reset/result" ||
+            result_endpoint->scope != contract::EndpointScope::kRobotNamespace ||
+            endpoint->scope != contract::EndpointScope::kRobotNamespace ||
+            std::string(endpoint->name_template) != "reset/session") {
+          return fail(error, name + " reset observation binding drifted");
         }
       }
     }
@@ -783,6 +801,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
   std::string health_endpoint;
   std::string chassis_endpoint;
   std::string controller_status_endpoint;
+  std::string reset_session_endpoint;
+  std::string reset_result_endpoint;
   if (!resolveInputEndpoint(installed, config, "vrpn.position", "pose",
                             &pose_endpoint, error) ||
       !resolveInputEndpoint(installed, config, "vrpn.velocity", "velocity",
@@ -811,7 +831,11 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
         !resolveInputEndpoint(installed, config, "state.chassis", "chassis_state",
                               &chassis_endpoint, error))) ||
       !resolveInputEndpoint(installed, config, "state.controller", "status",
-                            &controller_status_endpoint, error)) {
+                            &controller_status_endpoint, error) ||
+      !resolveInputEndpoint(installed, config, "state.reset", "session",
+                            &reset_session_endpoint, error) ||
+      !resolveInputEndpoint(installed, config, "state.reset", "result",
+                            &reset_result_endpoint, error)) {
     return nullptr;
   }
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
@@ -866,6 +890,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(imu_endpoint),
                        std::move(voltage_endpoint), std::move(chassis_endpoint),
                        std::move(controller_status_endpoint),
+                       std::move(reset_session_endpoint),
+                       std::move(reset_result_endpoint),
                        positioning_config, std::move(battery_curve),
                        std::move(emitter)));
   try {
@@ -881,7 +907,8 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
 }
 
 RobotRuntime::RobotRuntime(const UgvVariant &variant,
-                           ros::NodeHandle node_handle, std::string robot_id,
+                           ros::NodeHandle node_handle,
+                           std::string robot_id,
                            std::string profile_id, std::string robot_namespace,
                            std::set<std::string> enabled_channels,
                            std::set<std::string> required_channels,
@@ -898,6 +925,8 @@ RobotRuntime::RobotRuntime(const UgvVariant &variant,
                            std::string voltage_endpoint,
                            std::string chassis_state_endpoint,
                            std::string controller_status_endpoint,
+                           std::string reset_session_endpoint,
+                           std::string reset_result_endpoint,
                            xgc2_ros1_robot_adapter::PositioningHealthConfig
                                positioning_config,
                            std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint>
@@ -922,6 +951,8 @@ RobotRuntime::RobotRuntime(const UgvVariant &variant,
       voltage_endpoint_(std::move(voltage_endpoint)),
       chassis_state_endpoint_(std::move(chassis_state_endpoint)),
       controller_status_endpoint_(std::move(controller_status_endpoint)),
+      reset_session_endpoint_(std::move(reset_session_endpoint)),
+      reset_result_endpoint_(std::move(reset_result_endpoint)),
       localization_(std::move(localization)),
       positioning_health_(positioning_config),
       battery_curve_(std::move(battery_curve)) {}
@@ -970,6 +1001,8 @@ void RobotRuntime::Stop() {
   voltage_subscriber_.shutdown();
   chassis_state_subscriber_.shutdown();
   controller_status_subscriber_.shutdown();
+  reset_session_subscriber_.shutdown();
+  reset_result_subscriber_.shutdown();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1147,6 +1180,34 @@ bool RobotRuntime::install(std::string *error) {
           }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
       if (!requireRosRegistration(controller_status_subscriber_,
                                     controller_status_endpoint_, error))
+        return false;
+    }
+    if (required_channels_.count("state.reset") != 0u) {
+      ensureSourceLocked(
+          "state.reset",
+          channelStaleAfterSeconds(variant_.contract, profile_id_, "state.reset"));
+      reset_session_subscriber_ =
+          node_handle_.subscribe<ugv_reset_msgs::ResetSession>(
+              reset_session_endpoint_, 10,
+              [weak_self](const ugv_reset_msgs::ResetSession::ConstPtr &message) {
+                if (const auto self = weak_self.lock()) {
+                  self->resetSessionCallback(message);
+                }
+              },
+              ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+      reset_result_subscriber_ =
+          node_handle_.subscribe<ugv_reset_msgs::ResetResult>(
+              reset_result_endpoint_, 10,
+              [weak_self](const ugv_reset_msgs::ResetResult::ConstPtr &message) {
+                if (const auto self = weak_self.lock()) {
+                  self->resetResultCallback(message);
+                }
+              },
+              ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+      if (!requireRosRegistration(reset_session_subscriber_,
+                                  reset_session_endpoint_, error) ||
+          !requireRosRegistration(reset_result_subscriber_,
+                                  reset_result_endpoint_, error))
         return false;
     }
   }
@@ -1515,6 +1576,198 @@ void RobotRuntime::chassisStateCallback(
     }
   }
   emit(std::move(output));
+}
+
+namespace {
+
+xgc::semantic::ground::v1::ResetPhase resetPhase(std::uint8_t native_phase) {
+  switch (native_phase) {
+  case 0:
+    return xgc::semantic::ground::v1::RESET_PHASE_IDLE;
+  case 1:
+    return xgc::semantic::ground::v1::RESET_PHASE_REQUESTING;
+  case 2:
+    return xgc::semantic::ground::v1::RESET_PHASE_WAITING;
+  case 3:
+    return xgc::semantic::ground::v1::RESET_PHASE_MOVING;
+  case 4:
+    return xgc::semantic::ground::v1::RESET_PHASE_SETTLING;
+  case 5:
+    return xgc::semantic::ground::v1::RESET_PHASE_DONE;
+  default:
+    return xgc::semantic::ground::v1::RESET_PHASE_UNSPECIFIED;
+  }
+}
+
+xgc::semantic::ground::v1::ResetOutcome resetOutcome(std::uint32_t native_outcome) {
+  return static_cast<xgc::semantic::ground::v1::ResetOutcome>(native_outcome);
+}
+
+xgc::semantic::ground::v1::ResetReason resetReason(std::uint32_t native_reason) {
+  return static_cast<xgc::semantic::ground::v1::ResetReason>(native_reason);
+}
+
+} // namespace
+
+void RobotRuntime::resetSessionCallback(
+    const ugv_reset_msgs::ResetSession::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback || !message)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    noteResetSessionLocked(*message, ros::WallTime::now(), &output);
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::resetResultCallback(
+    const ugv_reset_msgs::ResetResult::ConstPtr &message) {
+  CallbackGuard callback(this);
+  if (!callback || !message)
+    return;
+  std::vector<xgc::robot::v1::RobotMessage> output;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    noteResetResultLocked(*message, ros::WallTime::now(), &output);
+  }
+  emit(std::move(output));
+}
+
+void RobotRuntime::noteResetSessionLocked(
+    const ugv_reset_msgs::ResetSession &message, const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *output) {
+  recordSourceLocked("state.reset", now);
+  reset_session_.present = true;
+  reset_session_.session = message.session;
+  reset_session_.phase = message.phase;
+  reset_session_.source_stamp = message.header.stamp;
+  publishResetLocked(now, output);
+}
+
+void RobotRuntime::noteResetResultLocked(
+    const ugv_reset_msgs::ResetResult &message, const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *output) {
+  if (message.session == 0u || message.outcome == 0u)
+    return;
+  auto fill = [&](ResetResultSlot *slot) {
+    slot->present = true;
+    slot->session = message.session;
+    slot->outcome = message.outcome;
+    slot->reason = message.reason;
+    slot->final_planar_error_m = message.final_planar_error;
+    slot->final_yaw_error_rad = message.final_yaw_error;
+    slot->duration_s = message.duration;
+    slot->detail = message.detail;
+    slot->source_stamp = message.header.stamp;
+  };
+  // [0] is the earlier receipt. A new or updated result becomes [1].
+  auto note_newest = [&](int index) {
+    if (index == 0)
+      std::swap(reset_results_[0], reset_results_[1]);
+  };
+  int found = -1;
+  for (int index = 0; index < 2; ++index) {
+    if (reset_results_[static_cast<std::size_t>(index)].present &&
+        reset_results_[static_cast<std::size_t>(index)].session == message.session) {
+      found = index;
+      break;
+    }
+  }
+  if (found >= 0) {
+    fill(&reset_results_[static_cast<std::size_t>(found)]);
+    note_newest(found);
+  } else {
+    int dest = -1;
+    for (int index = 0; index < 2; ++index) {
+      if (!reset_results_[static_cast<std::size_t>(index)].present) {
+        dest = index;
+        break;
+      }
+    }
+    if (dest < 0) {
+      const std::uint32_t current =
+          reset_session_.present ? reset_session_.session : 0u;
+      for (int index = 0; index < 2; ++index) {
+        const ResetResultSlot &slot = reset_results_[static_cast<std::size_t>(index)];
+        const bool protected_match =
+            current != 0u && slot.present && slot.session == current;
+        if (!protected_match) {
+          dest = index;
+          break;
+        }
+      }
+    }
+    if (dest >= 0) {
+      fill(&reset_results_[static_cast<std::size_t>(dest)]);
+      note_newest(dest);
+    }
+  }
+  publishResetLocked(now, output);
+}
+
+void RobotRuntime::publishResetLocked(
+    const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *output) {
+  static const std::string channel = "state.reset";
+  if (!reset_session_.present || !channelEnabled(channel) ||
+      !sourceFreshLocked(channel, now))
+    return;
+  const ResetResultSlot *matched_slot = nullptr;
+  if (reset_session_.session != 0u) {
+    for (const ResetResultSlot &slot : reset_results_) {
+      if (slot.present && slot.outcome != 0u &&
+          slot.session == reset_session_.session) {
+        matched_slot = &slot;
+        break;
+      }
+    }
+  }
+  const bool matched = matched_slot != nullptr;
+  const xgc::semantic::ground::v1::ResetPhase phase =
+      resetPhase(reset_session_.phase);
+  ResetTuple tuple;
+  tuple.valid = true;
+  tuple.generation = reset_session_.session;
+  tuple.phase = static_cast<int>(phase);
+  tuple.matched = matched;
+  tuple.outcome = matched ? static_cast<int>(matched_slot->outcome) : 0;
+  tuple.reason = matched ? static_cast<int>(matched_slot->reason) : 0;
+  const bool discrete =
+      !last_reset_tuple_.valid ||
+      last_reset_tuple_.generation != tuple.generation ||
+      last_reset_tuple_.phase != tuple.phase ||
+      last_reset_tuple_.matched != tuple.matched ||
+      last_reset_tuple_.outcome != tuple.outcome ||
+      last_reset_tuple_.reason != tuple.reason;
+  if (!discrete) {
+    if (!shouldEmitLocked(channel, now)) {
+      ++sources_[channel].dropped_samples;
+      return;
+    }
+  } else {
+    last_output_[channel] = now;
+  }
+  xgc::semantic::ground::v1::ResetStatus payload;
+  payload.set_generation(reset_session_.session);
+  payload.set_phase(phase);
+  if (matched) {
+    auto *result = payload.mutable_result();
+    result->set_outcome(resetOutcome(matched_slot->outcome));
+    result->set_reason(resetReason(matched_slot->reason));
+    result->set_final_planar_error_m(matched_slot->final_planar_error_m);
+    result->set_final_yaw_error_rad(matched_slot->final_yaw_error_rad);
+    result->set_duration_s(matched_slot->duration_s);
+    result->set_detail(matched_slot->detail);
+    result->set_source_stamp_ns(matched_slot->source_stamp.isZero()
+                                    ? 0
+                                    : static_cast<std::int64_t>(
+                                          matched_slot->source_stamp.toNSec()));
+  }
+  output->push_back(makeEnvelopeLocked(channel, reset_session_.source_stamp, payload));
+  recordOutputLocked(channel);
+  last_reset_tuple_ = tuple;
 }
 
 void RobotRuntime::controllerStatusCallback(

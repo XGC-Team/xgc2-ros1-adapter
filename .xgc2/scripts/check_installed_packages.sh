@@ -60,6 +60,7 @@ if grep -Eq 'mavros-msgs|scout-msgs' <<<"${ugv_depends}"; then
   echo "UGV adapter package must not depend on MAVROS or Scout messages" >&2
   exit 1
 fi
+grep -Fq "ros-${ROS_DISTRO}-xgc2-ugv-reset-msgs (>= 2.0.0-1)" <<<"${ugv_depends}"
 if grep -q 'scout-msgs' <<<"${px4_depends}"; then
   echo "PX4 adapter package must not depend on Scout messages" >&2
   exit 1

@@ -47,6 +47,7 @@ set(protocol_files
   xgc/semantic/ground/v1/chassis.proto
   xgc/semantic/ground/v1/control.proto
   xgc/semantic/ground/v1/locomotion.proto
+  xgc/semantic/ground/v1/reset.proto
 )
 set(proto_dir "${CMAKE_CURRENT_BINARY_DIR}/proto")
 set(protocol_inputs)

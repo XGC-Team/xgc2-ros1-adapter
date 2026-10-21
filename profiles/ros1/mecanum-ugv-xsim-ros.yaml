@@ -51,6 +51,7 @@ semantic_traits:
     state.power: 5000
     state.health: 2000
     state.controller: 2000
+    state.reset: 2000
   online_conditions:
   - channel_id: state.imu
     maximum_age_ms: 1000
@@ -143,6 +144,18 @@ channels:
     status:
       name: custom/statustext
       type: std_msgs/String
+- id: state.reset
+  kind: stream_out
+  output_message_id: 3105
+  processor: mecanum-ugv.reset-status
+  output_rate_hz: 5
+  inputs:
+    session:
+      name: reset/session
+      type: ugv_reset_msgs/ResetSession
+    result:
+      name: reset/result
+      type: ugv_reset_msgs/ResetResult
 - id: operation.motion-intent
   kind: operation
   operation_id: set-motion-intent
@@ -191,3 +204,4 @@ channels:
   - command.velocity
   - state.power
   - state.controller
+  - state.reset

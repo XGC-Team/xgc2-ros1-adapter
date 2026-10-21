@@ -1,0 +1,4 @@
+<launch>
+  <test test-name="reset_observation" pkg="xgc_ugv_ros1_adapter"
+        type="xgc_ugv_ros1_adapter_reset_observation_test" time-limit="60.0" />
+</launch>
