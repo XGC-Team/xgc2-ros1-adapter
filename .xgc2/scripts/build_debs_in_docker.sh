@@ -291,12 +291,8 @@ docker exec "${container_name}" bash -lc '
     source /opt/ros/noetic/setup.bash
     set -u
     parallel_jobs="${BUILD_JOBS:-2}"
-    DESTDIR=/tmp/work/install-root catkin_make -j"${parallel_jobs}" -l"${parallel_jobs}" install \
-      -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic \
-      -DCMAKE_PREFIX_PATH="/opt/ros/noetic" \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" \
-      -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
+    /tmp/ros1-adapter/.xgc2/scripts/build_source.sh --workspace \
+      /tmp/work /tmp/work/install-root /opt/ros/noetic
 
     python3 -m unittest discover -s /tmp/ros1-adapter/src/ros1_tools_adapter/test -p "test_*.py"
     python3 -m unittest discover -s /tmp/ros1-adapter/src/common/test -p "test_asset_projection.py"

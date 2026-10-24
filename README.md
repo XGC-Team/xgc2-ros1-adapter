@@ -87,3 +87,16 @@ Debian packages: `ros-noetic-xgc2-ros1-adapter-common` (the shared libraries),
 `ros-noetic-xgc2-px4-multirotor-adapter`, `ros-noetic-xgc2-ugv-adapter`,
 `ros-noetic-xgc2-ros1-tools-adapter` and `ros-noetic-xgc2-scene-adapter`. The first is a
 dependency of the type server packages. The product version is `0.7.0-1`.
+
+### Prepared source builds
+
+`.xgc2/scripts/build_source.sh BUILD_DIR INSTALL_ROOT ROS_PREFIX common|px4|ugv`
+builds and stages one robot server package using already-prepared source
+libraries, generated protocol metadata and the selected ROS environment. Install
+the common package before its type server. This entry does not fetch APT
+products, operate Docker or publish packages.
+
+The CI Docker wrapper resolves its release dependencies and calls the same
+source entry with `--workspace WORKSPACE INSTALL_ROOT ROS_PREFIX` for the full
+package workspace, then runs tests and Debian packaging. Dependency preparation,
+source compilation, packaging and runtime startup remain distinct operations.
