@@ -288,7 +288,7 @@ def validate_portable_parameter_pattern(pattern, label):
     """
     if not isinstance(pattern, str) or not 3 <= len(pattern) <= MAX_PARAMETER_PATTERN_LENGTH:
         raise ValueError("{} must be a 3..{} character string".format(label, MAX_PARAMETER_PATTERN_LENGTH))
-    if not pattern.isascii() or not pattern.startswith("^") or not pattern.endswith("$"):
+    if not all(ord(character) < 128 for character in pattern) or not pattern.startswith("^") or not pattern.endswith("$"):
         raise ValueError("{} must be an anchored ASCII portable regex".format(label))
     body = pattern[1:-1]
     if not body:
@@ -312,7 +312,7 @@ def validate_portable_parameter_pattern(pattern, label):
                         raise ValueError("{} contains an ambiguous literal hyphen".format(label))
                     class_index += 1
                     continue
-                if not (item.isascii() and (item.isalnum() or item == "_")):
+                if not (ord(item) < 128 and (item.isalnum() or item == "_")):
                     raise ValueError("{} contains a non-portable character class atom".format(label))
                 if class_index + 1 < len(content) and content[class_index + 1] == "-":
                     if class_index + 2 >= len(content):
@@ -325,7 +325,7 @@ def validate_portable_parameter_pattern(pattern, label):
                         or item.isupper() and end.isupper()
                     )
                     if (
-                        not (end.isascii() and end.isalnum())
+                        not (ord(end) < 128 and end.isalnum())
                         or not same_range
                         or ord(item) > ord(end)
                     ):
@@ -334,7 +334,7 @@ def validate_portable_parameter_pattern(pattern, label):
                     continue
                 class_index += 1
             index = close + 1
-        elif character.isascii() and (character.isalnum() or character in "_/-"):
+        elif ord(character) < 128 and (character.isalnum() or character in "_/-"):
             index += 1
         else:
             raise ValueError("{} contains a non-portable regex construct".format(label))

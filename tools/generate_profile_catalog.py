@@ -8,12 +8,10 @@ files and registry as the contract tables compiled into the type server, so
 the two cannot disagree.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from generate_contract_metadata import (
     catalog_profile_body,
@@ -27,10 +25,10 @@ CATALOG_SCHEMA = "xgc.robot.adapter-profile-catalog/v4"
 
 def build_catalog(
     registry: Path,
-    profile_files: list[str],
+    profile_files: List[str],
     profile_schema: Path,
     definition_id: str,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     _, messages = load_registry(registry)
     profiles = load_profiles(profile_files, profile_schema, messages)
     installed = []
@@ -41,7 +39,7 @@ def build_catalog(
     return {"schema": CATALOG_SCHEMA, "profiles": installed}
 
 
-def require_one_operation_contract(profiles: list[dict[str, Any]]) -> None:
+def require_one_operation_contract(profiles: List[Dict[str, Any]]) -> None:
     """All profiles of a robot type offer the same operations.
 
     A robot's operations are the type server's, not the profile's: the profile

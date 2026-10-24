@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Check that an installed profile catalog is exactly what its profiles produce."""
 
-from __future__ import annotations
-
 import argparse
 import json
 from pathlib import Path

@@ -18,7 +18,7 @@ get_filename_component(XGC2_ROBOT_PROFILE_ROOT
 function(xgc2_add_robot_profiles)
   cmake_parse_arguments(PROFILE "" "TARGET;DEFINITION_ID;NAMESPACE;HEADER"
                         "PROFILES" ${ARGN})
-  find_package(PythonInterp 3 REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   if(NOT EXISTS "${XGC2_PROTOBUF_REGISTRY_JSON}")
     message(FATAL_ERROR "xgc2-protobuf-dev did not expose the XGC2 message registry")
   endif()
@@ -36,13 +36,13 @@ function(xgc2_add_robot_profiles)
   add_custom_command(
     OUTPUT "${PROFILE_HEADER}" "${catalog}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${header_directory}"
-    COMMAND "${PYTHON_EXECUTABLE}" "${XGC2_ROBOT_TOOLS_DIR}/generate_contract_metadata.py"
+    COMMAND "${Python3_EXECUTABLE}" "${XGC2_ROBOT_TOOLS_DIR}/generate_contract_metadata.py"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}" ${profile_args}
             --profile-schema "${schema}"
             --definition-id "${PROFILE_DEFINITION_ID}"
             --cpp-namespace "${PROFILE_NAMESPACE}"
             --output "${PROFILE_HEADER}"
-    COMMAND "${PYTHON_EXECUTABLE}" "${XGC2_ROBOT_TOOLS_DIR}/generate_profile_catalog.py"
+    COMMAND "${Python3_EXECUTABLE}" "${XGC2_ROBOT_TOOLS_DIR}/generate_profile_catalog.py"
             --registry "${XGC2_PROTOBUF_REGISTRY_JSON}" ${profile_args}
             --profile-schema "${schema}"
             --definition-id "${PROFILE_DEFINITION_ID}"
