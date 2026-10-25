@@ -334,8 +334,12 @@ package_scene() {
     "${OUTPUT_DIR}/${SCENE_PACKAGE}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 
+# Local development may package only the built robot type. CI defaults to all.
+selection="${XGC2_ADAPTER_PACKAGE_SELECTION:-all}"
+case "$selection" in all|px4|ugv) ;; *) echo 'select all, px4 or ugv' >&2; exit 2;; esac
 package_common
 
+if [[ "$selection" == all || "$selection" == px4 ]]; then
 package_type_server \
   "${PX4_PACKAGE}" \
   "${PX4_ROS_PACKAGE}" \
@@ -344,6 +348,8 @@ package_type_server \
   "Run-owned type server for PX4 multirotors: telemetry, diagnostics, and native command capabilities." \
   "xgc2-px4-multirotor-ros1-adapter"
 
+fi
+if [[ "$selection" == all || "$selection" == ugv ]]; then
 package_type_server \
   "${UGV_PACKAGE}" \
   "${UGV_ROS_PACKAGE}" \
@@ -353,8 +359,11 @@ package_type_server \
   "xgc2-scout-mini-ros1-adapter" \
   "xgc2-mecanum-ugv-ros1-adapter"
 
+fi
+if [[ "$selection" == all ]]; then
 package_tools
 package_scene
+fi
 
 find "${OUTPUT_DIR}" -maxdepth 1 -type f \
   \( -name "${COMMON_PACKAGE}_*.deb" -o -name "${PX4_PACKAGE}_*.deb" \
