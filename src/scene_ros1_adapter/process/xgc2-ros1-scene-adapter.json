@@ -163,7 +163,10 @@
       },
       "stop": {
         "graceMs": 5000
-      }
+      },
+      "setupFiles": [
+        "/opt/ros/noetic/setup.bash"
+      ]
     }
   ]
 }

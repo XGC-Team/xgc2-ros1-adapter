@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.8.0-6
+version: 0.8.0-7
 kind: ros1-apt
 summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and scene authoring.
 groups:

@@ -46,6 +46,11 @@ def load(path):
 
 
 class ProcessDefinitionTest(unittest.TestCase):
+    def test_ros_environment_does_not_depend_on_agent_login_shell(self):
+        for path in DEFINITION_FILES:
+            with self.subTest(definition=path.stem):
+                self.assertEqual(load(path)["setupFiles"], ["/opt/ros/noetic/setup.bash"])
+
     def test_every_adapter_ships_its_definitions(self):
         names = {path.stem for path in DEFINITION_FILES}
         self.assertEqual(

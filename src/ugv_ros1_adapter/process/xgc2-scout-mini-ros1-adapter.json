@@ -85,7 +85,10 @@
       "stop": {
         "graceMs": 25000,
         "rpc": "Shutdown"
-      }
+      },
+      "setupFiles": [
+        "/opt/ros/noetic/setup.bash"
+      ]
     }
   ]
 }
