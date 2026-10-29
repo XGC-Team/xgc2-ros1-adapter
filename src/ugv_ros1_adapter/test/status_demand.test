@@ -1,0 +1,4 @@
+<launch>
+  <test test-name="ugv_status_demand" pkg="xgc_ugv_ros1_adapter"
+        type="xgc_ugv_ros1_adapter_status_demand_test" time-limit="60.0" />
+</launch>

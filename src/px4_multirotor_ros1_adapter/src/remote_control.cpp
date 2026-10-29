@@ -115,9 +115,12 @@ bool RemoteControlPublisher::Release(std::string *error) {
   target_.velocity.x = 0.0;
   target_.velocity.y = 0.0;
   target_.yaw_rate = 0.0;
+  // A controller retirement can admit a successor only after the native
+  // release was actually submitted. Preserve an active owner on failure so
+  // an exact retirement retry can attempt the same release again.
+  if (!publishLocked(error))
+    return false;
   active_ = false;
-  if (error != nullptr)
-    error->clear();
   return true;
 }
 

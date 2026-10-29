@@ -42,6 +42,39 @@ TEST(RemoteControlPublisher, ZeroIntentHoldsAltitudeForOffboard) {
   EXPECT_DOUBLE_EQ(0.0, published.back().velocity.x);
 
   ASSERT_TRUE(publisher.Release(&error)) << error;
+  ASSERT_EQ(3u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().velocity.x);
+  publisher.PublishPeriodic();
+  EXPECT_EQ(3u, published.size());
+}
+
+TEST(RemoteControlPublisher, ReleaseSubmitsZeroAndReportsPublicationFailure) {
+  ros::Time::init();
+  bool fail_publish = false;
+  std::vector<mavros_msgs::PositionTarget> published;
+  RemoteControlPublisher publisher(
+      [&](const mavros_msgs::PositionTarget &target) {
+        if (fail_publish) throw std::runtime_error("transport down");
+        published.push_back(target);
+      },
+      1.0, 1.5, 0.9);
+  std::string error;
+  ASSERT_TRUE(publisher.SetIntent(3, 1, -1, 1, &error)) << error;
+  ASSERT_EQ(1u, published.size());
+  EXPECT_DOUBLE_EQ(1.5, published.back().velocity.x);
+
+  fail_publish = true;
+  EXPECT_FALSE(publisher.Release(&error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(1u, published.size());
+
+  fail_publish = false;
+  ASSERT_TRUE(publisher.Release(&error)) << error;
+  ASSERT_EQ(2u, published.size());
+  EXPECT_DOUBLE_EQ(0.0, published.back().velocity.x);
+  EXPECT_DOUBLE_EQ(0.0, published.back().velocity.y);
+  EXPECT_DOUBLE_EQ(0.0, published.back().yaw_rate);
+  EXPECT_DOUBLE_EQ(1.0, published.back().position.z);
   publisher.PublishPeriodic();
   EXPECT_EQ(2u, published.size());
 }

@@ -80,6 +80,12 @@ install(DIRECTORY process/
 )
 
 if(CATKIN_ENABLE_TESTING)
+  find_package(rostest REQUIRED)
+  add_rostest_gtest(${PROJECT_NAME}_status_demand_test
+    test/status_demand.test test/status_demand_test.cpp)
+  if(TARGET ${PROJECT_NAME}_status_demand_test)
+    target_link_libraries(${PROJECT_NAME}_status_demand_test ${PROJECT_NAME}_runtime)
+  endif()
   catkin_add_gtest(${PROJECT_NAME}_test test/robot_runtime_test.cpp)
   if(TARGET ${PROJECT_NAME}_test)
     target_link_libraries(${PROJECT_NAME}_test ${PROJECT_NAME}_runtime)
@@ -88,7 +94,6 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET ${PROJECT_NAME}_motion_command_test)
     target_link_libraries(${PROJECT_NAME}_motion_command_test ${PROJECT_NAME}_runtime)
   endif()
-  find_package(rostest REQUIRED)
   add_rostest_gtest(${PROJECT_NAME}_reset_observation_test
     test/reset_observation.test
     test/reset_observation_test.cpp)

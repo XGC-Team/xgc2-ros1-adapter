@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -128,20 +129,27 @@ public:
   BoundMasterCalls(
       std::optional<std::chrono::milliseconds> budget) = 0;
 
-  // Returns once everything the robots published so far has left the process,
-  // or after the budget. Middleware hands a published message to a transport
-  // thread; a publisher destroyed before that thread has sent the message
-  // drops it. The core calls this between the final commands of stopped
-  // robots and the destruction of the robots.
-  virtual void FlushPublications(std::chrono::milliseconds budget) = 0;
+  // Returns true only after the transport passed the submitted publications,
+  // and false if the budget expired. The core calls this between final
+  // commands of stopped robots and destruction of their publishers.
+  virtual bool FlushPublications(std::chrono::milliseconds budget) = 0;
 };
 
 using CommandCompletion = std::function<void(xgc::adapter::v1::OperationEvent)>;
+// A native member assigns a strictly increasing sequence per channel for its
+// lifetime. Emissions can arrive concurrently and are ordered by that value.
 using TelemetryEmitter = std::function<void(xgc::robot::v1::RobotMessage)>;
 
-// One data object per robot with the original type-specific processors. Called
-// on the registration thread (create/Stop) and the command scheduler thread
-// (Periodic/Execute); it owns no thread of its own.
+struct NativeHealth {
+  bool online = false;
+  std::string summary;
+};
+
+// One data object per robot with the original type-specific processors. Stop
+// runs on the registration/drain thread, Periodic/Execute on the command
+// scheduler, SetStatusDemand on a status worker serialized for this member,
+// and DescribeHealth on an RPC worker. The implementation synchronizes these
+// calls with its ROS callbacks; it owns no thread of its own.
 class NativeRobot {
 public:
   virtual ~NativeRobot() = default;
@@ -150,12 +158,23 @@ public:
   // the robot is destroyed, which the core does after FlushPublications.
   virtual void Stop() = 0;
   virtual void Periodic() = 0;
-  // Called before every Periodic() while no Core status subscription exists,
-  // with the time since the last one ended. A robot that holds a continuous
-  // output (a motion intent republished at 10 Hz) releases it once the silence
-  // exceeds its limit: nobody is left to refresh or end the intent. Never
-  // called while Core is subscribed.
-  virtual void CoreSilent(std::chrono::milliseconds /*silent_for*/) {}
+  // Replace this member's exact union of admitted status channels. Added
+  // channels emit their current raw snapshot; removed channels return only
+  // after already admitted producers and their emissions have joined.
+  virtual void SetStatusDemand(const std::set<std::string> &channels) = 0;
+  // Computes a current health fact only for an actual Describe request.
+  virtual std::optional<NativeHealth> DescribeHealth() = 0;
+  // Called before Periodic() while this member's admitted control owner is
+  // silent, with the elapsed silence. Optional status views do not affect it.
+  // Returns true only when the native publisher positively released motion.
+  virtual bool CoreSilent(std::chrono::milliseconds /*silent_for*/) { return false; }
+  // True only for the profile operation that starts continuous motion.
+  // Safety release and autonomous operations do not claim this ownership.
+  virtual bool RequiresControl(const xgc::adapter::v1::OperationRequest &) const = 0;
+  virtual bool IsControlRelease(const xgc::adapter::v1::OperationRequest &) const = 0;
+  virtual std::chrono::milliseconds ControlSilenceLimit() const = 0;
+  // Joins the actual native publisher's release before its owner is reusable.
+  virtual bool RetireControl(std::string *error) = 0;
   // True when the operation makes the robot safer (releases, holds or stops a
   // continuous output). Such an operation is dispatched even after an earlier
   // result of this robot was unknown, which otherwise rejects every command
@@ -181,6 +200,23 @@ struct ServerTimings {
   std::chrono::milliseconds rpc_drain{5000};
 };
 
+// Passive counters owned by the native status stream. Bytes are protobuf
+// response bytes submitted to gRPC, not TCP or physical network bytes.
+struct StatusWork {
+  std::uint64_t snapshots = 0;
+  std::uint64_t writes_started = 0;
+  std::uint64_t writes_joined = 0;
+  std::uint64_t protobuf_bytes = 0;
+  std::uint64_t subscribers_joined = 0;
+  std::size_t subscribers = 0;
+  // Protobuf body bytes and accepted/rejected control renewals, not packets.
+  std::uint64_t control_renewals = 0, control_renewal_rejections = 0,
+                control_renewal_request_bytes = 0, control_renewal_response_bytes = 0;
+  // Current admitted owners, including native work after caller cancellation.
+  std::size_t ordinary_work = 0, retirement_waiters = 0,
+              safety_work = 0, membership_work = 0;
+};
+
 class RobotServer {
 public:
   RobotServer(ServerOptions options, RosBinding &binding, RobotFactory factory,
@@ -195,6 +231,7 @@ public:
   int Run();
   // Asks Run() to drain and return. Safe from a signal handler.
   void RequestStop() noexcept;
+  StatusWork SnapshotStatusWork() const noexcept;
 
 private:
   class Impl;

@@ -15,10 +15,36 @@ public:
   shared::RobotConfig config;
   std::shared_ptr<RobotRuntime> runtime;
   std::shared_ptr<MotionCommandPublisher> motion;
+  std::chrono::milliseconds control_silence{0};
   ~Native() override { Stop(); }
   void Stop() override { if (runtime) runtime->Stop(); if (motion) motion->Stop(); }
   void Periodic() override { runtime->emitPeriodic(ros::WallTime::now()); if (motion) motion->PublishPeriodic(); }
-  void CoreSilent(std::chrono::milliseconds silent_for) override { if (motion) motion->CoreSilent(silent_for); }
+  void SetStatusDemand(const std::set<std::string> &channels) override { runtime->SetStatusDemand(channels); }
+  std::optional<shared::NativeHealth> DescribeHealth() override {
+    const auto value = runtime->DescribeHealth();
+    return shared::NativeHealth{value.first, value.second};
+  }
+  bool CoreSilent(std::chrono::milliseconds silent_for) override { return motion && motion->CoreSilent(silent_for); }
+  bool RequiresControl(const wire::OperationRequest &request) const override {
+    std::size_t count = 0;
+    const auto *channels = variant.contract.profileChannels(config.profile_id, &count);
+    for (std::size_t i = 0; i < count; ++i)
+      if (channels[i].kind == contract::ChannelKind::kOperation &&
+          request.context().endpoint_id() == channels[i].operation_id)
+        return std::string(channels[i].channel_id) == "operation.motion-intent";
+    return false;
+  }
+  bool IsControlRelease(const wire::OperationRequest &request) const override {
+    std::size_t count = 0;
+    const auto *channels = variant.contract.profileChannels(config.profile_id, &count);
+    for (std::size_t i = 0; i < count; ++i)
+      if (channels[i].kind == contract::ChannelKind::kOperation &&
+          request.context().endpoint_id() == channels[i].operation_id)
+        return std::string(channels[i].channel_id) == "operation.motion-intent-release";
+    return false;
+  }
+  bool RetireControl(std::string *error) override { return !motion || motion->Release(error); }
+  std::chrono::milliseconds ControlSilenceLimit() const override { return control_silence; }
   bool IsSafetyOperation(const wire::OperationRequest &request) const override {
     std::size_t count = 0;
     const auto *channels = variant.contract.profileChannels(config.profile_id, &count);
@@ -74,6 +100,7 @@ shared::RobotFactory factoryFor(const UgvVariant &variant) {
       }
       native->motion = MotionCommandPublisher::Create(node, topic, variant.motion, std::chrono::milliseconds(silence_ms), error);
       if (!native->motion) return nullptr;
+      native->control_silence = std::chrono::milliseconds(silence_ms);
     }
     return native;
   };

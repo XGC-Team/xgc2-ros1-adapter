@@ -69,7 +69,7 @@
           "service": "xgc.robot.v1.RobotAdapterServerService",
           "profile": "grpc.v1",
           "endpointParameter": "socketPath",
-          "api_version": "v1",
+          "api_version": "v2",
           "network": {
             "bootstrapParameter": "networkBootstrap",
             "hostParameter": "rosIp",

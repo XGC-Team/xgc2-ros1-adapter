@@ -9,6 +9,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/AccelStamped.h>
@@ -25,6 +26,7 @@
 
 #include "xgc/robot/v1/message.pb.h"
 #include "xgc/semantic/common/v1/acceleration.pb.h"
+#include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc/semantic/ground/v1/chassis.pb.h"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
@@ -105,9 +107,12 @@ public:
   bool channelEnabled(const std::string &channel_id) const;
 
   void emitPeriodic(const ros::WallTime &now);
+  void SetStatusDemand(const std::set<std::string> &channels);
+  std::pair<bool, std::string> DescribeHealth();
 
 private:
   friend class ResetObservationHarness;
+  friend class StatusDemandHarness;
 
   class CallbackGuard {
   public:
@@ -115,6 +120,16 @@ private:
     ~CallbackGuard();
     explicit operator bool() const { return active_; }
 
+  private:
+    RobotRuntime *runtime_;
+    std::size_t epoch_ = 0;
+    bool active_;
+  };
+  class StatusUpdateGuard {
+  public:
+    explicit StatusUpdateGuard(RobotRuntime *runtime);
+    ~StatusUpdateGuard();
+    explicit operator bool() const { return active_; }
   private:
     RobotRuntime *runtime_;
     bool active_;
@@ -181,8 +196,10 @@ private:
                EnvelopeEmitter emitter);
 
   bool install(std::string *error);
-  bool beginCallback();
-  void endCallback();
+  bool beginCallback(std::size_t *epoch);
+  void endCallback(std::size_t epoch);
+  bool beginStatusUpdate();
+  void endStatusUpdate();
   bool shouldEmitLocked(const std::string &channel_id,
                         const ros::WallTime &now);
   xgc::robot::v1::RobotMessage
@@ -226,6 +243,9 @@ private:
                         std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitStreamHealthLocked(const ros::WallTime &now,
                               std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void emitSnapshotLocked(const std::string &channel, const ros::WallTime &now,
+                          std::vector<xgc::robot::v1::RobotMessage> *messages);
+  xgc::semantic::common::v1::VehicleHealth healthLocked(const ros::WallTime &now) const;
 
   const UgvVariant &variant_;
   ros::NodeHandle node_handle_;
@@ -261,6 +281,11 @@ private:
   bool stopping_ = false;
   bool stop_complete_ = false;
   std::size_t active_callbacks_ = 0;
+  std::size_t active_status_updates_ = 0;
+  std::array<std::size_t, 2> active_callback_epochs_{};
+  std::size_t callback_epoch_ = 0;
+  std::set<std::string> status_demand_;
+  std::string forced_channel_;
   std::map<std::string, SourceTracker> sources_;
   std::map<std::string, ros::WallTime> last_output_;
   std::map<std::string, std::uint64_t> sequences_;
@@ -270,6 +295,19 @@ private:
   bool has_chassis_ = false;
   geometry_msgs::Quaternion vrpn_orientation_;
   bool has_vrpn_orientation_ = false;
+  geometry_msgs::PoseStamped::ConstPtr latest_pose_;
+  geometry_msgs::Twist::ConstPtr latest_command_velocity_;
+  geometry_msgs::TwistStamped::ConstPtr latest_velocity_;
+  geometry_msgs::Twist latest_velocity_value_;
+  ros::Time latest_velocity_stamp_;
+  bool has_velocity_ = false;
+  geometry_msgs::AccelStamped::ConstPtr latest_acceleration_;
+  sensor_msgs::Imu::ConstPtr latest_imu_;
+  std_msgs::String::ConstPtr latest_controller_;
+  ros::Time latest_controller_stamp_;
+  bool has_power_ = false, latest_power_valid_ = false;
+  double latest_power_voltage_ = 0, latest_power_filtered_ = 0;
+  ros::Time latest_power_stamp_;
   ResetSessionSlot reset_session_;
   // Oldest result receipt is [0]. A non-zero current session protects its
   // equal slot; the other slot holds one unmatched candidate.

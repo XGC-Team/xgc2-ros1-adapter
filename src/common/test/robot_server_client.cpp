@@ -108,13 +108,22 @@ public:
     return status.ok() ? 0 : 1;
   }
   int watch(std::chrono::seconds duration) {
+    wire::SubscribeStatusRequest request;
+    request.set_all(true);
+    return watchRequest(request, duration);
+  }
+  int controlWatch(std::chrono::seconds duration) {
+    return watchRequest(fromJson<wire::SubscribeStatusRequest>(readAll(std::cin)),
+                        duration);
+  }
+  int watchRequest(const wire::SubscribeStatusRequest &request,
+                   std::chrono::seconds duration) {
     const auto instance = discover();
     grpc::ClientContext context;
     GrpcClientCall call(context, instance,
                         xgc2::xrpc::grpc_stream_deadline(
                             xgc2::xrpc::GrpcLimits{},
                             GrpcClock::now() + duration));
-    wire::SubscribeStatusRequest request;
     const auto mark = call.mark_dispatched();
     if (!mark.ok())
       return 1;
@@ -183,6 +192,32 @@ int main(int argc, char **argv) {
       return client.unary<wire::ExecuteRequest, wire::ExecuteResponse>(
           fromJson<wire::ExecuteRequest>(readAll(std::cin)),
           &wire::RobotAdapterServerService::Stub::Execute);
+    if (command == "install-controller")
+      return client.unary<wire::InstallControllerRequest, wire::InstallControllerResponse>(
+          fromJson<wire::InstallControllerRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::InstallController);
+    if (command == "retire-controller")
+      return client.unary<wire::RetireControllerRequest, wire::RetireControllerResponse>(
+          fromJson<wire::RetireControllerRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::RetireController);
+    if (command == "acquire-control")
+      return client.unary<wire::AcquireControlRequest, wire::AcquireControlResponse>(
+          fromJson<wire::AcquireControlRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::AcquireControl);
+    if (command == "release-control")
+      return client.unary<wire::ReleaseControlRequest, wire::ReleaseControlResponse>(
+          fromJson<wire::ReleaseControlRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::ReleaseControl);
+    if (command == "renew-control")
+      return client.unary<wire::RenewControlRequest, wire::RenewControlResponse>(
+          fromJson<wire::RenewControlRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::RenewControl);
+    if (command == "retire-status")
+      return client.unary<wire::RetireStatusRequest, wire::RetireStatusResponse>(
+          fromJson<wire::RetireStatusRequest>(readAll(std::cin)),
+          &wire::RobotAdapterServerService::Stub::RetireStatus);
+    if (command == "control-watch" && index + 1 < argc)
+      return client.controlWatch(std::chrono::seconds(std::stol(argv[index + 1])));
     if (command == "shutdown")
       return client.unary<wire::ShutdownRequest, wire::ShutdownResponse>(
           wire::ShutdownRequest(), &wire::RobotAdapterServerService::Stub::Shutdown);

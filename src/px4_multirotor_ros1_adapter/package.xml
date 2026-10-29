@@ -24,4 +24,5 @@
   <exec_depend>roscpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>xgc_ros1_adapter_common</exec_depend>
+  <test_depend>rostest</test_depend>
 </package>

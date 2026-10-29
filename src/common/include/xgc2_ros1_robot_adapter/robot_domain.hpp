@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <map>
 #include <string>
 #include <vector>
@@ -11,6 +12,10 @@
 #include "xgc/v1/message.pb.h"
 
 namespace xgc2_ros1_robot_adapter {
+
+// Bounds one native telemetry envelope and the variable-size raw field kept
+// for its selected latest snapshot. It is not a process RSS bound.
+inline constexpr std::size_t kMaximumTelemetryItemBytes = 65536;
 
 struct RobotChannelConfig {
   std::string channel_id;

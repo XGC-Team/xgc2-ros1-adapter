@@ -61,7 +61,7 @@ public:
   std::unique_ptr<MasterBudget>
   BoundMasterCalls(
       std::optional<std::chrono::milliseconds> budget) override;
-  void FlushPublications(std::chrono::milliseconds budget) override;
+  bool FlushPublications(std::chrono::milliseconds budget) override;
 
 private:
   std::array<ros::CallbackQueue, 2> queues_;

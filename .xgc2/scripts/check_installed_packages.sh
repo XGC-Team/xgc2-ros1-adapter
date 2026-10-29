@@ -45,7 +45,7 @@ px4_depends="$(dpkg-query -W -f='${Depends}' "${PX4_PACKAGE}")"
 ugv_depends="$(dpkg-query -W -f='${Depends}' "${UGV_PACKAGE}")"
 grep -Eq '(^|, )libgrpc\+\+1( |[(,]|$)' <<<"${common_depends}"
 grep -Eq '(^|, )libc-ares2( |[(,]|$)' <<<"${common_depends}"
-grep -Fq 'libxgc2-xrpc-grpc2 (>= 0.2.1-1~focal)' <<<"${common_depends}"
+grep -Fq 'libxgc2-xrpc-grpc2 (>= 0.2.1-2~focal)' <<<"${common_depends}"
 for depends in "${common_depends}" "${px4_depends}" "${ugv_depends}"; do
   if grep -Eq 'libxgc2-adapter-runtime|xgc2-protobuf-dev|libxgc2-xrpc-(grpc-)?dev' <<<"${depends}"; then
     echo "robot type server package depends on a build-only or removed package" >&2
@@ -222,7 +222,7 @@ PYTOOLS
 echo "Installed Tools package checks passed"
 
 scene_depends="$(dpkg-query -W -f='${Depends}' "${SCENE_PACKAGE}")"
-grep -Fq 'libxgc2-xrpc2 (>= 0.2.1-1~focal)' <<<"${scene_depends}"
+grep -Fq 'libxgc2-xrpc2 (>= 0.2.1-2~focal)' <<<"${scene_depends}"
 grep -Fq 'libxgc2-math-dev (>= 0.6.0-6~focal)' <<<"${scene_depends}"
 grep -Fq "ros-${ROS_DISTRO}-xgc2-geometry-msgs (>= 1.5.0-4)" <<<"${scene_depends}"
 for dependency in python3 roscpp tf2-ros geometry-msgs visualization-msgs std-msgs xgc2-geometry-msgs; do

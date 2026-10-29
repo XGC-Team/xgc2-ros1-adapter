@@ -8,6 +8,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(catkin REQUIRED COMPONENTS geometry_msgs roscpp)
 find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED grpc++>=1.16 grpc)
 find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS grpc)
@@ -104,7 +105,7 @@ target_include_directories(xgc2_robot_server
 target_include_directories(xgc2_robot_server SYSTEM PUBLIC "${proto_dir}")
 target_link_libraries(xgc2_robot_server
   PUBLIC protobuf::libprotobuf Threads::Threads
-  PRIVATE XgcXrpc::grpc nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
+  PRIVATE XgcXrpc::grpc nlohmann_json::nlohmann_json OpenSSL::Crypto ${GRPC_LDFLAGS})
 set_source_files_properties(${protocol_sources} "${grpc_source}" PROPERTIES
   COMPILE_FLAGS "-Wno-array-bounds")
 

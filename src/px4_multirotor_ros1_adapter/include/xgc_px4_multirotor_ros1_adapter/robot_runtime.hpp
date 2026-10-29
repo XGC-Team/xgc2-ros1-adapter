@@ -1,6 +1,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -8,6 +9,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/AccelStamped.h>
@@ -120,14 +122,27 @@ public:
   bool channelEnabled(const std::string &channel_id) const;
 
   void emitPeriodic(const ros::WallTime &now);
+  void SetStatusDemand(const std::set<std::string> &channels);
+  std::pair<bool, std::string> DescribeHealth();
 
 private:
+  friend class StatusDemandHarness;
   class CallbackGuard {
   public:
     explicit CallbackGuard(RobotRuntime *runtime);
     ~CallbackGuard();
     explicit operator bool() const { return active_; }
 
+  private:
+    RobotRuntime *runtime_;
+    std::size_t epoch_ = 0;
+    bool active_;
+  };
+  class StatusUpdateGuard {
+  public:
+    explicit StatusUpdateGuard(RobotRuntime *runtime);
+    ~StatusUpdateGuard();
+    explicit operator bool() const { return active_; }
   private:
     RobotRuntime *runtime_;
     bool active_;
@@ -156,8 +171,10 @@ private:
   bool install(std::string *error);
   bool installPx4(std::string *error);
   bool channelRequired(const std::string &channel_id) const;
-  bool beginCallback();
-  void endCallback();
+  bool beginCallback(std::size_t *epoch);
+  void endCallback(std::size_t epoch);
+  bool beginStatusUpdate();
+  void endStatusUpdate();
 
   bool shouldEmitLocked(const std::string &channel_id,
                         const ros::WallTime &now);
@@ -209,6 +226,9 @@ private:
   void
   emitStreamHealthLocked(const ros::WallTime &now,
                          std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void emitSnapshotLocked(const std::string &channel, const ros::WallTime &now,
+                          std::vector<xgc::robot::v1::RobotMessage> *messages);
+  xgc::semantic::common::v1::VehicleHealth healthLocked(const ros::WallTime &now) const;
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
@@ -247,6 +267,11 @@ private:
   bool stopping_ = false;
   bool stop_complete_ = false;
   std::size_t active_callbacks_ = 0;
+  std::size_t active_status_updates_ = 0;
+  std::array<std::size_t, 2> active_callback_epochs_{};
+  std::size_t callback_epoch_ = 0;
+  std::set<std::string> status_demand_;
+  std::string forced_channel_;
   std::map<std::string, SourceTracker> sources_;
   std::map<std::string, ros::WallTime> last_output_;
   std::map<std::string, std::uint64_t> sequences_;
@@ -256,18 +281,41 @@ private:
   mavros_msgs::PositionTarget local_setpoint_;
   mavros_msgs::AttitudeTarget attitude_setpoint_;
   bool has_mavros_state_ = false;
+  bool flight_mode_valid_ = false;
   bool has_mavros_extended_state_ = false;
   bool has_local_setpoint_ = false;
   bool has_attitude_setpoint_ = false;
-  bool valid_local_setpoint_ = false;
-  bool valid_attitude_setpoint_ = false;
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
   geometry_msgs::Point local_position_;
   geometry_msgs::Point mocap_position_;
   std::string local_position_frame_id_;
+  ros::Time localization_error_stamp_;
   bool has_local_position_ = false;
   bool has_mocap_position_ = false;
+  bool local_position_frame_valid_ = false;
+  geometry_msgs::PoseStamped::ConstPtr latest_pose_, latest_mocap_pose_;
+  geometry_msgs::PoseStamped latest_vision_pose_;
+  bool has_vision_pose_ = false;
+  geometry_msgs::TwistStamped::ConstPtr latest_mocap_velocity_, latest_velocity_;
+  geometry_msgs::AccelStamped::ConstPtr latest_mocap_acceleration_;
+  sensor_msgs::Imu::ConstPtr latest_imu_;
+  std_msgs::String::ConstPtr latest_controller_;
+  ros::Time latest_controller_stamp_;
+  struct PowerSample {
+    bool present = false;
+    float percentage = 0, voltage = 0, current = 0, temperature = 0;
+    std::uint8_t status = 0;
+    ros::Time stamp;
+  } latest_power_;
+  struct TimesyncSample {
+    bool present = false;
+    std::uint64_t remote_timestamp_ns = 0;
+    std::int64_t observed_offset_ns = 0, estimated_offset_ns = 0;
+    float round_trip_time_ms = 0;
+    ros::Time stamp;
+  } latest_timesync_;
+  bool local_setpoint_frame_valid_ = false, attitude_setpoint_frame_valid_ = false;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::VisionPublishCadence vision_publish_cadence_;
 

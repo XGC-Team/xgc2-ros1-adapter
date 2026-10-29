@@ -968,27 +968,49 @@ void RobotRuntime::Deactivate() noexcept {}
 
 RobotRuntime::CallbackGuard::CallbackGuard(RobotRuntime *runtime)
     : runtime_(runtime),
-      active_(runtime_ != nullptr && runtime_->beginCallback()) {}
+      active_(runtime_ != nullptr && runtime_->beginCallback(&epoch_)) {}
 
 RobotRuntime::CallbackGuard::~CallbackGuard() {
   if (active_)
-    runtime_->endCallback();
+    runtime_->endCallback(epoch_);
 }
 
-bool RobotRuntime::beginCallback() {
+bool RobotRuntime::beginCallback(std::size_t *epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_)
     return false;
+  *epoch = callback_epoch_;
+  ++active_callback_epochs_[*epoch];
   ++active_callbacks_;
   return true;
 }
 
-void RobotRuntime::endCallback() {
+void RobotRuntime::endCallback(std::size_t epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
+  --active_callback_epochs_[epoch];
   if (active_callbacks_ > 0)
     --active_callbacks_;
-  if (active_callbacks_ == 0)
+  if (active_callback_epochs_[epoch] == 0)
     callbacks_idle_.notify_all();
+}
+
+RobotRuntime::StatusUpdateGuard::StatusUpdateGuard(RobotRuntime *runtime)
+    : runtime_(runtime), active_(runtime_ != nullptr && runtime_->beginStatusUpdate()) {}
+
+RobotRuntime::StatusUpdateGuard::~StatusUpdateGuard() {
+  if (active_) runtime_->endStatusUpdate();
+}
+
+bool RobotRuntime::beginStatusUpdate() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopping_) return false;
+  ++active_status_updates_;
+  return true;
+}
+
+void RobotRuntime::endStatusUpdate() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (--active_status_updates_ == 0) callbacks_idle_.notify_all();
 }
 
 void RobotRuntime::Stop() {
@@ -1018,7 +1040,7 @@ void RobotRuntime::Stop() {
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
-    callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0; });
+    callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0 && active_status_updates_ == 0; });
   }
   canonical_pose_publisher_.shutdown();
   canonical_velocity_publisher_.shutdown();
@@ -1288,13 +1310,16 @@ bool RobotRuntime::installPx4(std::string *error) {
 
 bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
                                     const ros::WallTime &now) {
+  if (!status_demand_.count(channel_id) ||
+      (!forced_channel_.empty() && forced_channel_ != channel_id))
+    return false;
   contract::ChannelMetadata metadata;
   if (!InstalledContract().channelMetadata(profile_id_, channel_id, &metadata) ||
       metadata.output_rate_hz <= 0.0) {
     return false;
   }
   auto &last = last_output_[channel_id];
-  if (!last.isZero() && now >= last &&
+  if (forced_channel_.empty() && !last.isZero() && now >= last &&
       (now - last).toSec() < (1.0 / metadata.output_rate_hz)) {
     return false;
   }
@@ -1341,8 +1366,15 @@ RobotRuntime::makeEnvelopeLocked(const std::string &channel_id,
                                       ? xgc::v1::CLOCK_DOMAIN_SIMULATION
                                       : xgc::v1::CLOCK_DOMAIN_NATIVE;
   }
-  context.observed_unix_nanos =
-      static_cast<std::int64_t>(ros::WallTime::now().toNSec());
+  ros::WallTime observed = ros::WallTime::now();
+  if (!forced_channel_.empty() && channel_id != "state.health" &&
+      channel_id != "state.flight" && channel_id != "diagnostic.offboard-input" &&
+      channel_id != "diagnostic.stream-health") {
+    const auto source = sources_.find(channel_id);
+    if (source != sources_.end() && !source->second.last_seen.isZero())
+      observed = source->second.last_seen;
+  }
+  context.observed_unix_nanos = static_cast<std::int64_t>(observed.toNSec());
 
   xgc::robot::v1::RobotMessage envelope;
   std::string error;
@@ -1430,8 +1462,12 @@ void RobotRuntime::emitPositionErrorLocked(
   static const std::string localization_error_channel = "state.localization.error";
   if (!has_local_position_ || !has_mocap_position_ || messages == nullptr)
     return;
+  localization_error_stamp_ = source_stamp;
   if (channelRequired(localization_error_channel))
     recordSourceLocked(localization_error_channel, now);
+  if (!channelEnabled(localization_error_channel) ||
+      !status_demand_.count(localization_error_channel) || !local_position_frame_valid_)
+    return;
   const double distance =
       positionDistanceMeters(local_position_, mocap_position_);
   if (channelEnabled(localization_error_channel) && std::isfinite(distance) &&
@@ -1519,14 +1555,25 @@ void RobotRuntime::px4PoseCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("state.pose", now);
+    const bool bounded_frame = message->header.frame_id.size() <=
+                               xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
+    if (channelEnabled("state.pose") && bounded_frame)
+      latest_pose_ = message;
+    else
+      latest_pose_.reset();
     if (std::isfinite(message->pose.position.x) &&
         std::isfinite(message->pose.position.y) &&
         std::isfinite(message->pose.position.z)) {
       local_position_ = message->pose.position;
-      local_position_frame_id_ = message->header.frame_id;
+      local_position_frame_valid_ = bounded_frame;
+      local_position_frame_id_ = bounded_frame ? message->header.frame_id : std::string();
       has_local_position_ = true;
+    } else {
+      has_local_position_ = false;
+      local_position_frame_valid_ = false;
+      local_position_frame_id_.clear();
     }
-    if (channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
+    if (latest_pose_ && channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyVector(message->pose.position, payload.mutable_position());
@@ -1534,7 +1581,7 @@ void RobotRuntime::px4PoseCallback(
       output.push_back(
           makeEnvelopeLocked("state.pose", message->header.stamp, payload));
       recordOutputLocked("state.pose");
-    } else if (channelEnabled("state.pose")) {
+    } else if (status_demand_.count("state.pose") && channelEnabled("state.pose")) {
       ++sources_["state.pose"].dropped_samples;
     }
     emitPositionErrorLocked(message->header.stamp, now, &output);
@@ -1558,16 +1605,24 @@ void RobotRuntime::mocapPoseCallback(
     recordSourceLocked(state_mocap_pose_channel, now);
     if (!xgc2_ros1_robot_adapter::projectLocalizationPose(
             *message, localization_, &projected)) {
+      latest_mocap_pose_.reset();
+      has_mocap_position_ = false;
       ++sources_[state_mocap_pose_channel].dropped_samples;
       return;
     }
+    const bool bounded_frame = projected.header.frame_id.size() <=
+                               xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
+    if (channelEnabled(state_mocap_pose_channel) && bounded_frame)
+      latest_mocap_pose_ = message;
+    else
+      latest_mocap_pose_.reset();
     mocap_position_ = projected.pose.position;
     has_mocap_position_ = true;
     positioning_health_.recordPose(
         now.toSec(), projected.pose.position.x,
         projected.pose.position.y, projected.pose.position.z);
 
-    if (channelEnabled(state_mocap_pose_channel) &&
+    if (latest_mocap_pose_ && channelEnabled(state_mocap_pose_channel) &&
         shouldEmitLocked(state_mocap_pose_channel, now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(projected.header.frame_id);
@@ -1577,13 +1632,19 @@ void RobotRuntime::mocapPoseCallback(
       output.push_back(makeEnvelopeLocked(
           state_mocap_pose_channel, projected.header.stamp, payload));
       recordOutputLocked(state_mocap_pose_channel);
-    } else if (channelEnabled(state_mocap_pose_channel)) {
+    } else if (status_demand_.count(state_mocap_pose_channel) && channelEnabled(state_mocap_pose_channel)) {
       ++sources_[state_mocap_pose_channel].dropped_samples;
     }
     if (publish_vision_ && vision_publish_cadence_.take(now.toSec())) {
       publish_vision = true;
       recordSourceLocked(state_vision_pose_channel, now);
-      if (channelEnabled(state_vision_pose_channel) &&
+      if (channelEnabled(state_vision_pose_channel) && bounded_frame) {
+        latest_vision_pose_ = projected;
+        has_vision_pose_ = true;
+      } else {
+        has_vision_pose_ = false;
+      }
+      if (has_vision_pose_ && channelEnabled(state_vision_pose_channel) &&
           shouldEmitLocked(state_vision_pose_channel, now)) {
         xgc::semantic::common::v1::PoseEstimate payload;
         payload.set_frame_id(projected.header.frame_id);
@@ -1611,16 +1672,24 @@ void RobotRuntime::mocapVelocityCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message))
+  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_mocap_velocity_.reset();
     return;
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if ((channelEnabled(state_mocap_velocity_channel) || channelEnabled(state_mocap_speed_channel)) &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_mocap_velocity_ = message;
+    else
+      latest_mocap_velocity_.reset();
     if (channelRequired(state_mocap_velocity_channel))
       recordSourceLocked(state_mocap_velocity_channel, now);
     if (channelRequired(state_mocap_speed_channel))
       recordSourceLocked(state_mocap_speed_channel, now);
 
-    if (channelEnabled(state_mocap_velocity_channel) &&
+    if (latest_mocap_velocity_ && channelEnabled(state_mocap_velocity_channel) &&
         shouldEmitLocked(state_mocap_velocity_channel, now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1629,14 +1698,16 @@ void RobotRuntime::mocapVelocityCallback(
       output.push_back(makeEnvelopeLocked(
           state_mocap_velocity_channel, message->header.stamp, payload));
       recordOutputLocked(state_mocap_velocity_channel);
-    } else if (channelEnabled(state_mocap_velocity_channel)) {
+    } else if (status_demand_.count(state_mocap_velocity_channel) && channelEnabled(state_mocap_velocity_channel)) {
       ++sources_[state_mocap_velocity_channel].dropped_samples;
     }
 
-    const double speed = std::hypot(
-        std::hypot(message->twist.linear.x, message->twist.linear.y),
-        message->twist.linear.z);
-    if (channelEnabled(state_mocap_speed_channel) && std::isfinite(speed) &&
+    const double speed = status_demand_.count(state_mocap_speed_channel)
+                             ? std::hypot(std::hypot(message->twist.linear.x,
+                                                    message->twist.linear.y),
+                                          message->twist.linear.z)
+                             : std::numeric_limits<double>::quiet_NaN();
+    if (latest_mocap_velocity_ && channelEnabled(state_mocap_speed_channel) && std::isfinite(speed) &&
         shouldEmitLocked(state_mocap_speed_channel, now)) {
       xgc::semantic::common::v1::SpeedEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1644,7 +1715,7 @@ void RobotRuntime::mocapVelocityCallback(
       output.push_back(makeEnvelopeLocked(
           state_mocap_speed_channel, message->header.stamp, payload));
       recordOutputLocked(state_mocap_speed_channel);
-    } else if (channelEnabled(state_mocap_speed_channel)) {
+    } else if (status_demand_.count(state_mocap_speed_channel) && channelEnabled(state_mocap_speed_channel)) {
       ++sources_[state_mocap_speed_channel].dropped_samples;
     }
   }
@@ -1656,15 +1727,24 @@ void RobotRuntime::mocapAccelerationCallback(
     const geometry_msgs::AccelStamped::ConstPtr &message) {
   static const std::string state_mocap_acceleration_channel = "state.mocap.acceleration";
   CallbackGuard callback(this);
-  if (!callback ||
-      !xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message))
+  if (!callback)
     return;
+  if (!xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_mocap_acceleration_.reset();
+    return;
+  }
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked(state_mocap_acceleration_channel, now);
     if (channelEnabled(state_mocap_acceleration_channel) &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_mocap_acceleration_ = message;
+    else
+      latest_mocap_acceleration_.reset();
+    recordSourceLocked(state_mocap_acceleration_channel, now);
+    if (latest_mocap_acceleration_ && channelEnabled(state_mocap_acceleration_channel) &&
         shouldEmitLocked(state_mocap_acceleration_channel, now)) {
       xgc::semantic::common::v1::AccelerationEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1673,7 +1753,7 @@ void RobotRuntime::mocapAccelerationCallback(
       output.push_back(makeEnvelopeLocked(
           state_mocap_acceleration_channel, message->header.stamp, payload));
       recordOutputLocked(state_mocap_acceleration_channel);
-    } else if (channelEnabled(state_mocap_acceleration_channel)) {
+    } else if (status_demand_.count(state_mocap_acceleration_channel) && channelEnabled(state_mocap_acceleration_channel)) {
       ++sources_[state_mocap_acceleration_channel].dropped_samples;
     }
   }
@@ -1690,8 +1770,13 @@ void RobotRuntime::px4VelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked("state.velocity", now);
     if (channelEnabled("state.velocity") &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_velocity_ = message;
+    else
+      latest_velocity_.reset();
+    recordSourceLocked("state.velocity", now);
+    if (latest_velocity_ && channelEnabled("state.velocity") &&
         shouldEmitLocked("state.velocity", now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1700,7 +1785,7 @@ void RobotRuntime::px4VelocityCallback(
       output.push_back(
           makeEnvelopeLocked("state.velocity", message->header.stamp, payload));
       recordOutputLocked("state.velocity");
-    } else if (channelEnabled("state.velocity")) {
+    } else if (status_demand_.count("state.velocity") && channelEnabled("state.velocity")) {
       ++sources_["state.velocity"].dropped_samples;
     }
   }
@@ -1715,8 +1800,13 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (channelEnabled("state.imu") &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_imu_ = message;
+    else
+      latest_imu_.reset();
     recordSourceLocked("state.imu", now);
-    if (channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
+    if (latest_imu_ && channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
       xgc::semantic::common::v1::ImuEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyQuaternion(message->orientation, payload.mutable_orientation());
@@ -1732,7 +1822,7 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
       output.push_back(
           makeEnvelopeLocked("state.imu", message->header.stamp, payload));
       recordOutputLocked("state.imu");
-    } else if (channelEnabled("state.imu")) {
+    } else if (status_demand_.count("state.imu") && channelEnabled("state.imu")) {
       ++sources_["state.imu"].dropped_samples;
     }
   }
@@ -1749,6 +1839,15 @@ void RobotRuntime::batteryCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked("state.power", now);
+    if (channelEnabled("state.power")) {
+      latest_power_.present = true;
+      latest_power_.percentage = message->percentage;
+      latest_power_.voltage = message->voltage;
+      latest_power_.current = message->current;
+      latest_power_.temperature = message->temperature;
+      latest_power_.status = message->power_supply_status;
+      latest_power_.stamp = message->header.stamp;
+    }
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
       if (std::isfinite(message->percentage))
@@ -1765,7 +1864,7 @@ void RobotRuntime::batteryCallback(
       output.push_back(
           makeEnvelopeLocked("state.power", message->header.stamp, payload));
       recordOutputLocked("state.power");
-    } else if (channelEnabled("state.power")) {
+    } else if (status_demand_.count("state.power") && channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
     }
   }
@@ -1785,12 +1884,19 @@ void RobotRuntime::controllerStatusCallback(
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked(state_controller_channel, now);
     if (channelEnabled(state_controller_channel) &&
+        message->data.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
+      latest_controller_ = message;
+      latest_controller_stamp_ = stamp;
+    } else {
+      latest_controller_.reset();
+    }
+    if (latest_controller_ && channelEnabled(state_controller_channel) &&
         shouldEmitLocked(state_controller_channel, now)) {
       xgc::semantic::common::v1::ControllerStatus payload;
       payload.set_text(message->data);
       output.push_back(makeEnvelopeLocked(state_controller_channel, stamp, payload));
       recordOutputLocked(state_controller_channel);
-    } else if (channelEnabled(state_controller_channel)) {
+    } else if (status_demand_.count(state_controller_channel) && channelEnabled(state_controller_channel)) {
       ++sources_[state_controller_channel].dropped_samples;
     }
   }
@@ -1803,7 +1909,13 @@ void RobotRuntime::mavrosStateCallback(
   if (!callback)
     return;
   std::lock_guard<std::mutex> lock(mutex_);
-  mavros_state_ = *message;
+  mavros_state_.header.stamp = message->header.stamp;
+  mavros_state_.connected = message->connected;
+  mavros_state_.armed = message->armed;
+  mavros_state_.system_status = message->system_status;
+  flight_mode_valid_ = channelEnabled("state.flight") &&
+                       message->mode.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
+  mavros_state_.mode = flight_mode_valid_ ? message->mode : std::string();
   has_mavros_state_ = true;
   mavros_state_last_seen_ = ros::WallTime::now();
   if (channelRequired("state.health"))
@@ -1818,7 +1930,7 @@ void RobotRuntime::mavrosExtendedStateCallback(
   if (!callback)
     return;
   std::lock_guard<std::mutex> lock(mutex_);
-  mavros_extended_state_ = *message;
+  mavros_extended_state_.landed_state = message->landed_state;
   has_mavros_extended_state_ = true;
   mavros_extended_state_last_seen_ = ros::WallTime::now();
   if (channelRequired("state.health"))
@@ -1832,19 +1944,26 @@ void RobotRuntime::localSetpointCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  const std::uint32_t fields = localSetpointValidFields(message->type_mask);
-  const auto frame = localCoordinateFrame(message->coordinate_frame);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    local_setpoint_ = *message;
+    local_setpoint_.header.seq = message->header.seq;
+    local_setpoint_.header.stamp = message->header.stamp;
+    local_setpoint_frame_valid_ = message->header.frame_id.size() <=
+                                  xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
+    local_setpoint_.header.frame_id = local_setpoint_frame_valid_ ? message->header.frame_id : std::string();
+    local_setpoint_.coordinate_frame = message->coordinate_frame;
+    local_setpoint_.type_mask = message->type_mask;
+    local_setpoint_.position = message->position;
+    local_setpoint_.velocity = message->velocity;
+    local_setpoint_.acceleration_or_force = message->acceleration_or_force;
+    local_setpoint_.yaw = message->yaw;
+    local_setpoint_.yaw_rate = message->yaw_rate;
     has_local_setpoint_ = true;
-    valid_local_setpoint_ =
-        frame !=
-            xgc::semantic::aerial::v1::LOCAL_COORDINATE_FRAME_UNSPECIFIED &&
-        fields != 0 && finiteLocalSetpoint(*message, fields);
     recordSourceLocked("setpoint.local", now);
-    if (channelEnabled("setpoint.local") &&
+    if (local_setpoint_frame_valid_ && channelEnabled("setpoint.local") &&
         shouldEmitLocked("setpoint.local", now)) {
+      const auto fields = localSetpointValidFields(message->type_mask);
+      const auto frame = localCoordinateFrame(message->coordinate_frame);
       xgc::semantic::aerial::v1::LocalTrajectorySetpoint payload;
       payload.set_frame_id(message->header.frame_id);
       payload.set_coordinate_frame(frame);
@@ -1864,7 +1983,7 @@ void RobotRuntime::localSetpointCallback(
       output.push_back(
           makeEnvelopeLocked("setpoint.local", message->header.stamp, payload));
       recordOutputLocked("setpoint.local");
-    } else if (channelEnabled("setpoint.local")) {
+    } else if (status_demand_.count("setpoint.local") && channelEnabled("setpoint.local")) {
       ++sources_["setpoint.local"].dropped_samples;
     }
   }
@@ -1879,16 +1998,22 @@ void RobotRuntime::attitudeSetpointCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  const std::uint32_t fields = attitudeSetpointValidFields(message->type_mask);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    attitude_setpoint_ = *message;
+    attitude_setpoint_.header.seq = message->header.seq;
+    attitude_setpoint_.header.stamp = message->header.stamp;
+    attitude_setpoint_frame_valid_ = message->header.frame_id.size() <=
+                                     xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
+    attitude_setpoint_.header.frame_id = attitude_setpoint_frame_valid_ ? message->header.frame_id : std::string();
+    attitude_setpoint_.type_mask = message->type_mask;
+    attitude_setpoint_.orientation = message->orientation;
+    attitude_setpoint_.body_rate = message->body_rate;
+    attitude_setpoint_.thrust = message->thrust;
     has_attitude_setpoint_ = true;
-    valid_attitude_setpoint_ =
-        fields != 0 && finiteAttitudeSetpoint(*message, fields);
     recordSourceLocked(setpoint_attitude_channel, now);
-    if (channelEnabled(setpoint_attitude_channel) &&
+    if (attitude_setpoint_frame_valid_ && channelEnabled(setpoint_attitude_channel) &&
         shouldEmitLocked(setpoint_attitude_channel, now)) {
+      const auto fields = attitudeSetpointValidFields(message->type_mask);
       xgc::semantic::aerial::v1::AttitudeSetpoint payload;
       payload.set_frame_id(message->header.frame_id);
       payload.set_valid_fields(fields);
@@ -1901,7 +2026,7 @@ void RobotRuntime::attitudeSetpointCallback(
       output.push_back(makeEnvelopeLocked(setpoint_attitude_channel,
                                           message->header.stamp, payload));
       recordOutputLocked(setpoint_attitude_channel);
-    } else if (channelEnabled(setpoint_attitude_channel)) {
+    } else if (status_demand_.count(setpoint_attitude_channel) && channelEnabled(setpoint_attitude_channel)) {
       ++sources_[setpoint_attitude_channel].dropped_samples;
     }
   }
@@ -1919,6 +2044,14 @@ void RobotRuntime::timesyncStatusCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     recordSourceLocked(diagnostic_fcu_link_channel, now);
+    if (channelEnabled(diagnostic_fcu_link_channel)) {
+      latest_timesync_.present = true;
+      latest_timesync_.remote_timestamp_ns = message->remote_timestamp_ns;
+      latest_timesync_.observed_offset_ns = message->observed_offset_ns;
+      latest_timesync_.estimated_offset_ns = message->estimated_offset_ns;
+      latest_timesync_.round_trip_time_ms = message->round_trip_time_ms;
+      latest_timesync_.stamp = message->header.stamp;
+    }
     if (channelEnabled(diagnostic_fcu_link_channel) &&
         shouldEmitLocked(diagnostic_fcu_link_channel, now)) {
       xgc::semantic::aerial::v1::FcuLinkStatus payload;
@@ -1934,7 +2067,7 @@ void RobotRuntime::timesyncStatusCallback(
       output.push_back(makeEnvelopeLocked(diagnostic_fcu_link_channel,
                                           message->header.stamp, payload));
       recordOutputLocked(diagnostic_fcu_link_channel);
-    } else if (channelEnabled(diagnostic_fcu_link_channel)) {
+    } else if (status_demand_.count(diagnostic_fcu_link_channel) && channelEnabled(diagnostic_fcu_link_channel)) {
       ++sources_[diagnostic_fcu_link_channel].dropped_samples;
     }
   }
@@ -1954,63 +2087,247 @@ void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
   emit(std::move(messages));
 }
 
+void RobotRuntime::SetStatusDemand(const std::set<std::string> &channels) {
+  StatusUpdateGuard update(this);
+  if (!update) return;
+  std::vector<xgc::robot::v1::RobotMessage> messages;
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (stopping_)
+    return;
+  std::vector<std::string> added;
+  bool removed = false;
+  for (const auto &channel : channels)
+    if (channelEnabled(channel) && !status_demand_.count(channel))
+      added.push_back(channel);
+  for (const auto &channel : status_demand_)
+    if (!channels.count(channel))
+      removed = true;
+  status_demand_ = channels;
+  if (removed) {
+    const auto old_epoch = callback_epoch_;
+    callback_epoch_ ^= 1u;
+    callbacks_idle_.wait(lock, [&] { return active_callback_epochs_[old_epoch] == 0; });
+    if (stopping_)
+      return;
+  }
+  try {
+    const auto now = ros::WallTime::now();
+    for (const auto &channel : added) {
+      forced_channel_ = channel;
+      emitSnapshotLocked(channel, now, &messages);
+    }
+    forced_channel_.clear();
+  } catch (...) {
+    forced_channel_.clear();
+    throw;
+  }
+  lock.unlock();
+  emit(std::move(messages));
+}
+
+void RobotRuntime::emitSnapshotLocked(
+    const std::string &channel, const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *messages) {
+  if (channel == "state.health" || channel == "state.flight" ||
+      channel == "diagnostic.offboard-input") {
+    emitPx4PeriodicLocked(now, messages);
+    return;
+  }
+  if (channel == "diagnostic.stream-health") {
+    emitStreamHealthLocked(now, messages);
+    return;
+  }
+  if (channel == "state.pose" && latest_pose_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::PoseEstimate payload;
+    payload.set_frame_id(latest_pose_->header.frame_id);
+    copyVector(latest_pose_->pose.position, payload.mutable_position());
+    copyQuaternion(latest_pose_->pose.orientation, payload.mutable_orientation());
+    messages->push_back(makeEnvelopeLocked(channel, latest_pose_->header.stamp, payload));
+  } else if (channel == "state.mocap.pose" && latest_mocap_pose_) {
+    geometry_msgs::PoseStamped projected;
+    if (!xgc2_ros1_robot_adapter::projectLocalizationPose(*latest_mocap_pose_, localization_, &projected) ||
+        !shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::PoseEstimate payload;
+    payload.set_frame_id(projected.header.frame_id);
+    copyVector(projected.pose.position, payload.mutable_position());
+    copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
+    messages->push_back(makeEnvelopeLocked(channel, projected.header.stamp, payload));
+  } else if (channel == "state.vision.pose" && has_vision_pose_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::PoseEstimate payload;
+    payload.set_frame_id(latest_vision_pose_.header.frame_id);
+    copyVector(latest_vision_pose_.pose.position, payload.mutable_position());
+    copyQuaternion(latest_vision_pose_.pose.orientation, payload.mutable_orientation());
+    messages->push_back(makeEnvelopeLocked(channel, latest_vision_pose_.header.stamp, payload));
+  } else if ((channel == "state.mocap.velocity" && latest_mocap_velocity_) ||
+             (channel == "state.velocity" && latest_velocity_)) {
+    const auto &sample = channel == "state.velocity" ? latest_velocity_ : latest_mocap_velocity_;
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::VelocityEstimate payload;
+    payload.set_frame_id(sample->header.frame_id);
+    copyVector(sample->twist.linear, payload.mutable_linear());
+    copyVector(sample->twist.angular, payload.mutable_angular());
+    messages->push_back(makeEnvelopeLocked(channel, sample->header.stamp, payload));
+  } else if (channel == "state.mocap.speed" && latest_mocap_velocity_) {
+    const auto &sample = *latest_mocap_velocity_;
+    const double speed = std::hypot(std::hypot(sample.twist.linear.x, sample.twist.linear.y),
+                                    sample.twist.linear.z);
+    if (!std::isfinite(speed) || !shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::SpeedEstimate payload;
+    payload.set_frame_id(sample.header.frame_id);
+    payload.set_meters_per_second(speed);
+    messages->push_back(makeEnvelopeLocked(channel, sample.header.stamp, payload));
+  } else if (channel == "state.mocap.acceleration" && latest_mocap_acceleration_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::AccelerationEstimate payload;
+    payload.set_frame_id(latest_mocap_acceleration_->header.frame_id);
+    copyVector(latest_mocap_acceleration_->accel.linear, payload.mutable_linear());
+    copyVector(latest_mocap_acceleration_->accel.angular, payload.mutable_angular());
+    messages->push_back(makeEnvelopeLocked(channel, latest_mocap_acceleration_->header.stamp, payload));
+  } else if (channel == "state.localization.error" && has_local_position_ &&
+             has_mocap_position_ && local_position_frame_valid_) {
+    const double distance = positionDistanceMeters(local_position_, mocap_position_);
+    if (!std::isfinite(distance) || !shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::DistanceEstimate payload;
+    payload.set_frame_id(local_position_frame_id_);
+    payload.set_meters(distance);
+    messages->push_back(makeEnvelopeLocked(channel, localization_error_stamp_, payload));
+  } else if (channel == "state.imu" && latest_imu_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::ImuEstimate payload;
+    payload.set_frame_id(latest_imu_->header.frame_id);
+    copyQuaternion(latest_imu_->orientation, payload.mutable_orientation());
+    copyVector(latest_imu_->angular_velocity, payload.mutable_angular_velocity());
+    copyVector(latest_imu_->linear_acceleration, payload.mutable_linear_acceleration());
+    copyCovariance(latest_imu_->orientation_covariance, payload.mutable_orientation_covariance());
+    copyCovariance(latest_imu_->angular_velocity_covariance, payload.mutable_angular_velocity_covariance());
+    copyCovariance(latest_imu_->linear_acceleration_covariance, payload.mutable_linear_acceleration_covariance());
+    messages->push_back(makeEnvelopeLocked(channel, latest_imu_->header.stamp, payload));
+  } else if (channel == "state.power" && latest_power_.present) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::PowerStatus payload;
+    if (std::isfinite(latest_power_.percentage)) payload.set_percentage(latest_power_.percentage);
+    if (std::isfinite(latest_power_.voltage)) payload.set_voltage_v(latest_power_.voltage);
+    if (std::isfinite(latest_power_.current)) payload.set_current_a(latest_power_.current);
+    if (std::isfinite(latest_power_.temperature)) payload.set_temperature_c(latest_power_.temperature);
+    payload.set_charging(latest_power_.status == sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_CHARGING);
+    messages->push_back(makeEnvelopeLocked(channel, latest_power_.stamp, payload));
+  } else if (channel == "state.controller" && latest_controller_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::ControllerStatus payload;
+    payload.set_text(latest_controller_->data);
+    messages->push_back(makeEnvelopeLocked(channel, latest_controller_stamp_, payload));
+  } else if (channel == "setpoint.local" && has_local_setpoint_ && local_setpoint_frame_valid_) {
+    const auto &sample = local_setpoint_;
+    const auto fields = localSetpointValidFields(sample.type_mask);
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::aerial::v1::LocalTrajectorySetpoint payload;
+    payload.set_frame_id(sample.header.frame_id);
+    payload.set_coordinate_frame(localCoordinateFrame(sample.coordinate_frame));
+    payload.set_valid_fields(fields);
+    copySelectedVector(sample.position, payload.mutable_position(), fields, 0);
+    copySelectedVector(sample.velocity, payload.mutable_velocity(), fields, 3);
+    copySelectedVector(sample.acceleration_or_force, payload.mutable_acceleration_or_force(), fields, 6);
+    if ((fields & (1u << 9)) && std::isfinite(sample.yaw)) payload.set_yaw_rad(sample.yaw);
+    if ((fields & (1u << 10)) && std::isfinite(sample.yaw_rate)) payload.set_yaw_rate_rad_s(sample.yaw_rate);
+    payload.set_acceleration_is_force((sample.type_mask & mavros_msgs::PositionTarget::FORCE) != 0);
+    messages->push_back(makeEnvelopeLocked(channel, sample.header.stamp, payload));
+  } else if (channel == "setpoint.attitude" && has_attitude_setpoint_ && attitude_setpoint_frame_valid_) {
+    const auto &sample = attitude_setpoint_;
+    const auto fields = attitudeSetpointValidFields(sample.type_mask);
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::aerial::v1::AttitudeSetpoint payload;
+    payload.set_frame_id(sample.header.frame_id);
+    payload.set_valid_fields(fields);
+    if (fields & 1u) copyQuaternion(sample.orientation, payload.mutable_orientation());
+    copySelectedVector(sample.body_rate, payload.mutable_body_rate_rad_s(), fields, 1);
+    if ((fields & (1u << 4)) && std::isfinite(sample.thrust)) payload.set_thrust(sample.thrust);
+    messages->push_back(makeEnvelopeLocked(channel, sample.header.stamp, payload));
+  } else if (channel == "diagnostic.fcu-link" && latest_timesync_.present) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::aerial::v1::FcuLinkStatus payload;
+    payload.set_remote_timestamp_ns(static_cast<std::int64_t>(std::min<std::uint64_t>(
+        latest_timesync_.remote_timestamp_ns, static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))));
+    payload.set_observed_offset_ns(latest_timesync_.observed_offset_ns);
+    payload.set_estimated_offset_ns(latest_timesync_.estimated_offset_ns);
+    if (std::isfinite(latest_timesync_.round_trip_time_ms))
+      payload.set_round_trip_time_ms(latest_timesync_.round_trip_time_ms);
+    messages->push_back(makeEnvelopeLocked(channel, latest_timesync_.stamp, payload));
+  } else {
+    return;
+  }
+  recordOutputLocked(channel);
+}
+
+xgc::semantic::common::v1::VehicleHealth
+RobotRuntime::healthLocked(const ros::WallTime &now) const {
+  const double health_stale_after = channelStaleAfterSeconds(profile_id_, "state.health");
+  const bool health_state_fresh = has_mavros_state_ &&
+      sourceIsFresh(mavros_state_last_seen_, now, health_stale_after);
+  const bool health_extended_fresh = has_mavros_extended_state_ &&
+      sourceIsFresh(mavros_extended_state_last_seen_, now, health_stale_after);
+  xgc::semantic::common::v1::VehicleHealth payload;
+  const bool online = px4IsOnline(has_mavros_state_, health_state_fresh,
+                                  mavros_state_.connected);
+  payload.set_online(online);
+  setPositioningHealthLocked(now, &payload);
+  if (!has_mavros_state_) {
+    payload.set_summary("MAVROS state has not been observed");
+    addFault(&payload, "mavros.state.missing",
+             "MAVROS state has not been observed", 2);
+  } else if (!health_state_fresh) {
+    payload.set_summary("MAVROS state is stale");
+    addFault(&payload, "mavros.state.stale",
+             "MAVROS state exceeded its freshness limit", 2);
+  } else if (!mavros_state_.connected) {
+    payload.set_summary("MAVROS is disconnected from the autopilot");
+    addFault(&payload, "mavros.autopilot.disconnected",
+             "MAVROS is not connected to the autopilot", 2);
+  } else {
+    payload.set_summary("MAVROS telemetry is healthy");
+  }
+  if (!has_mavros_extended_state_) {
+    addFault(&payload, "mavros.extended-state.missing",
+             "MAVROS extended state has not been observed", 1);
+  } else if (!health_extended_fresh) {
+    addFault(&payload, "mavros.extended-state.stale",
+             "MAVROS extended state exceeded its freshness limit", 1);
+  }
+  if (online && payload.positioning().state() ==
+                    xgc::semantic::common::v1::PositioningHealth::
+                        POSITIONING_STATE_FROZEN) {
+    payload.set_summary("VRPN positioning data is frozen");
+  } else if (online && payload.positioning().state() ==
+                           xgc::semantic::common::v1::PositioningHealth::
+                               POSITIONING_STATE_TIMED_OUT) {
+    payload.set_summary("VRPN positioning is unavailable");
+  }
+  return payload;
+}
+
+std::pair<bool, std::string> RobotRuntime::DescribeHealth() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto health = healthLocked(ros::WallTime::now());
+  return {health.online(), health.summary()};
+}
+
 void RobotRuntime::emitPx4PeriodicLocked(
     const ros::WallTime &now,
     std::vector<xgc::robot::v1::RobotMessage> *messages) {
-  const double health_stale_after =
-      channelStaleAfterSeconds(profile_id_, "state.health");
-  const double flight_stale_after =
-      channelStaleAfterSeconds(profile_id_, "state.flight");
-  const bool health_state_fresh =
-      has_mavros_state_ &&
-      sourceIsFresh(mavros_state_last_seen_, now, health_stale_after);
-  const bool health_extended_fresh =
-      has_mavros_extended_state_ &&
-      sourceIsFresh(mavros_extended_state_last_seen_, now, health_stale_after);
-  const bool flight_state_fresh =
-      has_mavros_state_ &&
-      sourceIsFresh(mavros_state_last_seen_, now, flight_stale_after);
-  const bool flight_extended_fresh =
-      has_mavros_extended_state_ &&
-      sourceIsFresh(mavros_extended_state_last_seen_, now, flight_stale_after);
+  const bool needs_flight = status_demand_.count("state.flight") ||
+                            status_demand_.count("diagnostic.offboard-input");
+  bool flight_state_fresh = false, flight_extended_fresh = false;
+  if (needs_flight) {
+    const double flight_stale_after = channelStaleAfterSeconds(profile_id_, "state.flight");
+    flight_state_fresh = has_mavros_state_ &&
+        sourceIsFresh(mavros_state_last_seen_, now, flight_stale_after);
+    flight_extended_fresh = has_mavros_extended_state_ &&
+        sourceIsFresh(mavros_extended_state_last_seen_, now, flight_stale_after);
+  }
 
   if (channelEnabled("state.health") && shouldEmitLocked("state.health", now)) {
-    xgc::semantic::common::v1::VehicleHealth payload;
-    const bool online = px4IsOnline(has_mavros_state_, health_state_fresh,
-                                    mavros_state_.connected);
-    payload.set_online(online);
-    setPositioningHealthLocked(now, &payload);
-    if (!has_mavros_state_) {
-      payload.set_summary("MAVROS state has not been observed");
-      addFault(&payload, "mavros.state.missing",
-               "MAVROS state has not been observed", 2);
-    } else if (!health_state_fresh) {
-      payload.set_summary("MAVROS state is stale");
-      addFault(&payload, "mavros.state.stale",
-               "MAVROS state exceeded its freshness limit", 2);
-    } else if (!mavros_state_.connected) {
-      payload.set_summary("MAVROS is disconnected from the autopilot");
-      addFault(&payload, "mavros.autopilot.disconnected",
-               "MAVROS is not connected to the autopilot", 2);
-    } else {
-      payload.set_summary("MAVROS telemetry is healthy");
-    }
-    if (!has_mavros_extended_state_) {
-      addFault(&payload, "mavros.extended-state.missing",
-               "MAVROS extended state has not been observed", 1);
-    } else if (!health_extended_fresh) {
-      addFault(&payload, "mavros.extended-state.stale",
-               "MAVROS extended state exceeded its freshness limit", 1);
-    }
-    if (online && payload.positioning().state() ==
-                      xgc::semantic::common::v1::PositioningHealth::
-                          POSITIONING_STATE_FROZEN) {
-      payload.set_summary("VRPN positioning data is frozen");
-    } else if (online && payload.positioning().state() ==
-                             xgc::semantic::common::v1::PositioningHealth::
-                                 POSITIONING_STATE_TIMED_OUT) {
-      payload.set_summary("VRPN positioning is unavailable");
-    }
+    auto payload = healthLocked(now);
     const ros::Time stamp =
         has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();
     messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
@@ -2019,7 +2336,7 @@ void RobotRuntime::emitPx4PeriodicLocked(
 
   // An unobserved source has no flight state. Publishing default false/empty
   // fields would turn unknown ARM/MODE into fresh semantic measurements.
-  if (has_mavros_state_ && channelEnabled("state.flight") &&
+  if (has_mavros_state_ && flight_mode_valid_ && channelEnabled("state.flight") &&
       shouldEmitLocked("state.flight", now)) {
     xgc::semantic::aerial::v1::FlightStatus payload;
     payload.set_connected(flight_state_fresh && mavros_state_.connected);
@@ -2035,7 +2352,9 @@ void RobotRuntime::emitPx4PeriodicLocked(
     recordOutputLocked("state.flight");
   }
 
-  if (channelRequired("diagnostic.offboard-input")) {
+  if (forced_channel_.empty() && channelRequired("diagnostic.offboard-input") &&
+      (status_demand_.count("diagnostic.offboard-input") ||
+       status_demand_.count("diagnostic.stream-health"))) {
     recordSourceLocked("diagnostic.offboard-input", now);
   }
   if (channelEnabled("diagnostic.offboard-input") &&
@@ -2055,9 +2374,17 @@ void RobotRuntime::emitPx4PeriodicLocked(
     const std::string active_channel =
         use_local ? "setpoint.local"
                   : (attitude_seen ? "setpoint.attitude" : std::string());
-    const bool setpoint_valid =
-        use_local ? valid_local_setpoint_
-                  : (attitude_seen && valid_attitude_setpoint_);
+    bool setpoint_valid = false;
+    if (use_local) {
+      const auto fields = localSetpointValidFields(local_setpoint_.type_mask);
+      setpoint_valid =
+          localCoordinateFrame(local_setpoint_.coordinate_frame) !=
+              xgc::semantic::aerial::v1::LOCAL_COORDINATE_FRAME_UNSPECIFIED &&
+          fields != 0 && finiteLocalSetpoint(local_setpoint_, fields);
+    } else if (attitude_seen) {
+      const auto fields = attitudeSetpointValidFields(attitude_setpoint_.type_mask);
+      setpoint_valid = fields != 0 && finiteAttitudeSetpoint(attitude_setpoint_, fields);
+    }
     const auto active_it = use_local ? local_it : attitude_it;
     const bool setpoint_fresh =
         has_setpoint && sourceIsFresh(active_it->second.last_seen, now,

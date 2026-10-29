@@ -18,6 +18,7 @@ the packages have to be on LD_LIBRARY_PATH, as setup.bash makes them. A sourced
 ROS environment (rospy, rosgraph, roscore, rosnode) is required.
 """
 
+import base64
 import http.client
 import json
 import os
@@ -29,6 +30,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -333,9 +335,135 @@ class Roscore:
 class Client:
     """The gRPC client binary, one RPC per call, JSON in and out."""
 
-    def __init__(self, socket_path):
+    def __init__(self, socket_path, process_owner=None):
         self.socket_path = str(socket_path)
         self.binary = client_binary()
+        self.process_owner = process_owner or b"\0" * 32
+        self.controller_grant = b"g" * 32
+        self.controller_open_id = b"o" * 16
+        self.controller_generation = 1
+        self.controller_installed = False
+        self.control_watch = None
+        self.controlled = {}
+        self.watches = []
+        self.heartbeat_interval_ms = 0
+        self.renew_stop = threading.Event()
+        self.renew_thread = None
+        self.renew_lock = threading.Lock()
+        self.last_renew = 0.0
+
+    @staticmethod
+    def _encoded(value):
+        return base64.b64encode(value).decode()
+
+    def ensure_controller(self):
+        """Install the test controller and keep its required control stream open."""
+        if self.controller_installed:
+            return
+        health = self.health()
+        instance_id = health.get("response", {}).get("instance_id")
+        if health["status"]["code"] != 0 or not instance_id:
+            raise AssertionError("controller instance discovery failed: {}".format(health))
+        installed = self.run("install-controller", stdin={
+            "process_owner": self._encoded(self.process_owner),
+            "generation": self.controller_generation,
+            "open_id": self._encoded(self.controller_open_id),
+            "controller_grant": self._encoded(self.controller_grant),
+            "binding": {"provider_instance_id": instance_id,
+                        "core_id": "integration-core", "core_boot_id": "integration-boot"},
+        })
+        if installed["status"]["code"] != 0:
+            raise AssertionError("controller installation failed: {}".format(installed))
+        self.control_watch = subprocess.Popen(
+            [str(self.binary), "--socket", self.socket_path, "--deadline-ms", "600000",
+             "control-watch", "300"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.control_watch.stdin.write(json.dumps({
+            "control": True,
+            "owner": {"controller_grant": self._encoded(self.controller_grant),
+                      "generation": self.controller_generation,
+                      "open_id": self._encoded(self.controller_open_id)},
+        }))
+        self.control_watch.stdin.close()
+        receipt = self.control_watch.stdout.readline()
+        if not receipt:
+            error = self.control_watch.stderr.read()
+            raise AssertionError("control stream did not open: " + error)
+        frame = json.loads(receipt)
+        if (int(frame.get("generation", 0)) != self.controller_generation or
+                base64.b64decode(frame.get("open_id", "")) != self.controller_open_id):
+            raise AssertionError("control stream receipt differs: {}".format(frame))
+        self.controller_installed = True
+
+    def acquire(self, identity):
+        # AcquireControl is idempotent for a member this controller already
+        # holds; a re-applied member is a new native member and must be
+        # admitted again.
+        reply = self.run("acquire-control", stdin={
+            "controller_grant": self._encoded(self.controller_grant),
+            "identity": identity,
+            "generation": self.controller_generation,
+        })
+        if reply["status"]["code"] != 0:
+            raise AssertionError("control acquisition failed: {}".format(reply))
+        self.controlled[identity["robot_id"]] = identity
+        interval = int(reply.get("response", {}).get("heartbeat_interval_ms", 0))
+        self.heartbeat_interval_ms = max(self.heartbeat_interval_ms, interval)
+        self.start_renewal()
+
+    def core_present(self):
+        """Core holds the optional status stream; its death ends the renewals."""
+        return any(watch.process.poll() is None for watch in self.watches)
+
+    def start_renewal(self):
+        if self.heartbeat_interval_ms <= 0 or self.renew_thread is not None:
+            return
+        self.renew_stop.clear()
+
+        def loop():
+            while not self.renew_stop.is_set():
+                if self.core_present() and self.controlled:
+                    try:
+                        self.renew()
+                    except Exception:
+                        pass
+                if self.renew_stop.wait(self.heartbeat_interval_ms / 1000.0):
+                    return
+
+        self.renew_thread = threading.Thread(target=loop, daemon=True)
+        self.renew_thread.start()
+
+    def renew(self):
+        with self.renew_lock:
+            if self.last_renew and time.monotonic() - self.last_renew < 0.1:
+                return
+            self.last_renew = time.monotonic()
+            reply = self.run("renew-control", stdin={
+                "controller_grant": self._encoded(self.controller_grant),
+                "status_generation": self.controller_generation,
+                "status_open_id": self._encoded(self.controller_open_id),
+                "members": [{"identity": identity, "generation": self.controller_generation}
+                            for identity in self.controlled.values()],
+            })
+        if reply["status"]["code"] != 0:
+            raise AssertionError("control renewal failed: {}".format(reply))
+
+    def close(self):
+        self.renew_stop.set()
+        if self.renew_thread is not None:
+            self.renew_thread.join(timeout=5)
+            self.renew_thread = None
+        if self.control_watch is not None and self.control_watch.poll() is None:
+            self.control_watch.terminate()
+            try:
+                self.control_watch.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.control_watch.kill()
+                self.control_watch.wait()
+            self.control_watch.stdout.close()
+            self.control_watch.stderr.close()
+            self.control_watch = None
 
     def run(self, *arguments, stdin=None, timeout=60, deadline_ms=10000):
         out = subprocess.run(
@@ -354,8 +482,15 @@ class Client:
         return self.run("health")
 
     def apply(self, members, deadline_ms=10000):
-        return self.run("apply", stdin={"members": members}, deadline_ms=deadline_ms,
-                        timeout=deadline_ms / 1000.0 + 30)
+        if self.health().get("response", {}).get("serving"):
+            self.ensure_controller()
+        reply = self.run("apply", stdin={"members": members}, deadline_ms=deadline_ms,
+                         timeout=deadline_ms / 1000.0 + 30)
+        if reply["status"]["code"] == 0:
+            for member in reply.get("response", {}).get("members", []):
+                if "error" not in member and member.get("identity"):
+                    self.acquire(member["identity"])
+        return reply
 
     def remove(self, identities):
         return self.run("remove", stdin={"members": identities})
@@ -370,14 +505,22 @@ class Client:
         }
         if input_payload is not None:
             operation["input"] = input_payload
-        return self.run("execute", stdin={"identity": identity, "operation": operation})
+        request = {"identity": identity, "operation": operation}
+        if identity.get("robot_id") in self.controlled:
+            request["control_generation"] = self.controller_generation
+            request["controller_grant"] = self._encoded(self.controller_grant)
+            if self.core_present() and self.heartbeat_interval_ms > 0:
+                self.renew()
+        return self.run("execute", stdin=request)
 
     def shutdown(self):
         return self.run("shutdown", deadline_ms=30000, timeout=60)
 
     def watch(self, seconds):
         """Starts a status stream; frames arrive through next_frames()."""
-        return Watch(self, seconds)
+        watch = Watch(self, seconds)
+        self.watches.append(watch)
+        return watch
 
 
 class Watch:
@@ -442,6 +585,7 @@ class Server:
         self.executable = executable or devel_file(PX4 if provider == PX4_PROVIDER else UGV)
         self.extra = list(extra)
         self.process = None
+        self.process_owner = b"\0" * 32
 
     def command(self):
         return [
@@ -457,11 +601,24 @@ class Server:
         ]
 
     def start(self):
-        with open(self.log, "ab") as log:
-            self.process = subprocess.Popen(
-                self.command(), env=self.roscore.environment(), stdout=log, stderr=log,
-                start_new_session=True,
-            )
+        # The server admits only the actual private process owner. The test
+        # fixture supplies the same 32-byte owned descriptor a process owner
+        # writes before the native server starts.
+        owner_read, owner_write = os.pipe()
+        try:
+            os.write(owner_write, self.process_owner)
+        finally:
+            os.close(owner_write)
+        environment = self.roscore.environment()
+        environment["XGC_PROCESS_OWNER_FD"] = str(owner_read)
+        try:
+            with open(self.log, "ab") as log:
+                self.process = subprocess.Popen(
+                    self.command(), env=environment, stdout=log, stderr=log,
+                    start_new_session=True, pass_fds=(owner_read,),
+                )
+        finally:
+            os.close(owner_read)
         self.workspace.processes.append(self)
         wait_until(lambda: self.socket.exists() or self.process.poll() is not None, 20, 0.01,
                    "the server socket")
@@ -469,7 +626,7 @@ class Server:
         return self
 
     def connect(self):
-        self.client = Client(self.socket)
+        self.client = Client(self.socket, self.process_owner)
 
     @property
     def node(self):
@@ -481,6 +638,8 @@ class Server:
         return self.process.pid
 
     def cleanup(self):
+        if getattr(self, "client", None) is not None:
+            self.client.close()
         if self.process is not None and self.process.poll() is None:
             self.process.kill()
             self.process.wait()

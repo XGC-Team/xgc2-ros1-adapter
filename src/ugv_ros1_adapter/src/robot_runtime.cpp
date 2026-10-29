@@ -960,27 +960,49 @@ RobotRuntime::RobotRuntime(const UgvVariant &variant,
 RobotRuntime::~RobotRuntime() { Stop(); }
 
 RobotRuntime::CallbackGuard::CallbackGuard(RobotRuntime *runtime)
-    : runtime_(runtime), active_(runtime_ != nullptr && runtime_->beginCallback()) {}
+    : runtime_(runtime), active_(runtime_ != nullptr && runtime_->beginCallback(&epoch_)) {}
 
 RobotRuntime::CallbackGuard::~CallbackGuard() {
   if (active_)
-    runtime_->endCallback();
+    runtime_->endCallback(epoch_);
 }
 
-bool RobotRuntime::beginCallback() {
+bool RobotRuntime::beginCallback(std::size_t *epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_)
     return false;
+  *epoch = callback_epoch_;
+  ++active_callback_epochs_[*epoch];
   ++active_callbacks_;
   return true;
 }
 
-void RobotRuntime::endCallback() {
+void RobotRuntime::endCallback(std::size_t epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
+  --active_callback_epochs_[epoch];
   if (active_callbacks_ > 0)
     --active_callbacks_;
-  if (active_callbacks_ == 0)
+  if (active_callback_epochs_[epoch] == 0)
     callbacks_idle_.notify_all();
+}
+
+RobotRuntime::StatusUpdateGuard::StatusUpdateGuard(RobotRuntime *runtime)
+    : runtime_(runtime), active_(runtime_ != nullptr && runtime_->beginStatusUpdate()) {}
+
+RobotRuntime::StatusUpdateGuard::~StatusUpdateGuard() {
+  if (active_) runtime_->endStatusUpdate();
+}
+
+bool RobotRuntime::beginStatusUpdate() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (stopping_) return false;
+  ++active_status_updates_;
+  return true;
+}
+
+void RobotRuntime::endStatusUpdate() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (--active_status_updates_ == 0) callbacks_idle_.notify_all();
 }
 
 void RobotRuntime::Stop() {
@@ -1006,7 +1028,7 @@ void RobotRuntime::Stop() {
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
-    callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0; });
+    callbacks_idle_.wait(lock, [this] { return active_callbacks_ == 0 && active_status_updates_ == 0; });
   }
   canonical_pose_publisher_.shutdown();
   canonical_velocity_publisher_.shutdown();
@@ -1219,13 +1241,16 @@ bool RobotRuntime::install(std::string *error) {
 
 bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
                                     const ros::WallTime &now) {
+  if (!status_demand_.count(channel_id) ||
+      (!forced_channel_.empty() && forced_channel_ != channel_id))
+    return false;
   contract::ChannelMetadata metadata{};
   if (!variant_.contract.channelMetadata(profile_id_, channel_id, &metadata) ||
       metadata.output_rate_hz <= 0.0) {
     return false;
   }
   auto &last = last_output_[channel_id];
-  if (!last.isZero() && now >= last &&
+  if (forced_channel_.empty() && !last.isZero() && now >= last &&
       (now - last).toSec() < (1.0 / metadata.output_rate_hz)) {
     return false;
   }
@@ -1271,8 +1296,14 @@ xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
                                       ? xgc::v1::CLOCK_DOMAIN_SIMULATION
                                       : xgc::v1::CLOCK_DOMAIN_NATIVE;
   }
-  context.observed_unix_nanos =
-      static_cast<std::int64_t>(ros::WallTime::now().toNSec());
+  ros::WallTime observed = ros::WallTime::now();
+  if (!forced_channel_.empty() && channel_id != "state.health" &&
+      channel_id != "diagnostic.stream-health") {
+    const auto source = sources_.find(channel_id);
+    if (source != sources_.end() && !source->second.last_seen.isZero())
+      observed = source->second.last_seen;
+  }
+  context.observed_unix_nanos = static_cast<std::int64_t>(observed.toNSec());
 
   xgc::robot::v1::RobotMessage envelope;
   std::string error;
@@ -1334,17 +1365,26 @@ void RobotRuntime::poseCallback(
   const ros::WallTime now = ros::WallTime::now();
   geometry_msgs::PoseStamped projected;
   if (!xgc2_ros1_robot_adapter::projectLocalizationPose(
-          *message, localization_, &projected))
+          *message, localization_, &projected)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_pose_.reset();
+    has_vrpn_orientation_ = false;
     return;
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (channelEnabled("vrpn.position") &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_pose_ = message;
+    else
+      latest_pose_.reset();
     vrpn_orientation_ = projected.pose.orientation;
     has_vrpn_orientation_ = true;
     positioning_health_.recordPose(
         now.toSec(), projected.pose.position.x, projected.pose.position.y,
         projected.pose.position.z);
     recordSourceLocked("vrpn.position", now);
-    if (channelEnabled("vrpn.position") &&
+    if (latest_pose_ && channelEnabled("vrpn.position") &&
         shouldEmitLocked("vrpn.position", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(projected.header.frame_id);
@@ -1355,7 +1395,7 @@ void RobotRuntime::poseCallback(
       output.push_back(makeEnvelopeLocked("vrpn.position",
                                           projected.header.stamp, payload));
       recordOutputLocked("vrpn.position");
-    } else if (channelEnabled("vrpn.position")) {
+    } else if (status_demand_.count("vrpn.position") && channelEnabled("vrpn.position")) {
       ++sources_["vrpn.position"].dropped_samples;
     }
   }
@@ -1373,6 +1413,8 @@ void RobotRuntime::commandVelocityCallback(
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (channelEnabled(command_velocity_channel))
+      latest_command_velocity_ = message;
     recordSourceLocked(command_velocity_channel, now);
     if (channelEnabled(command_velocity_channel) &&
         shouldEmitLocked(command_velocity_channel, now)) {
@@ -1382,7 +1424,7 @@ void RobotRuntime::commandVelocityCallback(
       output.push_back(
           makeEnvelopeLocked(command_velocity_channel, ros::Time(), payload));
       recordOutputLocked(command_velocity_channel);
-    } else if (channelEnabled(command_velocity_channel)) {
+    } else if (status_demand_.count(command_velocity_channel) && channelEnabled(command_velocity_channel)) {
       ++sources_[command_velocity_channel].dropped_samples;
     }
   }
@@ -1396,16 +1438,30 @@ void RobotRuntime::vrpnVelocityCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message))
+  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_velocity_.reset();
+    has_velocity_ = false;
     return;
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (channelEnabled("vrpn.speed")) {
+      latest_velocity_value_ = message->twist;
+      latest_velocity_stamp_ = message->header.stamp;
+      has_velocity_ = true;
+    }
+    if (channelEnabled("vrpn.velocity") &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_velocity_ = message;
+    else
+      latest_velocity_.reset();
     if (required_channels_.count("vrpn.velocity") != 0u)
       recordSourceLocked("vrpn.velocity", now);
     if (required_channels_.count("vrpn.speed") != 0u)
       recordSourceLocked("vrpn.speed", now);
 
-    if (channelEnabled("vrpn.velocity") &&
+    if (latest_velocity_ && channelEnabled("vrpn.velocity") &&
         shouldEmitLocked("vrpn.velocity", now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1414,29 +1470,27 @@ void RobotRuntime::vrpnVelocityCallback(
       output.push_back(makeEnvelopeLocked("vrpn.velocity",
                                           message->header.stamp, payload));
       recordOutputLocked("vrpn.velocity");
-    } else if (channelEnabled("vrpn.velocity")) {
+    } else if (status_demand_.count("vrpn.velocity") && channelEnabled("vrpn.velocity")) {
       ++sources_["vrpn.velocity"].dropped_samples;
     }
 
-    const double speed = has_vrpn_orientation_ &&
-                                 sourceFreshLocked("vrpn.position", now)
-                             ? vrpnForwardSpeedMetersPerSecond(
-                                   message->twist.linear.x,
-                                   message->twist.linear.y,
-                                   message->twist.linear.z,
-                                   vrpn_orientation_.x, vrpn_orientation_.y,
-                                   vrpn_orientation_.z, vrpn_orientation_.w)
-                             : std::numeric_limits<double>::quiet_NaN();
-    if (channelEnabled("vrpn.speed") && std::isfinite(speed) &&
-        shouldEmitLocked("vrpn.speed", now)) {
-      xgc::semantic::common::v1::SpeedEstimate payload;
-      payload.set_frame_id(mocap_rigid_body_);
-      payload.set_meters_per_second(speed);
-      output.push_back(makeEnvelopeLocked("vrpn.speed", message->header.stamp,
-                                          payload));
-      recordOutputLocked("vrpn.speed");
-    } else if (channelEnabled("vrpn.speed")) {
-      ++sources_["vrpn.speed"].dropped_samples;
+    if (status_demand_.count("vrpn.speed") && channelEnabled("vrpn.speed")) {
+      const double speed = has_vrpn_orientation_ && sourceFreshLocked("vrpn.position", now)
+                               ? vrpnForwardSpeedMetersPerSecond(
+                                     message->twist.linear.x, message->twist.linear.y,
+                                     message->twist.linear.z, vrpn_orientation_.x,
+                                     vrpn_orientation_.y, vrpn_orientation_.z,
+                                     vrpn_orientation_.w)
+                               : std::numeric_limits<double>::quiet_NaN();
+      if (std::isfinite(speed) && shouldEmitLocked("vrpn.speed", now)) {
+        xgc::semantic::common::v1::SpeedEstimate payload;
+        payload.set_frame_id(mocap_rigid_body_);
+        payload.set_meters_per_second(speed);
+        output.push_back(makeEnvelopeLocked("vrpn.speed", message->header.stamp, payload));
+        recordOutputLocked("vrpn.speed");
+      } else {
+        ++sources_["vrpn.speed"].dropped_samples;
+      }
     }
   }
   if (canonical_velocity_publisher_) canonical_velocity_publisher_.publish(*message);
@@ -1451,18 +1505,26 @@ void RobotRuntime::vrpnAccelerationCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  if (!xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message))
+  if (!xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_acceleration_.reset();
     return;
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked(vrpn_acceleration_channel, now);
     if (channelEnabled(vrpn_acceleration_channel) &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_acceleration_ = message;
+    else
+      latest_acceleration_.reset();
+    recordSourceLocked(vrpn_acceleration_channel, now);
+    if (latest_acceleration_ && channelEnabled(vrpn_acceleration_channel) &&
         shouldEmitLocked(vrpn_acceleration_channel, now)) {
       output.push_back(makeEnvelopeLocked(
           vrpn_acceleration_channel, message->header.stamp,
           vrpnAccelerationEstimate(*message)));
       recordOutputLocked(vrpn_acceleration_channel);
-    } else if (channelEnabled(vrpn_acceleration_channel)) {
+    } else if (status_demand_.count(vrpn_acceleration_channel) && channelEnabled(vrpn_acceleration_channel)) {
       ++sources_[vrpn_acceleration_channel].dropped_samples;
     }
   }
@@ -1478,8 +1540,13 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
   const ros::WallTime now = ros::WallTime::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (channelEnabled("state.imu") &&
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+      latest_imu_ = message;
+    else
+      latest_imu_.reset();
     recordSourceLocked("state.imu", now);
-    if (channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
+    if (latest_imu_ && channelEnabled("state.imu") && shouldEmitLocked("state.imu", now)) {
       xgc::semantic::common::v1::ImuEstimate payload;
       payload.set_frame_id(message->header.frame_id);
       copyQuaternion(message->orientation, payload.mutable_orientation());
@@ -1495,7 +1562,7 @@ void RobotRuntime::imuCallback(const sensor_msgs::Imu::ConstPtr &message) {
       output.push_back(makeEnvelopeLocked("state.imu",
                                           message->header.stamp, payload));
       recordOutputLocked("state.imu");
-    } else if (channelEnabled("state.imu")) {
+    } else if (status_demand_.count("state.imu") && channelEnabled("state.imu")) {
       ++sources_["state.imu"].dropped_samples;
     }
   }
@@ -1515,9 +1582,16 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
     recordSourceLocked("state.power", now);
     double battery_voltage = voltage;
     bool estimate_valid = true;
-    if (variant_.filter_battery)
+    if (channelEnabled("state.power") && variant_.filter_battery)
       estimate_valid = battery_voltage_filter_.update(
           voltage, ros::SteadyTime::now().toSec(), &battery_voltage);
+    if (channelEnabled("state.power")) {
+      has_power_ = true;
+      latest_power_voltage_ = voltage;
+      latest_power_filtered_ = battery_voltage;
+      latest_power_valid_ = estimate_valid;
+      latest_power_stamp_ = stamp;
+    }
     if (channelEnabled("state.power") && shouldEmitLocked("state.power", now)) {
       xgc::semantic::common::v1::PowerStatus payload;
       payload.set_percentage_state(
@@ -1535,7 +1609,7 @@ void RobotRuntime::voltageCallback(const std_msgs::Float32::ConstPtr &message) {
       }
       output.push_back(makeEnvelopeLocked("state.power", stamp, payload));
       recordOutputLocked("state.power");
-    } else if (channelEnabled("state.power")) {
+    } else if (status_demand_.count("state.power") && channelEnabled("state.power")) {
       ++sources_["state.power"].dropped_samples;
     }
   }
@@ -1571,7 +1645,7 @@ void RobotRuntime::chassisStateCallback(
           static_cast<std::uint32_t>(parsed.control_mode));
       output.push_back(makeEnvelopeLocked("state.chassis", stamp, payload));
       recordOutputLocked("state.chassis");
-    } else if (channelEnabled("state.chassis")) {
+    } else if (status_demand_.count("state.chassis") && channelEnabled("state.chassis")) {
       ++sources_["state.chassis"].dropped_samples;
     }
   }
@@ -1651,6 +1725,13 @@ void RobotRuntime::noteResetResultLocked(
     std::vector<xgc::robot::v1::RobotMessage> *output) {
   if (message.session == 0u || message.outcome == 0u)
     return;
+  if (message.detail.size() > xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
+    for (auto &slot : reset_results_)
+      if (slot.present && slot.session == message.session)
+        slot = {};
+    publishResetLocked(now, output);
+    return;
+  }
   auto fill = [&](ResetResultSlot *slot) {
     slot->present = true;
     slot->session = message.session;
@@ -1712,6 +1793,8 @@ void RobotRuntime::publishResetLocked(
     std::vector<xgc::robot::v1::RobotMessage> *output) {
   static const std::string channel = "state.reset";
   if (!reset_session_.present || !channelEnabled(channel) ||
+      !status_demand_.count(channel) ||
+      (!forced_channel_.empty() && forced_channel_ != channel) ||
       !sourceFreshLocked(channel, now))
     return;
   const ResetResultSlot *matched_slot = nullptr;
@@ -1781,14 +1864,21 @@ void RobotRuntime::controllerStatusCallback(
   const ros::Time stamp = ros::Time::now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    recordSourceLocked(state_controller_channel, now);
     if (channelEnabled(state_controller_channel) &&
+        message->data.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
+      latest_controller_ = message;
+      latest_controller_stamp_ = stamp;
+    } else {
+      latest_controller_.reset();
+    }
+    recordSourceLocked(state_controller_channel, now);
+    if (latest_controller_ && channelEnabled(state_controller_channel) &&
         shouldEmitLocked(state_controller_channel, now)) {
       xgc::semantic::common::v1::ControllerStatus payload;
       payload.set_text(message->data);
       output.push_back(makeEnvelopeLocked(state_controller_channel, stamp, payload));
       recordOutputLocked(state_controller_channel);
-    } else if (channelEnabled(state_controller_channel)) {
+    } else if (status_demand_.count(state_controller_channel) && channelEnabled(state_controller_channel)) {
       ++sources_[state_controller_channel].dropped_samples;
     }
   }
@@ -1808,13 +1898,142 @@ void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
   emit(std::move(messages));
 }
 
-void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
-                                    std::vector<xgc::robot::v1::RobotMessage> *messages) {
-  if (!channelEnabled("state.health") ||
-      !shouldEmitLocked("state.health", now)) {
+void RobotRuntime::SetStatusDemand(const std::set<std::string> &channels) {
+  StatusUpdateGuard update(this);
+  if (!update) return;
+  std::vector<xgc::robot::v1::RobotMessage> messages;
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (stopping_)
+    return;
+  std::vector<std::string> added;
+  bool removed = false;
+  for (const auto &channel : channels)
+    if (channelEnabled(channel) && !status_demand_.count(channel))
+      added.push_back(channel);
+  for (const auto &channel : status_demand_)
+    if (!channels.count(channel))
+      removed = true;
+  status_demand_ = channels;
+  if (removed) {
+    const auto old_epoch = callback_epoch_;
+    callback_epoch_ ^= 1u;
+    callbacks_idle_.wait(lock, [&] { return active_callback_epochs_[old_epoch] == 0; });
+    if (stopping_)
+      return;
+  }
+  try {
+    const auto now = ros::WallTime::now();
+    for (const auto &channel : added) {
+      forced_channel_ = channel;
+      emitSnapshotLocked(channel, now, &messages);
+    }
+    forced_channel_.clear();
+  } catch (...) {
+    forced_channel_.clear();
+    throw;
+  }
+  lock.unlock();
+  emit(std::move(messages));
+}
+
+void RobotRuntime::emitSnapshotLocked(
+    const std::string &channel, const ros::WallTime &now,
+    std::vector<xgc::robot::v1::RobotMessage> *messages) {
+  if (channel == "state.health") {
+    emitHealthLocked(now, messages);
     return;
   }
+  if (channel == "diagnostic.stream-health") {
+    emitStreamHealthLocked(now, messages);
+    return;
+  }
+  if (channel == "state.reset") {
+    publishResetLocked(now, messages);
+    return;
+  }
+  if (channel == "vrpn.position" && latest_pose_) {
+    geometry_msgs::PoseStamped projected;
+    if (!xgc2_ros1_robot_adapter::projectLocalizationPose(*latest_pose_, localization_, &projected) ||
+        !shouldEmitLocked(channel, now))
+      return;
+    xgc::semantic::common::v1::PoseEstimate payload;
+    payload.set_frame_id(projected.header.frame_id);
+    payload.set_child_frame_id(mocap_rigid_body_);
+    copyVector(projected.pose.position, payload.mutable_position());
+    copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
+    messages->push_back(makeEnvelopeLocked(channel, projected.header.stamp, payload));
+  } else if (channel == "command.velocity" && latest_command_velocity_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::VelocityEstimate payload;
+    copyVector(latest_command_velocity_->linear, payload.mutable_linear());
+    copyVector(latest_command_velocity_->angular, payload.mutable_angular());
+    messages->push_back(makeEnvelopeLocked(channel, ros::Time(), payload));
+  } else if (channel == "vrpn.velocity" && latest_velocity_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::VelocityEstimate payload;
+    payload.set_frame_id(latest_velocity_->header.frame_id);
+    copyVector(latest_velocity_->twist.linear, payload.mutable_linear());
+    copyVector(latest_velocity_->twist.angular, payload.mutable_angular());
+    messages->push_back(makeEnvelopeLocked(channel, latest_velocity_->header.stamp, payload));
+  } else if (channel == "vrpn.speed" && has_velocity_ && has_vrpn_orientation_ &&
+             sourceFreshLocked("vrpn.position", now)) {
+    const double speed = vrpnForwardSpeedMetersPerSecond(
+        latest_velocity_value_.linear.x, latest_velocity_value_.linear.y,
+        latest_velocity_value_.linear.z, vrpn_orientation_.x, vrpn_orientation_.y,
+        vrpn_orientation_.z, vrpn_orientation_.w);
+    if (!std::isfinite(speed) || !shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::SpeedEstimate payload;
+    payload.set_frame_id(mocap_rigid_body_);
+    payload.set_meters_per_second(speed);
+    messages->push_back(makeEnvelopeLocked(channel, latest_velocity_stamp_, payload));
+  } else if (channel == "vrpn.acceleration" && latest_acceleration_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    messages->push_back(makeEnvelopeLocked(channel, latest_acceleration_->header.stamp,
+                                            vrpnAccelerationEstimate(*latest_acceleration_)));
+  } else if (channel == "state.imu" && latest_imu_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::ImuEstimate payload;
+    payload.set_frame_id(latest_imu_->header.frame_id);
+    copyQuaternion(latest_imu_->orientation, payload.mutable_orientation());
+    copyVector(latest_imu_->angular_velocity, payload.mutable_angular_velocity());
+    copyVector(latest_imu_->linear_acceleration, payload.mutable_linear_acceleration());
+    copyCovariance(latest_imu_->orientation_covariance, payload.mutable_orientation_covariance());
+    copyCovariance(latest_imu_->angular_velocity_covariance, payload.mutable_angular_velocity_covariance());
+    copyCovariance(latest_imu_->linear_acceleration_covariance, payload.mutable_linear_acceleration_covariance());
+    messages->push_back(makeEnvelopeLocked(channel, latest_imu_->header.stamp, payload));
+  } else if (channel == "state.power" && has_power_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::PowerStatus payload;
+    payload.set_percentage_state(xgc::semantic::common::v1::PowerStatus::PERCENTAGE_STATE_UNAVAILABLE);
+    if (std::isfinite(latest_power_voltage_)) {
+      payload.set_voltage_v(latest_power_voltage_);
+      double percentage = 0;
+      if (latest_power_valid_ && xgc2_ros1_robot_adapter::batteryPercentage(
+              battery_curve_, latest_power_filtered_, &percentage)) {
+        payload.set_percentage(percentage);
+        payload.set_percentage_state(xgc::semantic::common::v1::PowerStatus::PERCENTAGE_STATE_AVAILABLE);
+      }
+    }
+    messages->push_back(makeEnvelopeLocked(channel, latest_power_stamp_, payload));
+  } else if (channel == "state.chassis" && has_chassis_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::ground::v1::ChassisStatus payload;
+    payload.set_control_mode(chassisControlMode(static_cast<std::uint8_t>(chassis_status_.control_mode)));
+    payload.set_native_control_mode(static_cast<std::uint32_t>(chassis_status_.control_mode));
+    messages->push_back(makeEnvelopeLocked(channel, status_stamp_, payload));
+  } else if (channel == "state.controller" && latest_controller_) {
+    if (!shouldEmitLocked(channel, now)) return;
+    xgc::semantic::common::v1::ControllerStatus payload;
+    payload.set_text(latest_controller_->data);
+    messages->push_back(makeEnvelopeLocked(channel, latest_controller_stamp_, payload));
+  } else {
+    return;
+  }
+  recordOutputLocked(channel);
+}
 
+xgc::semantic::common::v1::VehicleHealth
+RobotRuntime::healthLocked(const ros::WallTime &now) const {
   const std::string name = variant_.short_name;
   const std::string code_prefix = [&] {
     std::string lower = name;
@@ -1876,6 +2095,24 @@ void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
     payload.set_summary(name + (fresh ? " on-board telemetry is healthy"
                                       : " on-board telemetry is missing or stale"));
   }
+  return payload;
+}
+
+std::pair<bool, std::string> RobotRuntime::DescribeHealth() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto health = healthLocked(ros::WallTime::now());
+  return {health.online(), health.summary()};
+}
+
+void RobotRuntime::emitHealthLocked(const ros::WallTime &now,
+                                    std::vector<xgc::robot::v1::RobotMessage> *messages) {
+  if (!channelEnabled("state.health") ||
+      !shouldEmitLocked("state.health", now)) {
+    return;
+  }
+
+  auto payload = healthLocked(now);
+  const bool chassis_reporting = variant_.health == HealthSource::kChassisState;
   // The chassis report is stamped by the vehicle's own state word; an IMU-only
   // vehicle has no source time of its own for the health fact.
   const ros::Time stamp =

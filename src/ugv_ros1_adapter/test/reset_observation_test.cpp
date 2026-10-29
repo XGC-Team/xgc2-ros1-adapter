@@ -44,6 +44,7 @@ public:
           messages_.push_back(std::move(message));
         }));
     std::lock_guard<std::mutex> lock(runtime_->mutex_);
+    runtime_->status_demand_ = {"state.reset", "diagnostic.stream-health"};
     for (std::size_t index = 0u; index < diagnostic.observes_count; ++index) {
       const std::string channel_id(diagnostic.observes[index]);
       contract::ChannelMetadata channel{};
