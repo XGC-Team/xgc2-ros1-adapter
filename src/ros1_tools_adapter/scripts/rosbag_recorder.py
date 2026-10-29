@@ -922,6 +922,26 @@ def move_closed_without_replacement(source, destination):
     finally:
         os.close(directory_fd)
 
+def inventory_partial_files(document):
+    # Retained `.bag.active` bytes are evidence of an incomplete native
+    # finalization; every failure path reports them instead of dropping them.
+    document.setdefault("bagFiles", [])
+    known = {entry.get("name") for entry in document["bagFiles"]}
+    try:
+        paths = recorded_paths()
+    except OSError:
+        return
+    for path in paths:
+        name = os.path.basename(path)
+        if not name.endswith(".bag.active") or name in known:
+            continue
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode):
+            document["bagFiles"].append({"name": name, "state": "partial", "sizeBytes": info.st_size})
+
 def finalize_archive_files(document):
     def issued_bag_name(index, count):
         # One closed volume is the record. A part suffix would imply another volume exists.
@@ -976,6 +996,11 @@ def finalize_archive_files(document):
             if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino, info.st_size) != expected:
                 raise RuntimeError("finalized bag identity changed")
             by_index[index] = {"id": "bag." + recording_id + "." + str(index), "name": final_name, "state": "finalized", "sizeBytes": info.st_size}
+        # A successful capture needs one verified issued bag. An empty-topic
+        # bag still satisfies this because rosbag writes a closed volume; a
+        # signal request that issued nothing does not.
+        if not by_index:
+            raise RuntimeError("no closed bag volume was issued")
         expected_names = {entry["name"] for entry in by_index.values()}
         for path in recorded_paths():
             name = os.path.basename(path)
@@ -990,8 +1015,10 @@ def finalize_archive_files(document):
         document["archiveFinalizationState"] = "finalized"
         document.pop("archiveFinalizationError", None)
     except Exception as exc:
+        document["status"] = "failed"
         document["archiveFinalizationState"] = "failed"
         document["archiveFinalizationError"] = str(exc)
+        inventory_partial_files(document)
         write_manifest(document)
         raise
     write_manifest(document)
@@ -1006,7 +1033,8 @@ if naming_version == 1:
             raise SystemExit("existing ROS bag manifest belongs to another record")
         if existing.get("recordingEndedAt") and existing.get("status") in ("stopped", "completed", "failed") and existing.get("archiveFinalizationState") in ("pending", "failed"):
             finalize_archive_files(existing)
-            raise SystemExit(0 if existing.get("terminationSignal") is not None else existing.get("recorderExitCode", 1))
+            failed = existing.get("status") == "failed" or existing.get("recorderExitCode", 1) != 0
+            raise SystemExit(1 if failed else 0)
         raise SystemExit("ROS bag record has already started; existing bytes are retained")
     if recorded_paths():
         raise SystemExit("ROS bag record already contains files; existing bytes are retained")
@@ -1049,15 +1077,16 @@ child = None
 forwarded_signal = None
 signal_delivered = False
 capacity_limit_reached = False
-stop_deadline = None
-NATIVE_STOP_GRACE_SECONDS = 5.0
-NATIVE_KILL_WAIT_SECONDS = 1.0
+# The process-tree owner (the Run engine) is the single shutdown budget owner:
+# it signals this group and escalates to SIGKILL at its own grace. This adapter
+# forwards the signal to its native recorder child and waits for that child, so
+# a slow but honest rosbag finalization is never preempted by a private
+# deadline, and an escalation stays visible as a failed artifact.
+NATIVE_REAP_WAIT_SECONDS = 1.0
 
 def forward(signum, _frame):
-    global forwarded_signal, signal_delivered, stop_deadline
+    global forwarded_signal, signal_delivered
     forwarded_signal = signum
-    if stop_deadline is None:
-        stop_deadline = time.monotonic() + NATIVE_STOP_GRACE_SECONDS
     if child is not None and child.poll() is None:
         try:
             child.send_signal(signum)
@@ -1103,6 +1132,11 @@ try:
         signal_delivered = True
     while True:
         changed = facts.snapshot(manifest)
+        if forwarded_signal is not None and "stopRequestedAt" not in manifest:
+            # The stop is an intent recorded as such; it is not artifact proof.
+            manifest["stopRequestedAt"] = utc_now()
+            manifest["stopRequestSignal"] = forwarded_signal
+            changed = True
         if manifest["firstBagObservedAt"] is None and recorded_paths():
             manifest["firstBagObservedAt"] = facts.clock()
             changed = True
@@ -1114,13 +1148,6 @@ try:
         if not signal_delivered and recorded_bytes() >= stop_limit_bytes:
             forward(signal.SIGTERM, None)
             capacity_limit_reached = True
-        if stop_deadline is not None and time.monotonic() >= stop_deadline:
-            try:
-                child.kill()
-            except ProcessLookupError:
-                pass
-            exit_code = child.wait(timeout=NATIVE_KILL_WAIT_SECONDS)
-            break
         try:
             exit_code = child.wait(timeout=0.25)
             break
@@ -1132,16 +1159,31 @@ finally:
     rpc_runtime.close()
     facts.finish(manifest)
     if child is not None and child.poll() is None:
+        # Only an abnormal exit path reaches this: the recorder loop joins the
+        # child before it can end. Reap it physically, then keep the failure.
+        try:
+            child.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            child.wait(timeout=NATIVE_REAP_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
         manifest["status"] = "failed"
         manifest["archiveFinalizationState"] = "pending"
         manifest["archiveFinalizationError"] = "native recorder has not exited; files retained"
+        inventory_partial_files(manifest)
         write_manifest(manifest)
-        raise RuntimeError("native recorder did not exit after SIGKILL")
+        raise RuntimeError("native recorder did not exit; files retained")
     manifest["recordingEndedAt"] = utc_now()
     manifest["recorderExitCode"] = exit_code
     manifest["terminationSignal"] = forwarded_signal
     manifest["capacityLimitReached"] = capacity_limit_reached
-    manifest["status"] = "stopped" if forwarded_signal is not None else ("completed" if exit_code == 0 else "failed")
+    # A requested stop is an intent, not artifact evidence. Only a clean child
+    # exit can report stopped/completed; a signal-killed or nonzero child is a
+    # failed capture even though the signal was delivered.
+    child_succeeded = exit_code == 0
+    manifest["status"] = ("stopped" if forwarded_signal is not None else "completed") if child_succeeded else "failed"
     if naming_version == 1:
         finalize_archive_files(manifest)
     else:
@@ -1155,5 +1197,13 @@ finally:
                 continue
             bag_files.append({"name": os.path.basename(path), "state": state, "sizeBytes": info.st_size})
         manifest["bagFiles"] = bag_files
+        if not any(entry["state"] == "finalized" for entry in bag_files):
+            manifest["status"] = "failed"
+            manifest["archiveFinalizationState"] = "failed"
+            manifest["archiveFinalizationError"] = "no closed bag volume was issued"
+            write_manifest(manifest)
+            raise RuntimeError("no closed bag volume was issued")
         write_manifest(manifest)
+    if not child_succeeded:
+        raise SystemExit(exit_code if exit_code > 0 else 1)
 raise SystemExit(0 if forwarded_signal is not None else exit_code)
