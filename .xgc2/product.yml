@@ -1,9 +1,10 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.9.0-2
+version: 0.9.0-3
 kind: ros1-apt
-summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and scene authoring.
+summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and
+  scene authoring.
 groups:
 - ros1
 - communication
@@ -162,4 +163,4 @@ release:
     xgc2-ros-msgs: rebuild
     xgc2-gazebo-sim-scenes: verify
   apt_versions:
-    focal: 0.9.0-1
+    focal: 0.9.0-3
