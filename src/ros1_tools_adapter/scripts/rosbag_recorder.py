@@ -1139,9 +1139,14 @@ def subscriptions_armed():
                     break
             if uri is None:
                 return False
-        if any(node not in subscribed.get(topic, ()) for topic in topics):
-            return False
+        # rosbag registers a subscription only once a topic's publisher exists,
+        # so a resolved-but-absent topic can never gate record-start (an
+        # algorithm output may appear only after the run begins). Armed covers
+        # current capture: every resolved topic that already has a publisher
+        # must show this node subscribed AND its inbound transport connected.
         need = [topic for topic in topics if published.get(topic)]
+        if any(node not in subscribed.get(topic, ()) for topic in need):
+            return False
         if not need:
             return True
         with xmlrpc.client.ServerProxy(uri, transport=Transport()) as daemon:
@@ -1152,8 +1157,13 @@ def subscriptions_armed():
         return all(topic in connected for topic in need)
     except Exception:
         return False
+# The readiness worker exists only to cover the startup window; longer waits are
+# answered by describe's own opportunistic check, so no orphan scan can outlive
+# this budget or the child.
+ARM_WORKER_SECONDS = 35.0
 def arm_recorder():
-    while child is not None and child.poll() is None:
+    deadline = time.monotonic() + ARM_WORKER_SECONDS
+    while child is not None and child.poll() is None and time.monotonic() < deadline:
         if subscriptions_armed():
             recorder_armed.set()
             break
@@ -1173,6 +1183,10 @@ def start_recorder_service():
         if wait_ms:
             recorder_ready.wait(min(wait_ms / 1000.0, call.remaining()))
         call.check_cancelled()
+        # The bounded worker only covers the startup window; an arming that
+        # lands later is still observed here instead of reported stale.
+        if not recorder_armed.is_set() and subscriptions_armed():
+            recorder_armed.set()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
                 "ready": child is not None and child.poll() is None and recorder_armed.is_set(),
@@ -1185,9 +1199,11 @@ def start_recorder_service():
                     discovery_routes=("/v1/describe",)).start()
     return rpc_runtime, rpc_host
 rpc_runtime, rpc_host = start_recorder_service()
+arm_thread = None
 try:
     child = subprocess.Popen(arguments)
-    threading.Thread(target=arm_recorder, daemon=True).start()
+    arm_thread = threading.Thread(target=arm_recorder, daemon=True)
+    arm_thread.start()
     if forwarded_signal is not None and not signal_delivered and child.poll() is None:
         child.send_signal(forwarded_signal)
         signal_delivered = True
@@ -1216,6 +1232,11 @@ try:
             continue
 finally:
     recorder_ready.set()
+    if arm_thread is not None:
+        # Shutdown joins the readiness worker: no orphan master scan survives
+        # the recorder. The worker exits within one poll cycle once the child
+        # is gone or its startup budget ends.
+        arm_thread.join(timeout=10.0)
     rpc_host.close()
     rpc_runtime.close()
     facts.finish(manifest)
