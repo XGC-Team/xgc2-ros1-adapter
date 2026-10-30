@@ -292,6 +292,78 @@ class RecordFactsTests(unittest.TestCase):
     def test_native_recipe_still_finalizes_its_existing_record_identity(self):
         self.run_native_recipe()
 
+    def _descendants(self, pid):
+        found = set()
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            except (FileNotFoundError, PermissionError, ProcessLookupError, IndexError):
+                continue
+            if int(stat[1]) == pid:
+                found.add(int(entry.name))
+        return found
+
+    def _armed_ros_master(self):
+        # A real XMLRPC master/slave fixture for the armed-readiness contract:
+        # it advertises the resolved topics as published, registers the fake
+        # child's own "/record_<pid>" subscriptions once its PID exists under
+        # the recipe process, resolves that node to the same server as its
+        # slave, reports the real child PID from getPid, and reports both
+        # inbound topic transports as connected via getBusInfo — the same
+        # metadata a real roscore reports for a capture-armed recorder. A
+        # topic advertised without a connected transport is therefore still
+        # exercised as unready by the same code path, not bypassed.
+        topics = ["/xgc/record_facts", "/tf"]
+        server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
+        uri = "http://127.0.0.1:%s" % server.server_address[1]
+
+        def child_pid():
+            # The recipe also forks short-lived helpers (record-archive); the
+            # armed contract checks the PID of the actual recorder child, so
+            # the fixture must identify it by the record executable in its
+            # argv — the same identity getPid answers on a real ROS slave.
+            for recipe in self._descendants(os.getpid()):
+                for pid in sorted(self._descendants(recipe)):
+                    try:
+                        argv = Path("/proc/%d/cmdline" % pid).read_bytes().split(b"\0")
+                    except (FileNotFoundError, PermissionError):
+                        continue
+                    if any(arg.decode(errors="replace").endswith("/lib/rosbag/record") for arg in argv):
+                        return pid
+            return None
+
+        def get_system_state(_caller):
+            pid = child_pid()
+            publishers = [[topic, ["/fixture_publisher_%d" % index]] for index, topic in enumerate(topics)]
+            subscribers = [[topic, ["/record_%d" % pid]] for topic in topics] if pid else []
+            return [1, "state", [publishers, subscribers, []]]
+
+        def lookup_node(_caller, name):
+            pid = child_pid()
+            if pid is not None and name == "/record_%d" % pid:
+                return [1, "uri", uri]
+            return [-1, "unknown node", ""]
+
+        def get_pid(_caller):
+            pid = child_pid()
+            return [1, "pid", pid] if pid is not None else [-1, "no child", 0]
+
+        def get_bus_info(_caller):
+            return [1, "bus", [[index, "/fixture_publisher_%d" % index, "i", "TCPROS", topic, True]
+                               for index, topic in enumerate(topics)]]
+
+        server.register_function(get_system_state, "getSystemState")
+        server.register_function(lookup_node, "lookupNode")
+        server.register_function(get_pid, "getPid")
+        server.register_function(get_bus_info, "getBusInfo")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return uri
+
     def test_recorder_ready_releases_held_describe_before_any_bag_exists(self):
         # The recorder child waits for describe to return before creating its
         # first bag. Readiness therefore cannot depend on incoming topic data.
@@ -314,7 +386,9 @@ def readiness_host(_address, routes, **kwargs):
     return host
 xrpc.Host = readiness_host
 '''
-        self.run_native_recipe(setup, wait_for_ready=True)
+        master_uri = self._armed_ros_master()
+        with patch.dict(os.environ, {"ROS_MASTER_URI": master_uri}):
+            self.run_native_recipe(setup, wait_for_ready=True)
         reply = json.loads((self.directory / "ready.json").read_text())
         self.assertTrue(reply["ready"])
         self.assertTrue(reply["archiveExists"])
