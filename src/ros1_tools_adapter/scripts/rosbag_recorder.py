@@ -1098,6 +1098,67 @@ signal.signal(signal.SIGINT, forward)
 signal.signal(signal.SIGTERM, forward)
 exit_code = 1
 recorder_ready = threading.Event()
+recorder_armed = threading.Event()
+def subscriptions_armed():
+    # "Ready" must mean capture-armed: the native recorder has registered its
+    # subscription on every resolved topic, and for topics that already have a
+    # publisher the inbound transport connection exists. A message published the
+    # moment readiness is reported is captured; process-alive alone is not armed.
+    if child is None or child.poll() is not None:
+        return False
+    import xmlrpc.client
+    class Transport(xmlrpc.client.Transport):
+        def make_connection(self, host):
+            connection = super().make_connection(host)
+            connection.timeout = 0.25
+            return connection
+    try:
+        with xmlrpc.client.ServerProxy(os.environ["ROS_MASTER_URI"], transport=Transport()) as master:
+            code, _message, state = master.getSystemState("/xgc_rosbag_ready")
+            if code != 1:
+                return False
+            publishers, subscribers, _services = state
+            published = {topic: nodes for topic, nodes in publishers}
+            subscribed = {topic: set(nodes) for topic, nodes in subscribers}
+            node = "/record_%d" % child.pid
+            uri = None
+            candidates = [node] + sorted(
+                {name for _topic, nodes in subscribers for name in nodes
+                 if name.startswith("/record_")})
+            for name in candidates:
+                code, _message, candidate = master.lookupNode("/xgc_rosbag_ready", name)
+                if code != 1:
+                    continue
+                try:
+                    with xmlrpc.client.ServerProxy(candidate, transport=Transport()) as daemon:
+                        code, _message, pid = daemon.getPid("/xgc_rosbag_ready")
+                except Exception:
+                    continue
+                if code == 1 and pid == child.pid:
+                    node, uri = name, candidate
+                    break
+            if uri is None:
+                return False
+        if any(node not in subscribed.get(topic, ()) for topic in topics):
+            return False
+        need = [topic for topic in topics if published.get(topic)]
+        if not need:
+            return True
+        with xmlrpc.client.ServerProxy(uri, transport=Transport()) as daemon:
+            code, _message, bus = daemon.getBusInfo("/xgc_rosbag_ready")
+        if code != 1:
+            return False
+        connected = {row[4] for row in bus if len(row) > 5 and row[2] == "i" and row[5]}
+        return all(topic in connected for topic in need)
+    except Exception:
+        return False
+def arm_recorder():
+    while child is not None and child.poll() is None:
+        if subscriptions_armed():
+            recorder_armed.set()
+            break
+        time.sleep(0.1)
+    recorder_ready.set()
 def start_recorder_service():
     from xgc2_xrpc import Endpoint, Fault, Host, Runtime, ServiceRef
     service_ref = ServiceRef(manifest["targetId"], "xgc.recording.v1", "1",
@@ -1114,7 +1175,7 @@ def start_recorder_service():
         call.check_cancelled()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
-                "ready": child is not None and child.poll() is None,
+                "ready": child is not None and child.poll() is None and recorder_armed.is_set(),
                 "facts": {"path": output_prefix + ".bag", "recordingId": recording_id,
                           "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
                           "startedAt": manifest["recordingStartedAt"],
@@ -1126,7 +1187,7 @@ def start_recorder_service():
 rpc_runtime, rpc_host = start_recorder_service()
 try:
     child = subprocess.Popen(arguments)
-    recorder_ready.set()
+    threading.Thread(target=arm_recorder, daemon=True).start()
     if forwarded_signal is not None and not signal_delivered and child.poll() is None:
         child.send_signal(forwarded_signal)
         signal_delivered = True
