@@ -117,6 +117,7 @@ class PreparationTests(unittest.TestCase):
                 return namespace["read_record_request"]()
         result = read()
         self.assertEqual(result["context"]["rosMasterUri"], "http://member:11311")
+        self.assertEqual(result["context"]["slotId"], "uav1")
         self.assertEqual(result["context"]["simulation"]["rosMasterUri"], "http://core:11311")
         namespace["normalize_parameters"](result["parameters"], result["context"], False)
         document["parameters"]["rosMasterUri"] = "http://forged:11311"

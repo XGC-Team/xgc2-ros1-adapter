@@ -131,6 +131,13 @@ def read_record_request():
             member = by_slot.get(slot)
             if member is None or (member.get("adapter") or {}).get("targetId") != endpoint["targetId"]:
                 raise ValueError("recording endpoint differs from the frozen slot adapter target")
+        # A one-slot member capture has an exact explicit slot scope. Central
+        # and multi-slot captures retain shared scope instead of choosing a
+        # roster position as their identity.
+        exact_slot = selected[0] if len(selected) == 1 else ""
+        if session.get("slotId", exact_slot) != exact_slot:
+            raise ValueError("recording slot scope differs from the selected member group")
+        session = dict(session, slotId=exact_slot)
     else:
         endpoint = session["simulation"]
     document["context"] = dict(session, rosMasterUri=endpoint["rosMasterUri"],
