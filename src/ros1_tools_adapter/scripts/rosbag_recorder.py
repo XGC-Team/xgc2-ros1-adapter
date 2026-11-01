@@ -289,7 +289,7 @@ def record_arguments(document):
         ["/usr/lib/xgc2/xgc-storage", "record-archive"], input=json_bytes({
             "session": context, "run": {"id": os.environ["XGC_RECORDER_RUN_ID"]}, "kind": "rosbag"
         }), timeout=10))
-    os.environ["XGC_USER_FILES_DIR"] = context["runtime"]["userFilesDir"]
+    os.environ["XGC_USER_FILES_DIR"] = archive["userFilesDir"]
     os.environ["ROS_MASTER_URI"] = p["rosMasterUri"]
     for name, field in (("ROS_IP", "rosIp"), ("ROS_HOSTNAME", "rosHostname")):
         if p[field]: os.environ[name] = p[field]
