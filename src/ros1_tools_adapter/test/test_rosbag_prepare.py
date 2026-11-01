@@ -33,6 +33,24 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn("localizationOffset", manifest)
         self.assertEqual(document, request())
 
+    def test_exact_slot_topics_preserve_aliases_and_do_not_multiply_other_members(self):
+        document = request()
+        second = copy.deepcopy(document["robots"]["robots"][0])
+        second.update(id="uav-2", namespace="/uav2")
+        document["robots"]["robots"].append(second)
+        document["parameters"] = {"slotIds": ["uav-1"], "globalTopics": [], "topicsBySlot": {
+            "uav-1": ["/xgc/act1/uav1/odom", "/command"],
+            "uav-2": ["/xgc/act1/uav2/odom", "/command"]}}
+        self.assertEqual(prepare(document)[1], {"slotIds": ["uav-1"], "topics": ["/command", "/xgc/act1/uav1/odom"]})
+        document["parameters"]["slotIds"] = ["uav-2"]
+        self.assertEqual(prepare(document)[1]["topics"], ["/command", "/xgc/act1/uav2/odom"])
+        del document["parameters"]["topicsBySlot"]["uav-2"]
+        with self.assertRaisesRegex(ValueError, "lack explicit recording topics"):
+            prepare(document)
+        document["parameters"]["topicsBySlot"]["foreign"] = ["/foreign/pose"]
+        with self.assertRaisesRegex(ValueError, "outside the frozen"):
+            prepare(document)
+
     def test_measurement_topics_use_only_frozen_parameters_in_every_mode(self):
         document = request()
         document["parameters"] = {"globalTopics": [], "includeMotionCapture": True}

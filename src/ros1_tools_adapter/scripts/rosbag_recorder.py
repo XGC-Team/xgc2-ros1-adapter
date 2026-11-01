@@ -23,6 +23,14 @@ def resolve_recording_topics(document):
         raise ValueError("ROS bag robot topics require at least one robot in the frozen asset component")
     absolute = re.compile(r"/[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*")
     measurement_topic = re.compile(r"/[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z][A-Za-z0-9_]*)*")
+    declared = parameters.get("topicsBySlot")
+    if declared is not None:
+        known = {robot["id"] for robot in robots}
+        if set(declared) - known:
+            raise ValueError("recording topic policies contain slots outside the frozen Robot roster")
+        missing = [robot["id"] for robot in selected if robot["id"] not in declared]
+        if missing:
+            raise ValueError("selected slots lack explicit recording topics: " + ", ".join(missing))
     topics = set(parameters.get("globalTopics") or [])
     for camera in parameters.get("cameras") or []:
         topics.update(camera["root"] + "/" + topic for topic in camera["topics"])
@@ -31,6 +39,8 @@ def resolve_recording_topics(document):
         if not absolute.fullmatch(namespace):
             raise ValueError("frozen robot %r has invalid ROS namespace" % robot["id"])
         topics.update(namespace + "/" + topic for topic in parameters.get("robotTopics") or [])
+        if declared is not None:
+            topics.update(declared[robot["id"]])
     if parameters.get("includeMotionCapture"):
         added = False
         for robot in selected:
@@ -147,7 +157,7 @@ def read_record_request():
 
 def normalize_parameters(value, context, preview):
     p = copy.deepcopy(value)
-    fields = {"worldBoundary", "recordAllTopics", "slotIds", "robotTopics", "globalTopics", "recordingProfile", "cameras", "expectedDurationMinutes", "estimatedVideoBitrateMbps", "capacitySafetyFactor", "includeMotionCapture", "excludedTopics", "sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "calibrationFiles", "factParameters", "algorithmSidecarFiles", "splitSizeMiB", "maxSplits", "minFreeSpaceGiB", "compression", "repeatLatched", "rosInstallPath", "rosMasterUri", "rosIp", "rosHostname"}
+    fields = {"worldBoundary", "recordAllTopics", "slotIds", "robotTopics", "topicsBySlot", "globalTopics", "recordingProfile", "cameras", "expectedDurationMinutes", "estimatedVideoBitrateMbps", "capacitySafetyFactor", "includeMotionCapture", "excludedTopics", "sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "calibrationFiles", "factParameters", "algorithmSidecarFiles", "splitSizeMiB", "maxSplits", "minFreeSpaceGiB", "compression", "repeatLatched", "rosInstallPath", "rosMasterUri", "rosIp", "rosHostname"}
     if set(p) - fields:
         raise ValueError("unknown recorder parameters: " + ", ".join(sorted(set(p) - fields)))
     for name in ("sessionId", "experimentResourceId", "experimentCommitId", "localizationOffset", "worldBoundary", "rosMasterUri", "rosIp"):
@@ -203,6 +213,19 @@ def normalize_parameters(value, context, preview):
     p["robotTopics"] = topics("robotTopics", p.get("robotTopics", []), relative, 256)
     p["globalTopics"] = topics("globalTopics", p.get("globalTopics", ["/tf", "/tf_static", "/clock"]), absolute, 1024)
     p["slotIds"] = topics("slotIds", p.get("slotIds", []), re.compile(r"[a-z][a-z0-9-]{0,63}"), 256)
+    if "topicsBySlot" in p:
+        policies = p["topicsBySlot"]
+        if not isinstance(policies, dict) or len(policies) > 256:
+            raise ValueError("topicsBySlot requires at most 256 explicit slot declarations")
+        normalized = {}
+        for slot, selected_topics in policies.items():
+            topics("topicsBySlot slot", [slot], re.compile(r"[a-z][a-z0-9-]{0,63}"), 1)
+            normalized[slot] = topics("topicsBySlot topics", selected_topics, absolute, 256)
+            if not normalized[slot]:
+                raise ValueError("topicsBySlot requires nonempty topics for each declared slot")
+        if len(json_bytes(normalized)) > 131072:
+            raise ValueError("topicsBySlot exceeds 131072 bytes")
+        p["topicsBySlot"] = normalized
     cameras = p.setdefault("cameras", [])
     if not isinstance(cameras, list) or len(cameras) > 32:
         raise ValueError("cameras exceeds its declared list bound")
@@ -220,7 +243,7 @@ def normalize_parameters(value, context, preview):
     p["cameras"] = sorted(cameras, key=lambda c: c["root"])
     if scientific != bool(cameras):
         raise ValueError("camera_scientific requires authored cameras; general uses globalTopics")
-    if not p["robotTopics"] and not p["globalTopics"] and not p["includeMotionCapture"] and not scientific:
+    if not p["robotTopics"] and not p.get("topicsBySlot") and not p["globalTopics"] and not p["includeMotionCapture"] and not scientific:
         raise ValueError("recorder requires explicit topic selection")
     if scientific and not preview and (not p.get("sessionId") or "localizationOffset" not in p):
         raise ValueError("scientific recording requires frozen sessionId and localizationOffset")
