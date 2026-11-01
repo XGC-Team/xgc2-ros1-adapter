@@ -295,9 +295,9 @@ def record_arguments(document):
         if p[field]: os.environ[name] = p[field]
         else: os.environ.pop(name, None)
     output = archive["path"]
-    slot_id = context.get("slotId")
-    if not slot_id:
-        raise ValueError("recording requires accepted context.slotId")
+    slot_id = context.get("slotId", "")
+    if not isinstance(slot_id, str) or slot_id and not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", slot_id):
+        raise ValueError("recording context.slotId is invalid")
     manifest.update(targetId=context["targetId"], slotId=slot_id, recordingId=archive["recordId"], recordPlannedAt=archive["plannedAt"],
                     runId=os.environ["XGC_RECORDER_RUN_ID"])
     return [sys.argv[0], p["rosInstallPath"], output[:-4], json.dumps(resolved["topics"]), str(p["splitSizeMiB"]), str(p["maxSplits"]), str(p["minFreeSpaceGiB"]), p["compression"], str(p["repeatLatched"]).lower(), str(p["expectedDurationMinutes"]), str(p["estimatedVideoBitrateMbps"]), str(p["capacitySafetyFactor"]), json_bytes(manifest).decode("utf-8")]
@@ -946,23 +946,49 @@ def inventory_partial_files(document):
             document["bagFiles"].append({"name": name, "state": "partial", "sizeBytes": info.st_size})
 
 def publish_parts(document):
-    slot_id = document.get("slotId")
-    if not slot_id:
-        raise RuntimeError("recorder part requires accepted slotId")
+    # A central recorder can cover several frozen slots. Empty slotId retains
+    # that shared scope; it must never be guessed from the first selected robot.
+    slot_id = document.get("slotId", "")
+    if not isinstance(slot_id, str) or slot_id and not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", slot_id):
+        raise RuntimeError("recorder part has invalid accepted slotId")
     parts = []
+    if document.get("archiveFinalizationState") != "finalized" or document.get("status") == "failed":
+        document["parts"] = parts
+        return
+    def identity(info):
+        return {"device": info.st_dev, "inode": info.st_ino, "sizeBytes": info.st_size,
+                "mtimeNs": info.st_mtime_ns, "ctimeNs": info.st_ctime_ns}
     for entry in document.get("bagFiles") or []:
         if entry.get("state") != "finalized":
             continue
-        path = os.path.join(output_directory, entry["name"])
-        pinned = entry.get("sha256")
-        if not pinned:
-            digest = hashlib.sha256()
-            with open(path, "rb") as stream:
+        name = entry["name"]
+        if not isinstance(name, str) or os.path.basename(name) != name or name in ("", ".", ".."):
+            raise RuntimeError("recorder part name is outside its owned directory")
+        path = os.path.join(output_directory, name)
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != entry["sizeBytes"]:
+            raise RuntimeError("issued bag identity changed")
+        observed = identity(info)
+        cached = document.get("partContentReceipts", {}).get(name, {})
+        receipt = cached.get("contentIdentity")
+        if receipt:
+            if receipt != observed or not re.fullmatch(r"[0-9a-f]{64}", cached.get("sha256", "")):
+                raise RuntimeError("issued bag content changed after publication")
+            pinned = cached["sha256"]
+        else:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "rb") as stream:
+                if identity(os.fstat(stream.fileno())) != observed:
+                    raise RuntimeError("issued bag changed before hashing")
+                digest = hashlib.sha256()
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(chunk)
+                if identity(os.fstat(stream.fileno())) != observed:
+                    raise RuntimeError("issued bag changed during hashing")
             pinned = digest.hexdigest()
+            document.setdefault("partContentReceipts", {})[name] = {"sha256": pinned, "contentIdentity": observed}
         parts.append({"slotId": slot_id, "targetId": document["targetId"], "sourcePath": path,
-                      "sha256": pinned, "size": entry["sizeBytes"]})
+                      "sha256": pinned, "size": info.st_size})
     document["parts"] = parts
 
 def finalize_archive_files(document):
