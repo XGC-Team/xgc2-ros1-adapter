@@ -104,6 +104,34 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate field"):
                 namespace["read_record_request"]()
 
+    def test_member_endpoint_is_target_scoped_without_rewriting_core_simulation(self):
+        robot = {"source": "simulation", "slotId": "uav1", "namespace": "/uav1", "kind": "px4-multirotor",
+                 "profile": {"id": "p", "parameters": {}}, "binding": {"initialPose": {}},
+                 "adapter": {"targetId": "agent-a"}}
+        session = {"robots": [robot], "targetId": "agent-a", "experimentResourceId": "exp",
+                   "experimentCommitId": "commit", "simulation": {"rosMasterUri": "http://core:11311", "rosIp": "core"},
+                   "recordingEndpoint": {"targetId": "agent-a", "rosMasterUri": "http://member:11311", "rosIp": "member"}}
+        document = {"parameters": {"slotIds": ["uav1"], "rosMasterUri": "http://member:11311", "rosIp": "member"}, "context": session}
+        def read():
+            with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(json.dumps(document).encode()))):
+                return namespace["read_record_request"]()
+        result = read()
+        self.assertEqual(result["context"]["rosMasterUri"], "http://member:11311")
+        self.assertEqual(result["context"]["simulation"]["rosMasterUri"], "http://core:11311")
+        namespace["normalize_parameters"](result["parameters"], result["context"], False)
+        document["parameters"]["rosMasterUri"] = "http://forged:11311"
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            result = read()
+            namespace["normalize_parameters"](result["parameters"], result["context"], False)
+        for change in ("target", "slot", "adapter"):
+            bad = copy.deepcopy(document)
+            if change == "target": bad["context"]["recordingEndpoint"]["targetId"] = "other"
+            if change == "slot": bad["parameters"]["slotIds"] = ["absent"]
+            if change == "adapter": bad["context"]["robots"][0]["adapter"]["targetId"] = "other"
+            with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(json.dumps(bad).encode()))):
+                with self.assertRaisesRegex(ValueError, "target"):
+                    namespace["read_record_request"]()
+
     def test_frozen_robots_are_model_backed_with_optional_physical_binding(self):
         def frozen(**extra):
             return dict({"source": "simulation", "slotId": "uav1", "namespace": "/uav1", "kind": "px4-multirotor",

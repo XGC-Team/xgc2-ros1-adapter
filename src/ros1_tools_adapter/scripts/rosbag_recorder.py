@@ -114,8 +114,27 @@ def read_record_request():
                        **{key: asset[key] for key in ("px4", "scout", "mecanum", "extension") if key in asset}})
     document["robots"] = {"robots": robots, "experimentResourceId": session["experimentResourceId"],
                           "experimentCommitId": session["experimentCommitId"]}
-    document["context"] = dict(session, rosMasterUri=session["simulation"]["rosMasterUri"],
-                               rosIp=session["simulation"]["rosIp"])
+    # A member recorder consumes the accepted robot-ros service on its actual
+    # execution target. The central Session simulation endpoint is not that
+    # service, and must remain unchanged in the frozen Session.
+    endpoint = session.get("recordingEndpoint")
+    if endpoint is not None:
+        if (not isinstance(endpoint, dict)
+                or set(endpoint) != {"targetId", "rosMasterUri", "rosIp"}
+                or not endpoint["targetId"] or endpoint["targetId"] != session.get("targetId")):
+            raise ValueError("recording endpoint does not belong to the actual target")
+        selected = document["parameters"].get("slotIds")
+        if not isinstance(selected, list) or not selected:
+            raise ValueError("member recording endpoint requires explicit frozen slots")
+        by_slot = {robot["slotId"]: robot for robot in session["robots"]}
+        for slot in selected:
+            member = by_slot.get(slot)
+            if member is None or (member.get("adapter") or {}).get("targetId") != endpoint["targetId"]:
+                raise ValueError("recording endpoint differs from the frozen slot adapter target")
+    else:
+        endpoint = session["simulation"]
+    document["context"] = dict(session, rosMasterUri=endpoint["rosMasterUri"],
+                               rosIp=endpoint["rosIp"])
     return document
 
 
