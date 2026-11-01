@@ -106,9 +106,9 @@ class PreparationTests(unittest.TestCase):
 
     def test_frozen_robots_are_model_backed_with_optional_physical_binding(self):
         def frozen(**extra):
-            return dict({"slotId": "uav1", "namespace": "/uav1", "kind": "px4-multirotor",
+            return dict({"source": "simulation", "slotId": "uav1", "namespace": "/uav1", "kind": "px4-multirotor",
                          "profile": {"id": "p", "parameters": {}},
-                         "binding": {"hybridSource": None, "initialPose": {}},
+                         "binding": {"slotDeployment": {"resource": {"kind": "asset-agent"}, "plant": "simulation"}, "initialPose": {}},
                          "derived": {"modelId": "fs150", "visualization": {}}}, **extra)
         def read(robot):
             session = {"parameters": {}, "context": {"robots": [robot], "experimentResourceId": "experiment-a",
@@ -117,6 +117,10 @@ class PreparationTests(unittest.TestCase):
                 return namespace["read_record_request"]()["robots"]["robots"][0]
         model = read(frozen())
         self.assertEqual((model["modelId"], model["robotAssetId"], model["robotAssetCommitId"]), ("fs150", None, None))
+        self.assertEqual(model["hybridSource"], "simulation")
+        real = frozen(source="physical")
+        real["binding"]["hybridSource"] = "simulation"  # Non-onboard declaration does not override the frozen source.
+        self.assertEqual(read(real)["hybridSource"], "physical")
         device = read(frozen(physicalBinding={"assetId": "asset-1", "assetCommitId": "commit-1",
                                               "asset": {"px4": {"mocapRigidBodyName": "Body1"}}}))
         self.assertEqual((device["robotAssetId"], device["robotAssetCommitId"], device["px4"]),

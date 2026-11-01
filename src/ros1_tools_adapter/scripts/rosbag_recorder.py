@@ -107,7 +107,7 @@ def read_record_request():
         asset = physical.get("asset") or {}
         robots.append({"id": robot["slotId"], "namespace": robot["namespace"], "kind": robot["kind"],
                        "profileId": robot["profile"]["id"], "runtimeParameters": robot["profile"]["parameters"],
-                       "hybridSource": robot["binding"]["hybridSource"], "initialPose": robot["binding"]["initialPose"],
+                       "hybridSource": robot["source"], "initialPose": robot["binding"]["initialPose"],
                        "modelId": derived.get("modelId"),
                        "robotAssetId": physical.get("assetId"), "robotAssetCommitId": physical.get("assetCommitId"),
                        "visualization": derived.get("visualization", {}),
