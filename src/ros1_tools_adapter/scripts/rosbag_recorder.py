@@ -946,7 +946,7 @@ def inventory_partial_files(document):
             document["bagFiles"].append({"name": name, "state": "partial", "sizeBytes": info.st_size})
 
 def publish_parts(document):
-    slot_id = document.get("slotId") or (document.get("slotIds") or [None])[0]
+    slot_id = document.get("slotId")
     if not slot_id:
         raise RuntimeError("recorder part requires accepted slotId")
     parts = []
