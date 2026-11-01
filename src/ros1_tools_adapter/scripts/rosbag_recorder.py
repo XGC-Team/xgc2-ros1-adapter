@@ -295,7 +295,10 @@ def record_arguments(document):
         if p[field]: os.environ[name] = p[field]
         else: os.environ.pop(name, None)
     output = archive["path"]
-    manifest.update(targetId=context["targetId"], recordingId=archive["recordId"], recordPlannedAt=archive["plannedAt"],
+    slot_id = context.get("slotId")
+    if not slot_id:
+        raise ValueError("recording requires accepted context.slotId")
+    manifest.update(targetId=context["targetId"], slotId=slot_id, recordingId=archive["recordId"], recordPlannedAt=archive["plannedAt"],
                     runId=os.environ["XGC_RECORDER_RUN_ID"])
     return [sys.argv[0], p["rosInstallPath"], output[:-4], json.dumps(resolved["topics"]), str(p["splitSizeMiB"]), str(p["maxSplits"]), str(p["minFreeSpaceGiB"]), p["compression"], str(p["repeatLatched"]).lower(), str(p["expectedDurationMinutes"]), str(p["estimatedVideoBitrateMbps"]), str(p["capacitySafetyFactor"]), json_bytes(manifest).decode("utf-8")]
 
@@ -951,12 +954,15 @@ def publish_parts(document):
         if entry.get("state") != "finalized":
             continue
         path = os.path.join(output_directory, entry["name"])
-        digest = hashlib.sha256()
-        with open(path, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        pinned = entry.get("sha256")
+        if not pinned:
+            digest = hashlib.sha256()
+            with open(path, "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            pinned = digest.hexdigest()
         parts.append({"slotId": slot_id, "targetId": document["targetId"], "sourcePath": path,
-                      "sha256": digest.hexdigest(), "size": entry["sizeBytes"]})
+                      "sha256": pinned, "size": entry["sizeBytes"]})
     document["parts"] = parts
 
 def finalize_archive_files(document):
