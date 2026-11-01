@@ -12,14 +12,14 @@ namespace xgc_scene::lidar {
 // 8388608 bytes. The fleet reads runMode, robots and visualizationTopics; Scene
 // authoring resolves the same native working copy as World from scene/runtime.
 // Core computes neither a fleet manifest nor the native working-copy path.
-// RobotFact.namespace and binding.{hybridSource,simulationSensors.simpleLidar}
+// RobotFact.{namespace,source} and binding.simulationSensors.simpleLidar
 // supply the sensor selection. An absent simpleLidar is off; a boolean selects
 // the simulator's native default model. Asset/profile/identity fields are not
 // interpreted. Authored scalar domains are validated before producer filtering
 // and zero-default resolution, including disabled and physical selections.
 // The caller selects the Gazebo profile: the legacy absent-scene/xsim gate is
 // outside this API. Physical runs produce an empty fleet; hybrid runs select
-// only binding.hybridSource == "simulation". The 512-robot limit is checked
+// only source == "simulation". The 512-robot limit is checked
 // before filtering. Sampled sensors retain their declared Auto/CPU/GPU selection.
 // A visible3d or visibleAr semantic sensor_msgs/PointCloud2 declaration for
 // /xgc/scene/reference_cloud adds referenceCloud.surfaceSpacing = 0.1.

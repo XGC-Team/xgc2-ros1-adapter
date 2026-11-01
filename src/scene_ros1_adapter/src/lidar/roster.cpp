@@ -136,8 +136,7 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
     const int body_id = static_cast<int>(++slot);
     try {
       const auto binding = robot.value("binding", Json::object());
-      if (input.run_mode == "hybrid" &&
-          binding.value("hybridSource", std::string{}) != "simulation")
+      if (robot.value("source", std::string{}) != "simulation")
         continue;
       const auto &lidar = selections[slot - 1];
       const auto mode = lidar.value("mode", std::string{});
