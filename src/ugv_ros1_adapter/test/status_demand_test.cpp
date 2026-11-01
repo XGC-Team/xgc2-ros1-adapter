@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <future>
 #include <limits>
@@ -14,16 +15,18 @@
 namespace xgc_ugv_ros1_adapter {
 class StatusDemandHarness {
 public:
-  StatusDemandHarness() {
+  explicit StatusDemandHarness(bool live_sources = false, const UgvVariant &variant = scoutMini()) {
     ros::NodeHandle node;
-    const auto &variant = scoutMini();
     std::set<std::string> channels{"vrpn.position", "command.velocity", "vrpn.velocity", "vrpn.acceleration",
         "vrpn.speed", "state.imu", "state.power", "state.health", "state.chassis", "state.controller",
         "state.reset", "diagnostic.stream-health"};
+    const std::string prefix = live_sources ? "/demand_ugv" : "";
     runtime_.reset(new RobotRuntime(variant, std::move(node), "r1",
         variant.contract.primaryProfile().profile_id, "/r1", channels, channels,
-        "body", "pose", "velocity", "accel", "pose", "velocity", "accel", {},
-        "command", "imu", "battery", "chassis", "controller", "session", "result", {}, {},
+        "body", prefix + "/pose", prefix + "/velocity", prefix + "/accel",
+        prefix + "/canonical_pose", prefix + "/canonical_velocity", prefix + "/canonical_accel", {},
+        prefix + "/command", prefix + "/imu", prefix + "/battery", prefix + "/chassis",
+        prefix + "/controller", prefix + "/session", prefix + "/result", {}, {},
         [this](xgc::robot::v1::RobotMessage message) {
           std::unique_lock<std::mutex> lock(mutex_);
           messages_.push_back(std::move(message));
@@ -33,9 +36,14 @@ public:
             changed_.wait(lock, [this] { return released_; });
           }
         }));
-    std::lock_guard<std::mutex> lock(runtime_->mutex_);
-    for (const auto &channel : channels)
-      runtime_->ensureSourceLocked(channel, 5.0);
+    if (live_sources) {
+      std::string error;
+      if (!runtime_->install(&error)) throw std::runtime_error(error);
+    } else {
+      std::lock_guard<std::mutex> lock(runtime_->mutex_);
+      for (const auto &channel : channels)
+        runtime_->ensureSourceLocked(channel, 5.0);
+    }
   }
 
   ~StatusDemandHarness() {
@@ -127,6 +135,125 @@ private:
   std::vector<xgc::robot::v1::RobotMessage> messages_;
   bool block_ = false, entered_ = false, released_ = false;
 };
+
+template <class Predicate>
+bool waitFor(Predicate ready, double seconds = 3.0) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::duration<double>(seconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (ready()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return ready();
+}
+
+TEST(StatusDemand, ScoutRosSourcesFollowDemandWhileChassisAndPoseStayLive) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true, scoutMini());
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_ugv/imu", 10, false);
+  auto power = node.advertise<std_msgs::Float32>("/demand_ugv/battery", 10, false);
+  auto command = node.advertise<geometry_msgs::Twist>("/demand_ugv/command", 10, false);
+  auto chassis = node.advertise<std_msgs::UInt32>("/demand_ugv/chassis", 10, false);
+  auto pose = node.advertise<geometry_msgs::PoseStamped>("/demand_ugv/pose", 10, false);
+  auto reset = node.advertise<ugv_reset_msgs::ResetSession>("/demand_ugv/session", 10, false);
+  std::atomic<unsigned> forwarded{0};
+  auto canonical = node.subscribe<geometry_msgs::PoseStamped>("/demand_ugv/canonical_pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++forwarded; });
+  ASSERT_TRUE(waitFor([&] { return chassis.getNumSubscribers() && pose.getNumSubscribers() &&
+                                  reset.getNumSubscribers() && canonical.getNumPublishers(); }));
+  EXPECT_EQ(0u, imu.getNumSubscribers());
+  EXPECT_EQ(0u, power.getNumSubscribers());
+  EXPECT_EQ(0u, command.getNumSubscribers());
+  std_msgs::UInt32 state;
+  state.data = packChassisState(1, 0, 0);
+  geometry_msgs::PoseStamped position;
+  position.header.frame_id = "world";
+  position.pose.orientation.w = 1;
+  ASSERT_TRUE(waitFor([&] { chassis.publish(state); pose.publish(position);
+                            return source.health().first && forwarded.load() > 0; }));
+  EXPECT_TRUE(source.messages().empty());
+
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  sensor_msgs::Imu sample;
+  sample.header.frame_id = "old";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return !source.messages().empty(); }));
+  source.demand({"state.power"});
+  ASSERT_TRUE(waitFor([&] { return !imu.getNumSubscribers() && power.getNumSubscribers() == 1; }));
+  const auto before = source.messages().size();
+  sample.header.frame_id = "unsubscribed";
+  imu.publish(sample);
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1 && !power.getNumSubscribers(); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  EXPECT_EQ(before, source.messages().size());
+  sample.header.frame_id = "new";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return source.messages().size() > before; }));
+  xgc::semantic::common::v1::ImuEstimate observed;
+  ASSERT_TRUE(observed.ParseFromString(source.messages().back().message().payload().value()));
+  EXPECT_EQ("new", observed.frame_id());
+  source.demand({"diagnostic.stream-health"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1 && power.getNumSubscribers() == 1 &&
+                                  command.getNumSubscribers() == 1; }));
+  source.demand({});
+  ASSERT_TRUE(waitFor([&] { return !imu.getNumSubscribers() && !power.getNumSubscribers() &&
+                                  !command.getNumSubscribers(); }));
+  EXPECT_EQ(1u, chassis.getNumSubscribers());
+  EXPECT_EQ(1u, pose.getNumSubscribers());
+  EXPECT_EQ(1u, reset.getNumSubscribers());
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, MecanumKeepsItsNativeImuHealthAtZeroDemand) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true, mecanumUgv());
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_ugv/imu", 10, false);
+  auto power = node.advertise<std_msgs::Float32>("/demand_ugv/battery", 10, false);
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  EXPECT_EQ(0u, power.getNumSubscribers());
+  sensor_msgs::Imu sample;
+  sample.header.frame_id = "body";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return source.health().first; }));
+  EXPECT_TRUE(source.messages().empty());
+  source.demand({"state.power"});
+  ASSERT_TRUE(waitFor([&] { return power.getNumSubscribers() == 1; }));
+  EXPECT_EQ(1u, imu.getNumSubscribers());
+  source.demand({});
+  ASSERT_TRUE(waitFor([&] { return !power.getNumSubscribers(); }));
+  EXPECT_EQ(1u, imu.getNumSubscribers());
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, ScoutRetirementAndStopJoinRealRosEmitter) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true, scoutMini());
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_ugv/imu", 10, false);
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  source.block();
+  sensor_msgs::Imu sample;
+  sample.header.frame_id = "body";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return source.waitEntered(); }));
+  auto retirement = std::async(std::launch::async, [&] { source.demand({}); });
+  EXPECT_EQ(std::future_status::timeout, retirement.wait_for(std::chrono::milliseconds(30)));
+  auto stopping = std::async(std::launch::async, [&] { source.stop(); });
+  EXPECT_EQ(std::future_status::timeout, stopping.wait_for(std::chrono::milliseconds(30)));
+  source.release();
+  ASSERT_EQ(std::future_status::ready, retirement.wait_for(std::chrono::seconds(3)));
+  retirement.get();
+  ASSERT_EQ(std::future_status::ready, stopping.wait_for(std::chrono::seconds(3)));
+  stopping.get();
+  EXPECT_TRUE(waitFor([&] { return !imu.getNumSubscribers(); }));
+  spinner.stop();
+}
 
 TEST(StatusDemand, NoViewFreshSelectedSnapshotAndReopen) {
   StatusDemandHarness source;

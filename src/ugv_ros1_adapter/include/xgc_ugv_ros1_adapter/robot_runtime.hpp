@@ -196,6 +196,9 @@ private:
                EnvelopeEmitter emitter);
 
   bool install(std::string *error);
+  std::set<std::string> statusInputs(const std::set<std::string> &channels) const;
+  std::vector<std::string> reconcileOptionalSources(const std::set<std::string> &needed);
+  void clearRetiredSourceLocked(const std::string &channel);
   bool beginCallback(std::size_t *epoch);
   void endCallback(std::size_t epoch);
   bool beginStatusUpdate();
@@ -276,10 +279,13 @@ private:
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
   xgc2_ros1_robot_adapter::BatteryVoltageFilter battery_voltage_filter_;
 
+  // Do not hold the callback mutex while roscpp unregisters and joins sources.
+  std::mutex status_update_mutex_;
   mutable std::mutex mutex_;
   std::condition_variable callbacks_idle_;
   bool stopping_ = false;
   bool stop_complete_ = false;
+  bool optional_sources_installed_ = false;
   std::size_t active_callbacks_ = 0;
   std::size_t active_status_updates_ = 0;
   std::array<std::size_t, 2> active_callback_epochs_{};
