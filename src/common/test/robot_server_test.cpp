@@ -2374,6 +2374,59 @@ TEST_F(ServerMembers, SelectedStatusFiltersMembersChannelsAndJoinsBeforeReplacem
       << "the native status owner did not join after cancellation";
 }
 
+TEST_F(ServerMembers, SelectedMemberWithoutChannelsEmitsPresenceAndRemovalWithoutTelemetry) {
+  startReady();
+  wire::ApplyMembersRequest apply;
+  *apply.add_members() = registration("r1", "/fleet/r1");
+  *apply.add_members() = registration("r2", "/fleet/r2");
+  ASSERT_TRUE(client_->apply(apply).status.ok());
+  wire::SubscribeStatusRequest selection;
+  auto *selected = selection.mutable_selected()->add_members();
+  *selected->mutable_identity() = identity("r1");
+  Client::Watch watch(*client_, milliseconds(10000), selection);
+  ASSERT_TRUE(watch.wait([](const wire::SubscribeStatusResponse &frame) {
+    return frame.members_size() == 1 && frame.members(0).identity().robot_id() == "r1" &&
+           !frame.members(0).removed() && frame.members(0).messages_size() == 0;
+  }, milliseconds(2000)));
+  EXPECT_EQ(0, world_.telemetryCount("r1", "state.test"));
+  EXPECT_EQ(0, world_.telemetryCount("r2", "state.test"));
+  wire::RemoveMembersRequest removal;
+  *removal.add_members() = identity("r1");
+  ASSERT_TRUE(client_->remove(removal).status.ok());
+  ASSERT_TRUE(watch.wait([](const wire::SubscribeStatusResponse &frame) {
+    return frame.members_size() == 1 && frame.members(0).identity().robot_id() == "r1" &&
+           frame.members(0).removed();
+  }));
+  for (const auto &frame : watch.frames())
+    for (const auto &member : frame.members()) {
+      EXPECT_EQ("r1", member.identity().robot_id());
+      EXPECT_EQ(0, member.messages_size());
+    }
+  watch.cancel();
+  ASSERT_TRUE(watch.waitFinished());
+}
+
+TEST_F(ServerMembers, MemberOnlyStatusNeverSubstitutesAnotherEpoch) {
+  startReady();
+  wire::ApplyMembersRequest apply;
+  *apply.add_members() = registration("r1", "/fleet/r1", "fake.profile", 2);
+  ASSERT_TRUE(client_->apply(apply).status.ok());
+  wire::SubscribeStatusRequest selection;
+  *selection.mutable_selected()->add_members()->mutable_identity() = identity("r1", 1);
+  Client::Watch watch(*client_, milliseconds(10000), selection);
+  ASSERT_TRUE(watch.wait([](const wire::SubscribeStatusResponse &frame) {
+    return frame.members_size() == 1 && frame.members(0).removed() &&
+           frame.members(0).identity().connection_epoch() == 1 &&
+           frame.members(0).messages_size() == 0;
+  }));
+  for (const auto &frame : watch.frames())
+    for (const auto &member : frame.members())
+      EXPECT_EQ(1u, member.identity().connection_epoch());
+  EXPECT_EQ(0, world_.telemetryCount("r1", "state.test"));
+  watch.cancel();
+  ASSERT_TRUE(watch.waitFinished());
+}
+
 TEST_F(ServerMembers, IdenticalViewsShareOneSourceAndLastReleaseJoinsIt) {
   startReady();
   wire::ApplyMembersRequest apply;

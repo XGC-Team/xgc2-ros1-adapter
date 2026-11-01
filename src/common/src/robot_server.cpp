@@ -1555,7 +1555,6 @@ private:
       if (!requested.has_identity() || !validIdentity(identity) ||
           identity.target_id() != options_.target_id ||
           identity.run_id() != options_.run_id ||
-          requested.channel_ids().empty() ||
           requested.channel_ids_size() > static_cast<int>(kMaximumChannelsPerRobot))
         return {grpc::StatusCode::INVALID_ARGUMENT, "invalid status member or channels"};
       StatusSelection::SelectedMember member;
@@ -2534,6 +2533,17 @@ private:
       for (const auto &entry : members) {
         const auto &member = entry.second;
         stream.identities[entry.first] = member->identity;
+        // An exact member may be observed without requesting any telemetry.
+        // Announce presence once, then retain the existing tombstone fence.
+        bool presence = !subscriber->selection.all &&
+                        subscriber->selection.members.at(entry.first).channels.empty() &&
+                        stream.seen.find(entry.first) == stream.seen.end();
+        if (presence) {
+          if (member->identity.ByteSizeLong() + 16 > frame_limit)
+            return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                                "member identity exceeds response policy");
+          (void)stream.seen[entry.first];
+        }
         std::vector<std::pair<std::string,
                               std::pair<std::uint64_t, wire::RobotMessage>>>
             updates;
@@ -2561,13 +2571,14 @@ private:
         wire::MemberStatus update;
         *update.mutable_identity() = member->identity;
         auto append_update = [&] {
-          if (!update.messages_size())
+          if (!update.messages_size() && !presence)
             return true;
           if (stream.sending.ByteSizeLong() + update.ByteSizeLong() + 16 >
                   frame_limit &&
               !flush())
             return false;
           *stream.sending.add_members() = std::move(update);
+          presence = false;
           return true;
         };
         for (const auto &channel : updates) {
