@@ -942,6 +942,23 @@ def inventory_partial_files(document):
         if stat.S_ISREG(info.st_mode):
             document["bagFiles"].append({"name": name, "state": "partial", "sizeBytes": info.st_size})
 
+def publish_parts(document):
+    slot_id = document.get("slotId") or (document.get("slotIds") or [None])[0]
+    if not slot_id:
+        raise RuntimeError("recorder part requires accepted slotId")
+    parts = []
+    for entry in document.get("bagFiles") or []:
+        if entry.get("state") != "finalized":
+            continue
+        path = os.path.join(output_directory, entry["name"])
+        digest = hashlib.sha256()
+        with open(path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        parts.append({"slotId": slot_id, "targetId": document["targetId"], "sourcePath": path,
+                      "sha256": digest.hexdigest(), "size": entry["sizeBytes"]})
+    document["parts"] = parts
+
 def finalize_archive_files(document):
     def issued_bag_name(index, count):
         # One closed volume is the record. A part suffix would imply another volume exists.
@@ -1021,6 +1038,7 @@ def finalize_archive_files(document):
         inventory_partial_files(document)
         write_manifest(document)
         raise
+    publish_parts(document)
     write_manifest(document)
 
 if naming_version == 1:
@@ -1190,7 +1208,7 @@ def start_recorder_service():
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
                 "ready": child is not None and child.poll() is None and recorder_armed.is_set(),
-                "facts": {"path": output_prefix + ".bag", "recordingId": recording_id,
+                "facts": {"path": output_prefix + ".bag", "recordingId": recording_id, "parts": manifest.get("parts", []),
                           "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
                           "startedAt": manifest["recordingStartedAt"],
                           "timeSource": manifest["recordingStartedAtEvidence"]}}
