@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <future>
 #include <limits>
@@ -15,7 +16,7 @@
 namespace xgc_px4_multirotor_ros1_adapter {
 class StatusDemandHarness {
 public:
-  StatusDemandHarness() {
+  explicit StatusDemandHarness(bool live_sources = false) {
     ros::NodeHandle node;
     std::set<std::string> channels{"state.pose", "state.mocap.pose", "state.vision.pose", "state.velocity",
         "state.mocap.velocity", "state.mocap.acceleration", "state.mocap.speed", "state.localization.error",
@@ -23,6 +24,26 @@ public:
         "setpoint.attitude", "diagnostic.fcu-link", "diagnostic.offboard-input", "diagnostic.stream-health"};
     NativeProfileConfig native;
     native.vision_publish_rate_hz = 30;
+    if (live_sources) {
+      const std::string prefix = "/demand_sources";
+      native.pose_endpoint = prefix + "/pose";
+      native.mocap_endpoint = prefix + "/mocap";
+      native.mocap_velocity_endpoint = prefix + "/mocap_velocity";
+      native.mocap_acceleration_endpoint = prefix + "/mocap_acceleration";
+      native.canonical_pose_endpoint = prefix + "/canonical_pose";
+      native.canonical_velocity_endpoint = prefix + "/canonical_velocity";
+      native.canonical_acceleration_endpoint = prefix + "/canonical_acceleration";
+      native.vision_pose_endpoint = prefix + "/vision";
+      native.velocity_endpoint = prefix + "/velocity";
+      native.imu_endpoint = prefix + "/imu";
+      native.power_endpoint = prefix + "/power";
+      native.controller_status_endpoint = prefix + "/controller";
+      native.state_endpoint = prefix + "/state";
+      native.extended_state_endpoint = prefix + "/extended";
+      native.local_setpoint_endpoint = prefix + "/local_setpoint";
+      native.attitude_setpoint_endpoint = prefix + "/attitude_setpoint";
+      native.timesync_endpoint = prefix + "/timesync";
+    }
     runtime_.reset(new RobotRuntime(std::move(node), "r1", InstalledContract().primaryProfile().profile_id,
         "/r1", channels, channels, std::move(native), {},
         [this](xgc::robot::v1::RobotMessage message) {
@@ -34,10 +55,16 @@ public:
             changed_.wait(lock, [this] { return released_; });
           }
         }));
-    runtime_->vision_pose_publisher_ = runtime_->node_handle_.advertise<geometry_msgs::PoseStamped>("status_test_vision", 1);
-    std::lock_guard<std::mutex> lock(runtime_->mutex_);
-    for (const auto &channel : channels)
-      runtime_->ensureSourceLocked(channel, 5.0);
+    if (live_sources) {
+      std::string error;
+      if (!runtime_->install(&error))
+        throw std::runtime_error(error);
+    } else {
+      runtime_->vision_pose_publisher_ = runtime_->node_handle_.advertise<geometry_msgs::PoseStamped>("status_test_vision", 1);
+      std::lock_guard<std::mutex> lock(runtime_->mutex_);
+      for (const auto &channel : channels)
+        runtime_->ensureSourceLocked(channel, 5.0);
+    }
   }
 
   ~StatusDemandHarness() {
@@ -150,6 +177,168 @@ private:
   std::vector<xgc::robot::v1::RobotMessage> messages_;
   bool block_ = false, entered_ = false, released_ = false;
 };
+
+template <class Predicate>
+bool waitFor(Predicate ready, double seconds = 3.0) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::duration<double>(seconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (ready()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return ready();
+}
+
+TEST(StatusDemand, RealRosInputsFollowUnionAndKeepIndependentLocalization) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true);
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_sources/imu", 10, false);
+  auto velocity = node.advertise<geometry_msgs::TwistStamped>("/demand_sources/velocity", 10, false);
+  auto local = node.advertise<mavros_msgs::PositionTarget>("/demand_sources/local_setpoint", 10, false);
+  auto attitude = node.advertise<mavros_msgs::AttitudeTarget>("/demand_sources/attitude_setpoint", 10, false);
+  auto timesync = node.advertise<mavros_msgs::TimesyncStatus>("/demand_sources/timesync", 10, false);
+  auto state = node.advertise<mavros_msgs::State>("/demand_sources/state", 10, false);
+  auto mocap = node.advertise<geometry_msgs::PoseStamped>("/demand_sources/mocap", 10, false);
+  std::atomic<unsigned> forwarded{0};
+  auto canonical = node.subscribe<geometry_msgs::PoseStamped>("/demand_sources/canonical_pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++forwarded; });
+
+  ASSERT_TRUE(waitFor([&] { return state.getNumSubscribers() && mocap.getNumSubscribers() &&
+                                  canonical.getNumPublishers(); }));
+  EXPECT_EQ(0u, imu.getNumSubscribers());
+  EXPECT_EQ(0u, velocity.getNumSubscribers());
+  EXPECT_EQ(0u, local.getNumSubscribers());
+  EXPECT_EQ(0u, timesync.getNumSubscribers());
+  mavros_msgs::State connected;
+  connected.connected = true;
+  connected.mode = "OFFBOARD";
+  geometry_msgs::PoseStamped pose;
+  pose.header.frame_id = "world";
+  pose.pose.orientation.w = 1;
+  ASSERT_TRUE(waitFor([&] {
+    state.publish(connected);
+    mocap.publish(pose);
+    return source.health().first && forwarded.load() > 0;
+  }));
+  EXPECT_TRUE(source.messages().empty());
+
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  EXPECT_EQ(0u, velocity.getNumSubscribers());
+  sensor_msgs::Imu sample;
+  sample.header.frame_id = "old-generation";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return !source.messages().empty(); }));
+  source.demand({"state.velocity"});
+  ASSERT_TRUE(waitFor([&] { return !imu.getNumSubscribers() && velocity.getNumSubscribers() == 1; }));
+  const auto before = source.messages().size();
+  sample.header.frame_id = "while-unsubscribed";
+  imu.publish(sample);
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1 && !velocity.getNumSubscribers(); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  EXPECT_EQ(before, source.messages().size()); // no retired source replay
+  sample.header.frame_id = "new-generation";
+  ASSERT_TRUE(waitFor([&] { imu.publish(sample); return source.messages().size() > before; }));
+  xgc::semantic::common::v1::ImuEstimate observed;
+  ASSERT_TRUE(observed.ParseFromString(source.messages().back().message().payload().value()));
+  EXPECT_EQ("new-generation", observed.frame_id());
+
+  // A derived diagnostic owns the two source subscriptions even when their
+  // raw channels are not selected. A stream-health consumer needs all three.
+  source.demand({"diagnostic.offboard-input"});
+  ASSERT_TRUE(waitFor([&] { return !imu.getNumSubscribers() && local.getNumSubscribers() == 1 &&
+                                  attitude.getNumSubscribers() == 1; }));
+  EXPECT_EQ(0u, timesync.getNumSubscribers());
+  source.demand({"diagnostic.stream-health"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1 && velocity.getNumSubscribers() == 1 &&
+                                  local.getNumSubscribers() == 1 && attitude.getNumSubscribers() == 1 &&
+                                  timesync.getNumSubscribers() == 1; }));
+  source.demand({});
+  ASSERT_TRUE(waitFor([&] { return !imu.getNumSubscribers() && !velocity.getNumSubscribers() &&
+                                  !local.getNumSubscribers() && !attitude.getNumSubscribers() &&
+                                  !timesync.getNumSubscribers(); }));
+  EXPECT_EQ(1u, state.getNumSubscribers());
+  EXPECT_EQ(1u, mocap.getNumSubscribers());
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, RealRosRetirementJoinsAnInFlightProducer) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true);
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_sources/imu", 10, false);
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  source.block();
+  sensor_msgs::Imu value;
+  value.header.frame_id = "body";
+  ASSERT_TRUE(waitFor([&] { imu.publish(value); return source.waitEntered(); }));
+  auto retirement = std::async(std::launch::async, [&] { source.demand({}); });
+  EXPECT_EQ(std::future_status::timeout, retirement.wait_for(std::chrono::milliseconds(30)));
+  source.release();
+  ASSERT_EQ(std::future_status::ready, retirement.wait_for(std::chrono::seconds(3)));
+  retirement.get();
+  EXPECT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 0; }));
+  const auto count = source.messages().size();
+  imu.publish(value);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  EXPECT_EQ(count, source.messages().size());
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, RetiringStatusLeavesAnotherLocalRosConsumerSubscribed) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true);
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_sources/imu", 10, false);
+  std::atomic<unsigned> local_received{0};
+  auto local = node.subscribe<sensor_msgs::Imu>("/demand_sources/imu", 10,
+      [&](const sensor_msgs::Imu::ConstPtr &) { ++local_received; });
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() > 0; }));
+  sensor_msgs::Imu value;
+  value.header.frame_id = "body";
+  ASSERT_TRUE(waitFor([&] { imu.publish(value); return local_received.load() > 0; }));
+  EXPECT_TRUE(source.messages().empty());
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { imu.publish(value); return !source.messages().empty(); }));
+  source.demand({});
+  const auto before = local_received.load();
+  ASSERT_TRUE(waitFor([&] { imu.publish(value); return local_received.load() > before; }));
+  EXPECT_TRUE(imu.getNumSubscribers() > 0);
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, StopAndRetirementBothJoinARealRosCallback) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true);
+  auto imu = node.advertise<sensor_msgs::Imu>("/demand_sources/imu", 10, false);
+  source.demand({"state.imu"});
+  ASSERT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 1; }));
+  source.block();
+  sensor_msgs::Imu value;
+  value.header.frame_id = "body";
+  ASSERT_TRUE(waitFor([&] { imu.publish(value); return source.waitEntered(); }));
+  auto retirement = std::async(std::launch::async, [&] { source.demand({}); });
+  EXPECT_EQ(std::future_status::timeout, retirement.wait_for(std::chrono::milliseconds(30)));
+  auto stopping = std::async(std::launch::async, [&] { source.stop(); });
+  EXPECT_EQ(std::future_status::timeout, stopping.wait_for(std::chrono::milliseconds(30)));
+  source.release();
+  ASSERT_EQ(std::future_status::ready, retirement.wait_for(std::chrono::seconds(3)));
+  retirement.get();
+  ASSERT_EQ(std::future_status::ready, stopping.wait_for(std::chrono::seconds(3)));
+  stopping.get();
+  EXPECT_TRUE(waitFor([&] { return imu.getNumSubscribers() == 0; }));
+  spinner.stop();
+}
 
 TEST(StatusDemand, NoViewFreshSelectedSnapshotAndReopen) {
   StatusDemandHarness source;

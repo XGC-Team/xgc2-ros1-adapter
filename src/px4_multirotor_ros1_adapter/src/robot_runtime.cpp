@@ -1024,19 +1024,25 @@ void RobotRuntime::Stop() {
     stopping_ = true;
   }
 
-  pose_subscriber_.shutdown();
-  mocap_subscriber_.shutdown();
-  mocap_velocity_subscriber_.shutdown();
-  mocap_acceleration_subscriber_.shutdown();
-  velocity_subscriber_.shutdown();
-  imu_subscriber_.shutdown();
-  power_subscriber_.shutdown();
-  controller_status_subscriber_.shutdown();
-  state_subscriber_.shutdown();
-  extended_state_subscriber_.shutdown();
-  local_setpoint_subscriber_.shutdown();
-  attitude_setpoint_subscriber_.shutdown();
-  timesync_subscriber_.shutdown();
+  // Subscriber::shutdown may wait for callbacks; never hold mutex_ here.
+  // A concurrent demand update must finish installing/retiring its sources
+  // before Stop takes ownership of the subscribers.
+  {
+    std::lock_guard<std::mutex> status_update(status_update_mutex_);
+    pose_subscriber_.shutdown();
+    mocap_subscriber_.shutdown();
+    mocap_velocity_subscriber_.shutdown();
+    mocap_acceleration_subscriber_.shutdown();
+    velocity_subscriber_.shutdown();
+    imu_subscriber_.shutdown();
+    power_subscriber_.shutdown();
+    controller_status_subscriber_.shutdown();
+    state_subscriber_.shutdown();
+    extended_state_subscriber_.shutdown();
+    local_setpoint_subscriber_.shutdown();
+    attitude_setpoint_subscriber_.shutdown();
+    timesync_subscriber_.shutdown();
+  }
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1181,53 +1187,19 @@ bool RobotRuntime::installPx4(std::string *error) {
   if (channelRequired("state.velocity")) {
     ensureSourceLocked("state.velocity",
                        channelStaleAfterSeconds(profile_id_, "state.velocity"));
-    velocity_subscriber_ = node_handle_.subscribe<geometry_msgs::TwistStamped>(
-        velocity_endpoint_, 20,
-        [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->px4VelocityCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(velocity_subscriber_, velocity_endpoint_,
-                                error))
-      return false;
   }
   if (channelRequired("state.imu")) {
     ensureSourceLocked("state.imu",
                        channelStaleAfterSeconds(profile_id_, "state.imu"));
-    imu_subscriber_ = node_handle_.subscribe<sensor_msgs::Imu>(
-        imu_endpoint_, 20,
-        [weak_self](const sensor_msgs::Imu::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->imuCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(imu_subscriber_, imu_endpoint_, error))
-      return false;
   }
   if (channelRequired("state.power")) {
     ensureSourceLocked("state.power",
                        channelStaleAfterSeconds(profile_id_, "state.power"));
-    power_subscriber_ = node_handle_.subscribe<sensor_msgs::BatteryState>(
-        power_endpoint_, 10,
-        [weak_self](const sensor_msgs::BatteryState::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->batteryCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(power_subscriber_, power_endpoint_, error))
-      return false;
   }
   if (channelRequired("state.controller")) {
     ensureSourceLocked(
         "state.controller",
         channelStaleAfterSeconds(profile_id_, "state.controller"));
-    controller_status_subscriber_ = node_handle_.subscribe<std_msgs::String>(
-        controller_status_endpoint_, 10,
-        [weak_self](const std_msgs::String::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->controllerStatusCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(controller_status_subscriber_,
-                                controller_status_endpoint_, error))
-      return false;
   }
   if (channelRequired("state.health")) {
     ensureSourceLocked("state.health",
@@ -1260,51 +1232,23 @@ bool RobotRuntime::installPx4(std::string *error) {
   if (channelRequired("setpoint.local")) {
     ensureSourceLocked("setpoint.local",
                        channelStaleAfterSeconds(profile_id_, "setpoint.local"));
-    local_setpoint_subscriber_ =
-        node_handle_.subscribe<mavros_msgs::PositionTarget>(
-            local_setpoint_endpoint_, 50,
-            [weak_self](const mavros_msgs::PositionTarget::ConstPtr &message) {
-              if (const auto self = weak_self.lock())
-                self->localSetpointCallback(message);
-            }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(local_setpoint_subscriber_,
-                                local_setpoint_endpoint_, error))
-      return false;
   }
   if (channelRequired("setpoint.attitude")) {
     ensureSourceLocked(
         "setpoint.attitude",
         channelStaleAfterSeconds(profile_id_, "setpoint.attitude"));
-    attitude_setpoint_subscriber_ =
-        node_handle_.subscribe<mavros_msgs::AttitudeTarget>(
-            attitude_setpoint_endpoint_, 50,
-            [weak_self](const mavros_msgs::AttitudeTarget::ConstPtr &message) {
-              if (const auto self = weak_self.lock())
-                self->attitudeSetpointCallback(message);
-            }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(attitude_setpoint_subscriber_,
-                                attitude_setpoint_endpoint_, error))
-      return false;
   }
   if (channelRequired("diagnostic.fcu-link")) {
     ensureSourceLocked(
         "diagnostic.fcu-link",
         channelStaleAfterSeconds(profile_id_, "diagnostic.fcu-link"));
-    timesync_subscriber_ = node_handle_.subscribe<mavros_msgs::TimesyncStatus>(
-        timesync_endpoint_, 20,
-        [weak_self](const mavros_msgs::TimesyncStatus::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->timesyncStatusCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(timesync_subscriber_, timesync_endpoint_,
-                                error))
-      return false;
   }
   if (channelRequired("diagnostic.offboard-input")) {
     ensureSourceLocked(
         "diagnostic.offboard-input",
         channelStaleAfterSeconds(profile_id_, "diagnostic.offboard-input"));
   }
+  optional_sources_installed_ = true;
   return true;
 }
 
@@ -2087,9 +2031,110 @@ void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
   emit(std::move(messages));
 }
 
+std::set<std::string> RobotRuntime::statusInputs(
+    const std::set<std::string> &channels) const {
+  std::set<std::string> needed;
+  for (const auto &channel : channels)
+    if (channelEnabled(channel)) needed.insert(channel);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    const std::vector<std::string> pending(needed.begin(), needed.end());
+    for (const auto &channel : pending) {
+      contract::ChannelMetadata metadata{};
+      if (!InstalledContract().channelMetadata(profile_id_, channel, &metadata))
+        continue;
+      for (std::size_t i = 0; i < metadata.observes_count; ++i)
+        changed = needed.insert(metadata.observes[i]).second || changed;
+    }
+  }
+  return needed;
+}
+
+// Only status-owned inputs belong here. MAVROS state, localization/vision and
+// their local ROS forwarding remain installed for health and native operations.
+// Caller owns status_update_mutex_ and never holds mutex_.
+std::vector<std::string> RobotRuntime::reconcileOptionalSources(
+    const std::set<std::string> &needed) {
+  std::vector<std::string> retired;
+  const auto weak_self = std::weak_ptr<RobotRuntime>(shared_from_this());
+  auto update = [&](const char *channel, ros::Subscriber &subscriber, auto subscribe) {
+    const bool wanted = channelRequired(channel) && needed.count(channel);
+    if (!wanted && subscriber) {
+      subscriber.shutdown();
+      retired.emplace_back(channel);
+    } else if (wanted && !subscriber) {
+      subscriber = subscribe();
+      if (!subscriber)
+        throw std::runtime_error(std::string("failed to subscribe status input: ") + channel);
+    }
+  };
+  update("state.velocity", velocity_subscriber_, [&] {
+    return node_handle_.subscribe<geometry_msgs::TwistStamped>(velocity_endpoint_, 20,
+        [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->px4VelocityCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("state.imu", imu_subscriber_, [&] {
+    return node_handle_.subscribe<sensor_msgs::Imu>(imu_endpoint_, 20,
+        [weak_self](const sensor_msgs::Imu::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->imuCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("state.power", power_subscriber_, [&] {
+    return node_handle_.subscribe<sensor_msgs::BatteryState>(power_endpoint_, 10,
+        [weak_self](const sensor_msgs::BatteryState::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->batteryCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("state.controller", controller_status_subscriber_, [&] {
+    return node_handle_.subscribe<std_msgs::String>(controller_status_endpoint_, 10,
+        [weak_self](const std_msgs::String::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->controllerStatusCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("setpoint.local", local_setpoint_subscriber_, [&] {
+    return node_handle_.subscribe<mavros_msgs::PositionTarget>(local_setpoint_endpoint_, 50,
+        [weak_self](const mavros_msgs::PositionTarget::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->localSetpointCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("setpoint.attitude", attitude_setpoint_subscriber_, [&] {
+    return node_handle_.subscribe<mavros_msgs::AttitudeTarget>(attitude_setpoint_endpoint_, 50,
+        [weak_self](const mavros_msgs::AttitudeTarget::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->attitudeSetpointCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  update("diagnostic.fcu-link", timesync_subscriber_, [&] {
+    return node_handle_.subscribe<mavros_msgs::TimesyncStatus>(timesync_endpoint_, 20,
+        [weak_self](const mavros_msgs::TimesyncStatus::ConstPtr &message) {
+          if (const auto self = weak_self.lock()) self->timesyncStatusCallback(message);
+        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+  });
+  return retired;
+}
+
+void RobotRuntime::clearRetiredSourceLocked(const std::string &channel) {
+  auto source = sources_.find(channel);
+  if (source != sources_.end()) {
+    const auto stale_after = source->second.stale_after_seconds;
+    source->second = SourceTracker{};
+    source->second.stale_after_seconds = stale_after;
+  }
+  last_output_.erase(channel);
+  if (channel == "state.velocity") latest_velocity_.reset();
+  else if (channel == "state.imu") latest_imu_.reset();
+  else if (channel == "state.power") latest_power_ = PowerSample{};
+  else if (channel == "state.controller") latest_controller_.reset();
+  else if (channel == "setpoint.local") has_local_setpoint_ = false;
+  else if (channel == "setpoint.attitude") has_attitude_setpoint_ = false;
+  else if (channel == "diagnostic.fcu-link") latest_timesync_ = TimesyncSample{};
+}
+
 void RobotRuntime::SetStatusDemand(const std::set<std::string> &channels) {
   StatusUpdateGuard update(this);
   if (!update) return;
+  std::lock_guard<std::mutex> status_update(status_update_mutex_);
   std::vector<xgc::robot::v1::RobotMessage> messages;
   std::unique_lock<std::mutex> lock(mutex_);
   if (stopping_)
@@ -2103,13 +2148,20 @@ void RobotRuntime::SetStatusDemand(const std::set<std::string> &channels) {
     if (!channels.count(channel))
       removed = true;
   status_demand_ = channels;
-  if (removed) {
-    const auto old_epoch = callback_epoch_;
-    callback_epoch_ ^= 1u;
+  const auto old_epoch = callback_epoch_;
+  if (removed) callback_epoch_ ^= 1u;
+  const bool reconcile = optional_sources_installed_;
+  const auto needed = reconcile ? statusInputs(channels) : std::set<std::string>{};
+  lock.unlock();
+  // Unregister before joining the old callback epoch; neither operation may
+  // hold the mutex needed by those callbacks.
+  const auto retired = reconcile ? reconcileOptionalSources(needed)
+                                 : std::vector<std::string>{};
+  lock.lock();
+  if (removed)
     callbacks_idle_.wait(lock, [&] { return active_callback_epochs_[old_epoch] == 0; });
-    if (stopping_)
-      return;
-  }
+  for (const auto &channel : retired) clearRetiredSourceLocked(channel);
+  if (stopping_) return;
   try {
     const auto now = ros::WallTime::now();
     for (const auto &channel : added) {
