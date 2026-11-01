@@ -25,6 +25,24 @@ def binding(slot, namespace, dynamics=True, source="simulation"):
     return dict(id=slot, namespace=namespace, hybridSource=source, applyModelDynamics=dynamics)
 
 
+def with_effective_source(row, ctx):
+    row = copy.deepcopy(row)
+    if "source" not in row:
+        mode = ctx["runMode"]
+        row["source"] = row.get("binding", {}).get("hybridSource") if mode == "hybrid" else mode
+    return row
+
+
+def project(row, ctx):
+    return projection.project(with_effective_source(row, ctx), ctx)
+
+
+def project_batch(request):
+    converted = copy.deepcopy(request)
+    converted["robots"] = [with_effective_source(row, converted["context"]) for row in request["robots"]]
+    return projection.project_batch(converted)
+
+
 def scout_asset():
     return dict(kind="scout_mini", profileId="scout-mini.physical.vrpn", scout=dict(
         mocapRigidBodyName="tracked", positioningFrameNumber=5,
@@ -47,6 +65,19 @@ def mecanum_asset():
 
 
 class AssetProjectionTest(unittest.TestCase):
+    def test_v18_uses_effective_source_without_legacy_binding_field(self):
+        authored = binding("slot", "/uav1")
+        del authored["hybridSource"]
+        authored["slotDeployment"] = {"resource": {"kind": "asset-agent"}, "plant": "simulation"}
+        row = dict(source="simulation", model=model("px4_multirotor", 0), binding=authored,
+                   physicalBinding=dict(assetId="device", assetCommitId="c", asset=px4_asset()))
+        simulated = projection.project(row, context(mode="hybrid"))
+        self.assertEqual(simulated["parameters"]["localization_pose_topic"], "/uav1/pose")
+        row["source"] = "physical"
+        physical = projection.project(row, context(mode="hybrid"))
+        self.assertIn("/vrpn_client_node_physical/", physical["parameters"]["localization_pose_topic"])
+        self.assertEqual(authored["slotDeployment"]["plant"], "simulation")
+
     def test_body_returns_follows_scope_independently_of_sensor_enabled(self):
         local = {"enabled": True, "bodyReturns": False}
         binding_row = {"id": "slot", "simulationSensors": {"simpleLidar": local}}
@@ -77,15 +108,15 @@ class AssetProjectionTest(unittest.TestCase):
                     assetId="scout-asset", assetCommitId="commit", asset=asset))
                 for index, row in enumerate(bindings)])
             original = copy.deepcopy(request)
-            projected = projection.project_batch(request)
+            projected = project_batch(request)
             for index, row in enumerate(projected):
                 self.assertEqual(row["binding"], dict(bindings[index], simulationSensors=dict(simpleLidar=global_lidar)))
             self.assertEqual(request, original)
             scene_context["scene"]["parameters"]["lidar"]["scope"] = "individual"
-            self.assertEqual([row["binding"] for row in projection.project_batch(request)], bindings)
+            self.assertEqual([row["binding"] for row in project_batch(request)], bindings)
             scene_context["scene"]["parameters"]["lidar"].update(scope="global", settings=dict(global_lidar, enabled=False))
             self.assertTrue(all(not row["binding"]["simulationSensors"]["simpleLidar"]["enabled"]
-                                for row in projection.project_batch(request)))
+                                for row in project_batch(request)))
 
     def test_authored_parameters_survive_for_shared_profile_resolution(self):
         authored = dict(localization_pose_topic="/measured/custom_pose",
@@ -95,7 +126,7 @@ class AssetProjectionTest(unittest.TestCase):
             model=model("scout_mini", 0), binding=row_binding,
             physicalBinding=dict(assetId="scout-asset", assetCommitId="commit", asset=scout_asset()))])
         before = copy.deepcopy(request)
-        result = projection.project_batch(request)[0]
+        result = project_batch(request)[0]
         self.assertEqual(result["binding"]["runtimeParameters"], authored)
         self.assertEqual(result["parameters"]["localization_pose_topic"], "/vrpn_client_node/tracked/pose")
         self.assertEqual(result["parameters"]["localization_twist_topic"], "/vrpn_client_node/tracked/twist")
@@ -108,7 +139,7 @@ class AssetProjectionTest(unittest.TestCase):
             robots.append(dict(model=model(kind, ordinal), binding=binding("slot-%d" % ordinal, "/robot%d" % (ordinal + 1))))
         request = dict(context=context(), robots=robots)
         before = copy.deepcopy(request)
-        projected = projection.project_batch(request)
+        projected = project_batch(request)
         self.assertEqual(request, before)
         prefixes = {"px4_multirotor": "px4-multirotor", "scout_mini": "scout-mini", "mecanum_ugv": "mecanum-ugv"}
         for ordinal, row in enumerate(projected):
@@ -132,7 +163,7 @@ class AssetProjectionTest(unittest.TestCase):
             kinds = ("px4_multirotor", "scout_mini", "mecanum_ugv")
             robots = [dict(model=model(kinds[i % 3], i), binding=binding("slot-%03d" % i, "/robot%d" % (i + 1)))
                       for i in range(count)]
-            projected = projection.project_batch(dict(context=context(), robots=robots))
+            projected = project_batch(dict(context=context(), robots=robots))
             self.assertEqual(len(projected), count)
             topics = set()
             for i, row in enumerate(projected):
@@ -163,7 +194,7 @@ class AssetProjectionTest(unittest.TestCase):
                             model=model(kind, ordinal),
                             binding=binding("slot-%d" % ordinal, "/robot%d" % (ordinal + 1), dynamics=dynamics))])
                         before = copy.deepcopy(request)
-                        row = projection.project_batch(request)[0]
+                        row = project_batch(request)[0]
                         self.assertEqual(request, before)
                         self.assertEqual(row["profileId"], prefixes[kind] + ".xsim.ros")
                         self.assertEqual(row["derived"]["modelId"], EXPECTED_MODEL_IDS[kind])
@@ -190,7 +221,7 @@ class AssetProjectionTest(unittest.TestCase):
                         model=model(kind, 4), binding=binding("slot", "/robot7", dynamics=False),
                         physicalBinding=dict(assetId="real-asset", assetCommitId="saved-commit", asset=asset))])
                     before = copy.deepcopy(request)
-                    row = projection.project_batch(request)[0]
+                    row = project_batch(request)[0]
                     self.assertEqual(request, before)
                     self.assertEqual(asset, before["robots"][0]["physicalBinding"]["asset"])
                     self.assertEqual(row["physicalBinding"], before["robots"][0]["physicalBinding"])
@@ -214,7 +245,7 @@ class AssetProjectionTest(unittest.TestCase):
                             model=model(kind, 4), binding=binding("slot", "/robot7", source="physical"),
                             physicalBinding=dict(assetId="real-asset", assetCommitId="saved-commit", asset=asset))])
                         before = copy.deepcopy(request)
-                        row = projection.project_batch(request)[0]
+                        row = project_batch(request)[0]
                         arm = projection.MODELS[kind][0]
                         root = "/vrpn_client_node" if mode == "physical" else "/vrpn_client_node_physical"
                         topic = root + "/" + asset[arm]["mocapRigidBodyName"]
@@ -230,7 +261,7 @@ class AssetProjectionTest(unittest.TestCase):
         robots = [dict(model=model("px4_multirotor", ordinal),
                        binding=binding("uav-%03d" % ordinal, "/uav%d" % (ordinal + 1)))
                   for ordinal in range(20)]
-        projected = projection.project_batch(dict(context=context(simulator="gazebo"), robots=robots))
+        projected = project_batch(dict(context=context(simulator="gazebo"), robots=robots))
         urls = set()
         for ordinal, row in enumerate(projected):
             self.assertEqual(row["kind"], "px4_multirotor")
@@ -249,19 +280,19 @@ class AssetProjectionTest(unittest.TestCase):
                 self.assertNotIn(key, row["derived"])
             urls.add(row["parameters"]["sdk_udp_port"])
         self.assertEqual(len(urls), 20)
-        edge = projection.project(dict(model=model("px4_multirotor", 243), binding=binding("edge", "/edge")),
+        edge = project(dict(model=model("px4_multirotor", 243), binding=binding("edge", "/edge")),
                                   context(simulator="gazebo"))
         self.assertEqual(edge["parameters"]["mavlink_tcp_port"], "4803")
         self.assertEqual(edge["parameters"]["sdk_udp_port"], "15243")
         self.assertEqual(edge["parameters"]["qgc_udp_port"], "14550")
         with self.assertRaises(ValueError):
-            projection.project(dict(model=model("px4_multirotor", 244), binding=binding("over", "/over")),
+            project(dict(model=model("px4_multirotor", 244), binding=binding("over", "/over")),
                                context(simulator="gazebo"))
 
     def test_device_attachment_keeps_physical_profile_and_gazebo_replaces_authored_sitl(self):
         asset = px4_asset()
         row_binding = binding("slot", "/robot7", source="physical")
-        physical = projection.project(dict(
+        physical = project(dict(
             model=model("px4_multirotor", 4), binding=row_binding,
             physicalBinding=dict(assetId="px4-asset", assetCommitId="commit-1", asset=asset)),
             context(mode="physical", simulator="none"))
@@ -276,7 +307,7 @@ class AssetProjectionTest(unittest.TestCase):
             self.assertNotIn(key, physical["parameters"])
         self.assertEqual(physical["parameters"]["localization_offset_y"], "-2")
         gazebo_binding = binding("slot", "/robot7")
-        gazebo = projection.project(dict(
+        gazebo = project(dict(
             model=model("px4_multirotor", 6), binding=gazebo_binding,
             physicalBinding=dict(assetId="px4-asset", assetCommitId="commit-1", asset=copy.deepcopy(asset))),
             context(simulator="gazebo"))
@@ -297,7 +328,7 @@ class AssetProjectionTest(unittest.TestCase):
 
     def test_perfect_tracker_emits_no_fcu(self):
         for kind in ("px4_multirotor", "scout_mini", "mecanum_ugv"):
-            row = projection.project(dict(model=model(kind, 3), binding=binding("slot", "/robot3", dynamics=False)),
+            row = project(dict(model=model(kind, 3), binding=binding("slot", "/robot3", dynamics=False)),
                                      context(simulator="gazebo"))
             self.assertEqual(row["kind"], kind)
             self.assertEqual(row["derived"]["modelId"], EXPECTED_MODEL_IDS[kind])
@@ -309,16 +340,16 @@ class AssetProjectionTest(unittest.TestCase):
             for key in ("physical_fcu_url", "simulation_fcu_url", "management_ip", "ssh"):
                 self.assertNotIn(key, row["parameters"])
                 self.assertNotIn(key, row["derived"])
-        xsim = projection.project(dict(model=model("px4_multirotor", 3), binding=binding("slot", "/robot3", dynamics=False)),
+        xsim = project(dict(model=model("px4_multirotor", 3), binding=binding("slot", "/robot3", dynamics=False)),
                                   context())
         self.assertNotIn("sitlInstanceId", xsim["derived"])
         for key in ("management_ip", "ssh", "physical_fcu_url", "simulation_fcu_url", "mavlink_tcp_port"):
             self.assertNotIn(key, xsim["parameters"])
         with self.assertRaises(ValueError):
-            projection.project(dict(asset=px4_asset(), binding=binding("slot", "/robot7")), context())
+            project(dict(asset=px4_asset(), binding=binding("slot", "/robot7")), context())
         missing = dict(model=model("px4_multirotor", 1), binding=dict(id="slot", namespace="/robot1", hybridSource="simulation"))
         with self.assertRaises(ValueError):
-            projection.project(missing, context(simulator="gazebo"))
+            project(missing, context(simulator="gazebo"))
         self.assertNotIn("applyModelDynamics", missing["binding"])
 
 

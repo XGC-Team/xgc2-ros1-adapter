@@ -60,8 +60,11 @@ def effective_binding(binding, scene):
     return result
 
 
-def simulated_source(mode, binding):
-    return mode == "simulation" or mode == "hybrid" and binding["hybridSource"] == "simulation"
+def simulated_source(row):
+    source = row["source"]
+    if source not in ("simulation", "physical"):
+        raise ValueError("effective robot source must be simulation or physical")
+    return source == "simulation"
 
 
 def gazebo_sitl(kind, binding, context, simulated):
@@ -115,10 +118,9 @@ def apply_runtime(params, derived, binding, context, simulated):
     return params, derived
 
 
-def finish(binding, kind, model_id, ordinal, arm, profile, params, derived, context, visuals, physical=None):
+def finish(binding, kind, model_id, ordinal, arm, profile, params, derived, context, visuals, simulated, physical=None):
     derived["modelId"] = model_id
     derived["visualization"] = visuals
-    simulated = simulated_source(context["runMode"], binding)
     apply_runtime(params, derived, binding, context, simulated)
     cameras = []
     if binding.get(arm, {}).get("imageSimulationEnabled"):
@@ -147,8 +149,8 @@ def project_model(row, binding, context, kind, model_id, ordinal):
     if row.get("physicalBinding") is not None:
         raise ValueError("model projection cannot carry an asset")
     arm, prefix, scene, package, description, visuals = MODELS[kind]
-    mode, simulator = context["runMode"], context["simulator"]
-    simulated = simulated_source(mode, binding)
+    simulator = context["simulator"]
+    simulated = simulated_source(row)
     if not simulated or simulator not in ("gazebo", "xsim", "none"):
         raise ValueError("model projection requires gazebo, xsim or none")
     profile = prefix + (".gazebo.vrpn" if simulator == "gazebo" else ".xsim.ros")
@@ -163,7 +165,7 @@ def project_model(row, binding, context, kind, model_id, ordinal):
                       qgc_udp_port=scalar(endpoint["qgcUdpPort"]),
                       sdk_udp_port=scalar(endpoint["sdkUdpPort"]))
     return finish(binding, kind, model_id, ordinal, arm, profile, params, derived, context,
-                  visualization(arm, scene, package, description, visuals))
+                  visualization(arm, scene, package, description, visuals), simulated)
 
 
 def project_device(row, binding, context, kind, model_id, ordinal):
@@ -182,7 +184,7 @@ def project_device(row, binding, context, kind, model_id, ordinal):
               "positioning_comparison_threshold_m": scalar(spec["positioningComparisonThresholdM"])}
     # physicalBinding stays inventory. It does not become FCU URLs or management addresses.
     derived = {}
-    simulated = simulated_source(context["runMode"], binding)
+    simulated = simulated_source(row)
     if gazebo_sitl(kind, binding, context, simulated):
         endpoint = sitl_endpoint(ordinal)
         derived["sitlInstanceId"] = endpoint["sitlInstanceId"]
@@ -194,7 +196,7 @@ def project_device(row, binding, context, kind, model_id, ordinal):
     if profile.startswith(prefix + ".") and simulated and context["simulator"] in ("gazebo", "xsim", "none"):
         profile = prefix + (".gazebo.vrpn" if context["simulator"] == "gazebo" else ".xsim.ros")
     return finish(binding, kind, model_id, ordinal, arm, profile, params, derived, context,
-                  visualization(arm, scene, package, description, visuals), physical=copy.deepcopy(physical))
+                  visualization(arm, scene, package, description, visuals), simulated, physical=copy.deepcopy(physical))
 
 
 def project(row, context):
