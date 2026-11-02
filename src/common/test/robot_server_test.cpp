@@ -82,6 +82,15 @@ struct World {
   std::set<std::string> entered_retires;
   std::set<std::string> held_telemetry;
   std::map<std::string, int> telemetry_samples;
+  std::map<std::string, std::vector<std::set<std::string>>> demand_history;
+  void recordDemand(const std::string &robot, const std::set<std::string> &channels) {
+    std::lock_guard<std::mutex> lock(mutex);
+    demand_history[robot].push_back(channels);
+  }
+  std::vector<std::set<std::string>> demandHistory(const std::string &robot) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return demand_history[robot];
+  }
   std::map<std::string, int> periodic_ticks;
   std::map<std::string, int> health_reads;
   // CoreSilent() calls per robot and the longest silence reported.
@@ -362,6 +371,7 @@ public:
     if (ticks_ % 5 == 0 && std::getenv("XGC_T4_NATIVE_STATIC_STATUS") == nullptr) publish();
   }
   void SetStatusDemand(const std::set<std::string> &channels) override {
+    world_.recordDemand(config_.robot_id, channels);
     std::lock_guard<std::mutex> lock(demand_mutex_);
     std::set<std::string> added;
     for (const auto &channel : channels)
@@ -750,15 +760,20 @@ public:
       if (client.instance_.empty())
         client.describe();
       client.authorize(context_);
-      call_ = std::make_unique<GrpcClientCall>(
-          context_, client.instance_,
-          xgc2::xrpc::grpc_stream_deadline(xgc2::xrpc::GrpcLimits{},
-                                           GrpcClock::now() + duration));
-      if (!call_->mark_dispatched().ok())
-        return;
-      stream_ = client.stub_->SubscribeStatus(&context_, request);
-      if (!call_->receive_initial_metadata(*stream_).ok())
-        return;
+      if (duration.count() == 0) {
+        context_.AddMetadata("x-xrpc-instance-id", client.instance_);
+        context_.AddMetadata("x-request-id", "persistent-status-test");
+        stream_ = client.stub_->SubscribeStatus(&context_, request);
+        stream_->WaitForInitialMetadata();
+      } else {
+        call_ = std::make_unique<GrpcClientCall>(
+            context_, client.instance_,
+            xgc2::xrpc::grpc_stream_deadline(xgc2::xrpc::GrpcLimits{},
+                                             GrpcClock::now() + duration));
+        if (!call_->mark_dispatched().ok()) return;
+        stream_ = client.stub_->SubscribeStatus(&context_, request);
+        if (!call_->receive_initial_metadata(*stream_).ok()) return;
+      }
       reader_ = std::thread([this] {
         wire::SubscribeStatusResponse frame;
         while (stream_->Read(&frame)) {
@@ -1142,6 +1157,105 @@ TEST_F(ServerController, RequiredMemberControlIsIndependentOfOptionalViewsAndJoi
   EXPECT_TRUE(ended.response.joined());
   EXPECT_TRUE(successor.waitFinished());
   EXPECT_EQ(3u, server_->SnapshotStatusWork().subscribers);
+}
+
+TEST_F(ServerController, OwnedStatusUpdatesSelectionWithoutRetiringIntersection) {
+  startReady();
+  world_.control_silence_ms = 0;
+  const auto described = client_->describe();
+  wire::ApplyMembersRequest add;
+  auto selected = registration("r1", "/fleet/r1");
+  auto *extra = selected.mutable_configuration()->add_channels();
+  extra->set_channel_id("state.zzother"); extra->set_enabled(true);
+  *add.add_members() = selected;
+  ASSERT_TRUE(client_->apply(add).status.ok());
+  wire::InstallControllerRequest install;
+  install.set_process_owner(kTestProcessOwner); install.set_generation(1);
+  install.set_open_id(std::string(16, 'i')); install.set_controller_grant(std::string(32, 'g'));
+  install.mutable_binding()->set_provider_instance_id(described.response.service_ref().instance_id());
+  install.mutable_binding()->set_core_id("core"); install.mutable_binding()->set_core_boot_id("boot");
+  ASSERT_TRUE(client_->call<wire::InstallControllerResponse>(install, &wire::RobotAdapterServerService::Stub::InstallController).status.ok());
+  wire::SubscribeStatusRequest control;
+  control.set_control(true); control.mutable_owner()->set_controller_grant(install.controller_grant());
+  control.mutable_owner()->set_generation(1); control.mutable_owner()->set_open_id(std::string(16, 'c'));
+  Client::Watch required(*client_, milliseconds(0), control);
+  ASSERT_TRUE(required.wait([](const auto &frame) { return frame.generation() == 1; }));
+  wire::SubscribeStatusRequest selection;
+  selection.mutable_owner()->set_controller_grant(install.controller_grant());
+  selection.mutable_owner()->set_generation(1); selection.mutable_owner()->set_open_id(std::string(16, 's'));
+  auto *member = selection.mutable_selected()->add_members();
+  *member->mutable_identity() = identity("r1"); member->add_channel_ids("state.test");
+  Client::Watch watch(*client_, milliseconds(0), selection);
+  ASSERT_TRUE(watch.wait([](const auto &frame) { return frame.generation() == 1; }));
+  ASSERT_TRUE(watch.wait([](const auto &frame) { return frame.members_size() && frame.members(0).messages_size(); }));
+  const auto initial = world_.demandHistory("r1");
+  ASSERT_FALSE(initial.empty());
+  EXPECT_EQ((std::set<std::string>{"state.test"}), initial.back());
+  const auto before = server_->SnapshotStatusWork();
+  member->add_channel_ids("state.zzother");
+  auto update = [&](const wire::SubscribeStatusRequest &value) {
+    return client_->call<wire::UpdateStatusSelectionResponse>(value, &wire::RobotAdapterServerService::Stub::UpdateStatusSelection);
+  };
+  const auto added = update(selection);
+  ASSERT_TRUE(added.status.ok()) << added.status.error_message();
+  EXPECT_EQ(selection.owner().generation(), added.response.generation());
+  EXPECT_EQ(selection.owner().open_id(), added.response.open_id());
+  ASSERT_TRUE(watch.wait([](const auto &frame) {
+    for (const auto &m : frame.members()) for (const auto &value : m.messages())
+      if (value.channel_id() == "state.zzother") return true;
+    return false;
+  }));
+  auto history = world_.demandHistory("r1");
+  ASSERT_EQ(initial.size() + 1, history.size());
+  EXPECT_EQ((std::set<std::string>{"state.test", "state.zzother"}), history.back());
+  ASSERT_TRUE(update(selection).status.ok());
+  EXPECT_EQ(history.size(), world_.demandHistory("r1").size());
+  member->mutable_channel_ids()->RemoveLast();
+  ASSERT_TRUE(update(selection).status.ok());
+  history = world_.demandHistory("r1");
+  EXPECT_EQ((std::set<std::string>{"state.test"}), history.back());
+  for (const auto &demand : history) EXPECT_TRUE(demand.count("state.test"));
+  EXPECT_EQ(before.subscribers_joined, server_->SnapshotStatusWork().subscribers_joined);
+  auto stale = selection; stale.mutable_owner()->set_open_id(std::string(16, 'x'));
+  EXPECT_EQ(grpc::StatusCode::FAILED_PRECONDITION, update(stale).status.error_code());
+  EXPECT_EQ(history.size(), world_.demandHistory("r1").size());
+  if (std::getenv("XGC_T4_LONG_SUBSCRIPTION")) {
+    std::this_thread::sleep_for(milliseconds(41000));
+    EXPECT_FALSE(watch.waitFinished(milliseconds(0)));
+    EXPECT_FALSE(required.waitFinished(milliseconds(0)));
+    EXPECT_EQ(before.subscribers_joined, server_->SnapshotStatusWork().subscribers_joined);
+    EXPECT_EQ(history.size(), world_.demandHistory("r1").size());
+  }
+  watch.cancel(); ASSERT_TRUE(watch.waitFinished());
+  wire::RetireStatusRequest retire; *retire.mutable_owner() = selection.owner();
+  ASSERT_TRUE(client_->call<wire::RetireStatusResponse>(retire, &wire::RobotAdapterServerService::Stub::RetireStatus).status.ok());
+  EXPECT_TRUE(world_.demandHistory("r1").back().empty());
+  EXPECT_EQ(grpc::StatusCode::FAILED_PRECONDITION, update(selection).status.error_code());
+  // A real loss of the required control stream still fences new control,
+  // invokes the existing motion watchdog, and permits the safety release.
+  world_.control_silence_ms = 900;
+  wire::AcquireControlRequest acquire;
+  acquire.set_controller_grant(install.controller_grant()); *acquire.mutable_identity() = identity("r1"); acquire.set_generation(1);
+  ASSERT_TRUE(client_->call<wire::AcquireControlResponse>(acquire, &wire::RobotAdapterServerService::Stub::AcquireControl).status.ok());
+  auto motion = command("r1", "motion", "persistent-control-motion");
+  motion.set_controller_grant(install.controller_grant()); motion.set_control_generation(1);
+  ASSERT_EQ(operation::OPERATION_PHASE_SUCCEEDED, client_->execute(motion).response.event().phase());
+  const auto silent_before = world_.silentCalls("r1");
+  required.cancel(); ASSERT_TRUE(required.waitFinished());
+  wire::RetireStatusRequest retire_control; *retire_control.mutable_owner() = control.owner(); retire_control.set_control(true);
+  ASSERT_TRUE(client_->call<wire::RetireStatusResponse>(retire_control, &wire::RobotAdapterServerService::Stub::RetireStatus).status.ok());
+  acquire.set_generation(2);
+  EXPECT_EQ(grpc::StatusCode::FAILED_PRECONDITION,
+      client_->call<wire::AcquireControlResponse>(acquire, &wire::RobotAdapterServerService::Stub::AcquireControl).status.error_code());
+  for (int n = 0; n < 40 && world_.silentCalls("r1") == silent_before; ++n)
+    std::this_thread::sleep_for(milliseconds(50));
+  EXPECT_GT(world_.silentCalls("r1"), silent_before);
+  wire::ReleaseControlRequest release;
+  release.set_controller_grant(install.controller_grant()); *release.mutable_identity() = identity("r1"); release.set_generation(1);
+  const auto released = client_->call<wire::ReleaseControlResponse>(release, &wire::RobotAdapterServerService::Stub::ReleaseControl);
+  ASSERT_TRUE(released.status.ok()) << released.status.error_message();
+  EXPECT_TRUE(released.response.joined());
+  EXPECT_TRUE(world_.contains("retire-control:r1"));
 }
 
 TEST_F(ServerController, UnknownOpenIsFencedBeforeLateAdmission) {

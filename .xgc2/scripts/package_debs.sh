@@ -209,6 +209,12 @@ package_common() {
   shlibs_depends="$(EXCLUDE_PACKAGE="${COMMON_PACKAGE}" binary_dependencies \
     "${pkg_root}${PREFIX}/lib/libxgc2_robot_server.so.0" \
     "${pkg_root}${PREFIX}/lib/libxgc2_robot_server_ros1.so.0")"
+  local grpc_dep_version
+  grpc_dep_version="$(printf '%s\n' "${shlibs_depends}" | sed -nE 's/.*libxgc2-xrpc-grpc2 \(>= ([^)]+)\).*/\1/p')"
+  if [[ -z "${grpc_dep_version}" ]] || ! dpkg --compare-versions "${grpc_dep_version}" ge "0.2.1-4~focal"; then
+    echo "common adapter requires the subscription-capable libxgc2-xrpc-grpc2 >= 0.2.1-4~focal" >&2
+    exit 1
+  fi
   write_control "${pkg_root}" "${COMMON_PACKAGE}" \
     "${shlibs_depends}, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-roscpp, python3" \
     "XGC2 ROS1 robot type server libraries" \

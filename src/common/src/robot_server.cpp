@@ -376,6 +376,14 @@ class RobotServer::Impl {
                                                      "controller retirement capacity exhausted"));
       return scope.application_error(owner_.retireController(*context, scope, *request, response));
     }
+    grpc::Status UpdateStatusSelection(grpc::ServerContext *context,
+                              const wire::SubscribeStatusRequest *request,
+                              wire::UpdateStatusSelectionResponse *response) override {
+      auto scope = owner_.admission_.begin(*context);
+      if (!scope) return scope.status();
+      if (const auto refusal = owner_.requireStarted(scope)) return *refusal;
+      return scope.application_error(owner_.updateStatusSelection(scope, *request, response));
+    }
     grpc::Status RetireStatus(grpc::ServerContext *context,
                               const wire::RetireStatusRequest *request,
                               wire::RetireStatusResponse *response) override {
@@ -1568,9 +1576,11 @@ private:
     return grpc::Status::OK;
   }
   struct Subscriber {
-    explicit Subscriber(StatusSelection value) : selection(std::move(value)) {}
-    const StatusSelection selection;
+    explicit Subscriber(StatusSelection value)
+        : selection(std::make_shared<const StatusSelection>(std::move(value))) {}
+    std::shared_ptr<const StatusSelection> selection; // guarded by subscribers_mutex_
     std::condition_variable changed;
+    std::uint64_t selection_revision = 1;
     std::uint64_t revision = 1;
     std::uint64_t delivered = 0;
   };
@@ -1582,14 +1592,14 @@ private:
     {
       std::lock_guard<std::mutex> lock(subscribers_mutex_);
       for (const auto &subscriber : subscribers_) {
-        if (subscriber->selection.all) {
+        if (subscriber->selection->all) {
           for (const auto &channel : member->configuration.channels())
             if (channel.enabled())
               wanted.insert(channel.channel_id());
           continue;
         }
-        const auto found = subscriber->selection.members.find(member->identity.robot_id());
-        if (found == subscriber->selection.members.end() ||
+        const auto found = subscriber->selection->members.find(member->identity.robot_id());
+        if (found == subscriber->selection->members.end() ||
             !sameIdentity(found->second.identity, member->identity))
           continue;
         for (const auto &channel : member->configuration.channels())
@@ -1656,6 +1666,7 @@ private:
     bool owned = false;
     bool control = false;
     std::shared_ptr<Subscriber> subscriber; // guarded by subscribers_mutex_
+    std::timed_mutex selection_update_mutex;
     std::mutex io_mutex;
     std::condition_variable io_changed;
     bool io_done = false, io_ok = false, done_received = false;
@@ -1669,10 +1680,19 @@ private:
       io_changed.wait(lock, [this] { return io_done; });
       return io_ok;
     }
-    bool write(const wire::SubscribeStatusResponse &frame) {
+    bool write(const wire::SubscribeStatusResponse &frame,
+               const std::shared_ptr<Subscriber> &selected = {},
+               std::uint64_t selection_revision = 0, bool *skipped = nullptr) {
       std::unique_lock<std::mutex> lock(io_mutex);
       if (cancelled.load(std::memory_order_acquire))
         return false;
+      if (selected) {
+        std::lock_guard<std::mutex> selection_lock(owner.subscribers_mutex_);
+        if (selected->selection_revision != selection_revision) {
+          if (skipped) *skipped = true;
+          return true;
+        }
+      }
       io_done = false;
       owner.status_writes_started_.fetch_add(1, std::memory_order_relaxed);
       owner.status_protobuf_bytes_.fetch_add(frame.ByteSizeLong(), std::memory_order_relaxed);
@@ -2031,6 +2051,71 @@ private:
       controller_changed_.notify_all();
     }
   }
+  static bool sameStatusSelection(const StatusSelection &a, const StatusSelection &b) {
+    if (a.all != b.all || a.control != b.control || a.members.size() != b.members.size()) return false;
+    for (const auto &entry : a.members) {
+      const auto found = b.members.find(entry.first);
+      if (found == b.members.end() || !sameIdentity(entry.second.identity, found->second.identity) ||
+          entry.second.channels != found->second.channels) return false;
+    }
+    return true;
+  }
+  grpc::Status updateStatusSelection(const xgc2::xrpc::GrpcCallScope &scope,
+                                      const wire::SubscribeStatusRequest &request,
+                                      wire::UpdateStatusSelectionResponse *response) {
+    if (!request.has_owner() || !validStatusOwner(request.owner()))
+      return {grpc::StatusCode::INVALID_ARGUMENT, "invalid status owner"};
+    StatusSelection replacement;
+    auto valid = validateStatusSelection(request, &replacement);
+    if (!valid.ok()) return valid;
+    if (replacement.control)
+      return {grpc::StatusCode::INVALID_ARGUMENT, "control status has no selection"};
+    std::shared_ptr<StatusCall> call;
+    {
+      std::lock_guard<std::mutex> lock(controller_mutex_);
+      if (!optional_status_.active) return {grpc::StatusCode::FAILED_PRECONDITION, "status owner is unavailable"};
+      const auto found = controller_calls_.find(optional_status_.active);
+      if (found == controller_calls_.end()) return {grpc::StatusCode::FAILED_PRECONDITION, "status owner is unavailable"};
+      call = found->second;
+    }
+    std::unique_lock<std::timed_mutex> update(call->selection_update_mutex, std::defer_lock);
+    if (!update.try_lock_until(scope.deadline()))
+      return {grpc::StatusCode::DEADLINE_EXCEEDED, "prior status selection is still joining"};
+    std::unique_lock<std::mutex> io(call->io_mutex);
+    if (!call->io_changed.wait_until(io, scope.deadline(), [&] {
+          return call->io_done || call->cancelled.load(std::memory_order_acquire);
+        })) return {grpc::StatusCode::DEADLINE_EXCEEDED, "status write is still joining"};
+    std::shared_ptr<const StatusSelection> before;
+    std::shared_ptr<const StatusSelection> after;
+    {
+      std::lock_guard<std::mutex> controller(controller_mutex_);
+      const auto &owner = request.owner();
+      const auto &slot = optional_status_;
+      if (!controllerGrantLocked(owner.controller_grant()) || slot.active != call.get() ||
+          slot.retiring || !slot.ready || slot.generation != owner.generation() ||
+          slot.open_id != owner.open_id() || !matchesPredecessor(owner, slot) ||
+          call->cancelled.load(std::memory_order_acquire))
+        return {grpc::StatusCode::FAILED_PRECONDITION, "status owner is not current"};
+      std::lock_guard<std::mutex> subscribers(subscribers_mutex_);
+      if (!call->subscriber) return {grpc::StatusCode::FAILED_PRECONDITION, "status subscriber is unavailable"};
+      before = call->subscriber->selection;
+      if (!sameStatusSelection(*before, replacement)) {
+        after = std::make_shared<const StatusSelection>(std::move(replacement));
+        call->subscriber->selection = after;
+        ++call->subscriber->selection_revision;
+        ++call->subscriber->revision;
+        call->subscriber->changed.notify_one();
+      }
+    }
+    io.unlock();
+    if (after) {
+      reconcileSubscriberMembers(*before);
+      reconcileSubscriberMembers(*after);
+    }
+    response->set_generation(request.owner().generation());
+    response->set_open_id(request.owner().open_id());
+    return grpc::Status::OK;
+  }
   grpc::Status retireStatus(const xgc2::xrpc::GrpcCallScope &scope,
                             const wire::RetireStatusRequest &request,
                             wire::RetireStatusResponse *response) {
@@ -2267,7 +2352,7 @@ private:
             status_calls_changed_.notify_all();
             break;
           }
-          call->scope.emplace(admission_.begin(call->context, true));
+          call->scope.emplace(admission_.begin_subscription(call->context));
           call->result = call->scope->status();
           if (call->result.ok()) {
             call->result = validateStatusSelection(call->request, &call->selection);
@@ -2390,10 +2475,10 @@ private:
       return;
     std::lock_guard<std::mutex> lock(subscribers_mutex_);
     for (const auto &subscriber : subscribers_) {
-      bool relevant = !identity || subscriber->selection.all;
+      bool relevant = !identity || subscriber->selection->all;
       if (!relevant) {
-        const auto selected = subscriber->selection.members.find(identity->robot_id());
-        relevant = selected != subscriber->selection.members.end() &&
+        const auto selected = subscriber->selection->members.find(identity->robot_id());
+        relevant = selected != subscriber->selection->members.end() &&
                    (!channel || (sameIdentity(selected->second.identity, *identity) &&
                                  selected->second.channels.count(*channel)));
       }
@@ -2421,29 +2506,28 @@ private:
   subscribe(StatusCall &call,
             const xgc2::xrpc::GrpcCallScope &scope, StatusSelection selection) {
     const auto deadline = scope.deadline();
-    if (call.owned) {
+    if (call.owned && call.control) {
       {
         std::lock_guard<std::mutex> lock(controller_mutex_);
-        auto &slot = call.control ? control_status_ : optional_status_;
-        if (slot.active != &call || slot.retiring || controller_retiring_)
+        if (control_status_.active != &call || control_status_.retiring || controller_retiring_)
           return grpc::Status::CANCELLED;
-        slot.ready = true;
+        control_status_.ready = true;
       }
       wire::SubscribeStatusResponse receipt;
       receipt.set_generation(call.request.owner().generation());
       receipt.set_open_id(call.request.owner().open_id());
       if (!call.write(receipt)) return grpc::Status::CANCELLED;
-      if (call.control) {
-        std::unique_lock<std::mutex> lock(call.io_mutex);
-        call.io_changed.wait_until(lock, deadline, [&] {
-          return call.done_received || call.cancelled.load(std::memory_order_acquire);
-        });
-        return grpc::Status::CANCELLED;
-      }
+      std::unique_lock<std::mutex> lock(call.io_mutex);
+      const auto finished = [&] {
+        return call.done_received || call.cancelled.load(std::memory_order_acquire);
+      };
+      if (deadline == Steady::time_point::max()) call.io_changed.wait(lock, finished);
+      else call.io_changed.wait_until(lock, deadline, finished);
+      return grpc::Status::CANCELLED;
     }
     Stream stream;
     auto subscriber = std::make_shared<Subscriber>(std::move(selection));
-    for (const auto &entry : subscriber->selection.members)
+    for (const auto &entry : subscriber->selection->members)
       stream.identities.emplace(entry.first, entry.second.identity);
     {
       std::lock_guard<std::mutex> lock(subscribers_mutex_);
@@ -2455,46 +2539,67 @@ private:
       StatusCall &call;
       std::shared_ptr<Subscriber> subscriber;
       ~Registration() {
+        std::lock_guard<std::timed_mutex> update(call.selection_update_mutex);
+        std::shared_ptr<const StatusSelection> retired;
         {
           std::lock_guard<std::mutex> lock(owner.subscribers_mutex_);
+          retired = subscriber->selection;
           owner.subscribers_.erase(std::find(owner.subscribers_.begin(),
                                              owner.subscribers_.end(),
                                              subscriber));
           call.subscriber.reset();
         }
         try {
-          owner.reconcileSubscriberMembers(subscriber->selection);
+          owner.reconcileSubscriberMembers(*retired);
         } catch (...) {
           owner.workerFailed("status source retirement", std::current_exception());
         }
         owner.subscribers_changed_.notify_all();
       }
     } registration{*this, call, subscriber};
-    reconcileSubscriberMembers(subscriber->selection);
+    reconcileSubscriberMembers(*subscriber->selection);
+    if (call.owned) {
+      {
+        std::lock_guard<std::mutex> lock(controller_mutex_);
+        if (optional_status_.active != &call || optional_status_.retiring || controller_retiring_)
+          return grpc::Status::CANCELLED;
+        optional_status_.ready = true;
+      }
+      wire::SubscribeStatusResponse receipt;
+      receipt.set_generation(call.request.owner().generation());
+      receipt.set_open_id(call.request.owner().open_id());
+      if (!call.write(receipt)) return grpc::Status::CANCELLED;
+    }
     const auto frame_limit = admission_.limits().response_bytes;
     std::uint64_t observed = 0;
     while (!shutdown_ && !call.cancelled.load(std::memory_order_acquire) &&
            Steady::now() < deadline) {
+      std::shared_ptr<const StatusSelection> selected;
+      std::uint64_t selection_revision = 0;
       {
         std::unique_lock<std::mutex> lock(subscribers_mutex_);
         if (subscriber->revision == observed) {
-          subscriber->changed.wait_until(lock, deadline, [&] {
+          const auto changed = [&] {
             return shutdown_ || call.cancelled.load(std::memory_order_acquire) ||
                    subscriber->revision != observed;
-          });
+          };
+          if (deadline == Steady::time_point::max()) subscriber->changed.wait(lock, changed);
+          else subscriber->changed.wait_until(lock, deadline, changed);
           if (subscriber->revision == observed)
             continue;
         }
         observed = subscriber->revision;
+        selected = subscriber->selection;
+        selection_revision = subscriber->selection_revision;
       }
       status_snapshots_.fetch_add(1, std::memory_order_relaxed);
       std::map<std::string, std::shared_ptr<Member>> members;
       {
         std::lock_guard<std::mutex> lock(table_mutex_);
-        if (subscriber->selection.all) {
+        if (selected->all) {
           members = members_;
         } else {
-          for (const auto &selected : subscriber->selection.members) {
+          for (const auto &selected : selected->members) {
             const auto found = members_.find(selected.first);
             if (found != members_.end() &&
                 sameIdentity(found->second->identity, selected.second.identity))
@@ -2506,11 +2611,21 @@ private:
       auto flush = [&] {
         if (!stream.sending.members_size())
           return true;
-        const auto success = call.write(stream.sending);
+        bool skipped = false;
+        const auto success = call.write(stream.sending, subscriber, selection_revision, &skipped);
         stream.sending.Clear();
+        if (skipped) stream.seen.clear();
         return success;
       };
       for (auto i = stream.identities.begin(); i != stream.identities.end();) {
+        if (!selected->all) {
+          const auto wanted = selected->members.find(i->first);
+          if (wanted == selected->members.end() || !sameIdentity(wanted->second.identity, i->second)) {
+            stream.seen.erase(i->first);
+            i = stream.identities.erase(i);
+            continue;
+          }
+        }
         const auto current = members.find(i->first);
         if (current == members.end() ||
             !sameIdentity(current->second->identity, i->second)) {
@@ -2535,8 +2650,8 @@ private:
         stream.identities[entry.first] = member->identity;
         // An exact member may be observed without requesting any telemetry.
         // Announce presence once, then retain the existing tombstone fence.
-        bool presence = !subscriber->selection.all &&
-                        subscriber->selection.members.at(entry.first).channels.empty() &&
+        bool presence = !selected->all &&
+                        selected->members.at(entry.first).channels.empty() &&
                         stream.seen.find(entry.first) == stream.seen.end();
         if (presence) {
           if (member->identity.ByteSizeLong() + 16 > frame_limit)
@@ -2547,18 +2662,18 @@ private:
         std::vector<std::pair<std::string,
                               std::pair<std::uint64_t, wire::RobotMessage>>>
             updates;
-        updates.reserve(subscriber->selection.all
+        updates.reserve(selected->all
                             ? kMaximumChannelsPerRobot
-                            : subscriber->selection.members.at(entry.first).channels.size());
+                            : selected->members.at(entry.first).channels.size());
         {
           std::lock_guard<std::mutex> lock(member->state_mutex);
-          if (subscriber->selection.all) {
+          if (selected->all) {
             for (const auto &channel : member->latest)
               if (stream.seen[entry.first][channel.first] != channel.second.first)
                 updates.push_back(channel);
           } else {
-            const auto &selected = subscriber->selection.members.at(entry.first);
-            for (const auto &id : selected.channels) {
+            const auto &member_selection = selected->members.at(entry.first);
+            for (const auto &id : member_selection.channels) {
               const auto channel = member->latest.find(id);
               if (channel != member->latest.end() &&
                   stream.seen[entry.first][id] != channel->second.first)
