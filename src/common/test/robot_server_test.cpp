@@ -805,6 +805,15 @@ public:
         return false;
       });
     }
+    template <class Predicate>
+    bool waitAfter(std::size_t start, Predicate predicate, milliseconds budget = milliseconds(5000)) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      return changed_.wait_for(lock, budget, [&] {
+        for (auto i = start; i < frames_.size(); ++i)
+          if (predicate(frames_[i])) return true;
+        return false;
+      });
+    }
     bool waitFinished(milliseconds budget = milliseconds(5000)) {
       std::unique_lock<std::mutex> lock(mutex_);
       return changed_.wait_for(lock, budget, [&] { return finished_; });
@@ -1258,6 +1267,73 @@ TEST_F(ServerController, OwnedStatusUpdatesSelectionWithoutRetiringIntersection)
   ASSERT_TRUE(released.status.ok()) << released.status.error_message();
   EXPECT_TRUE(released.response.joined());
   EXPECT_TRUE(world_.contains("retire-control:r1"));
+}
+
+TEST_F(ServerController, ReselectedChannelReplaysCurrentSharedSource) {
+  struct StaticSource {
+    StaticSource() { setenv("XGC_T4_NATIVE_STATIC_STATUS", "1", 1); }
+    ~StaticSource() { unsetenv("XGC_T4_NATIVE_STATIC_STATUS"); }
+  } static_source;
+  startReady();
+  world_.control_silence_ms = 0;
+  const auto described = client_->describe();
+  wire::ApplyMembersRequest add;
+  auto selected = registration("r1", "/fleet/r1");
+  for (const auto *id : {"state.zzother", "state.zznew"}) {
+    auto *extra = selected.mutable_configuration()->add_channels();
+    extra->set_channel_id(id); extra->set_enabled(true);
+  }
+  *add.add_members() = selected;
+  ASSERT_TRUE(client_->apply(add).status.ok());
+  wire::InstallControllerRequest install;
+  install.set_process_owner(kTestProcessOwner); install.set_generation(1);
+  install.set_open_id(std::string(16, 'i')); install.set_controller_grant(std::string(32, 'g'));
+  install.mutable_binding()->set_provider_instance_id(described.response.service_ref().instance_id());
+  install.mutable_binding()->set_core_id("core"); install.mutable_binding()->set_core_boot_id("boot");
+  ASSERT_TRUE(client_->call<wire::InstallControllerResponse>(install, &wire::RobotAdapterServerService::Stub::InstallController).status.ok());
+  const auto has_channel = [](const char *id) {
+    return [id](const wire::SubscribeStatusResponse &frame) {
+      for (const auto &member : frame.members()) for (const auto &message : member.messages())
+        if (message.channel_id() == id) return true;
+      return false;
+    };
+  };
+  wire::SubscribeStatusRequest held;
+  *held.mutable_selected()->add_members()->mutable_identity() = identity("r1");
+  held.mutable_selected()->mutable_members(0)->add_channel_ids("state.test");
+  Client::Watch keeper(*client_, milliseconds(0), held);
+  ASSERT_TRUE(keeper.wait(has_channel("state.test")));
+  auto selection = held;
+  selection.mutable_owner()->set_controller_grant(install.controller_grant());
+  selection.mutable_owner()->set_generation(1); selection.mutable_owner()->set_open_id(std::string(16, 's'));
+  auto *channels = selection.mutable_selected()->mutable_members(0)->mutable_channel_ids();
+  channels->Add("state.zzother");
+  Client::Watch watch(*client_, milliseconds(0), selection);
+  ASSERT_TRUE(watch.wait(has_channel("state.test")));
+  ASSERT_TRUE(watch.wait(has_channel("state.zzother")));
+  auto update = [&] {
+    wire::UpdateStatusSelectionRequest request;
+    *request.mutable_status() = selection;
+    return client_->call<wire::UpdateStatusSelectionResponse>(request, &wire::RobotAdapterServerService::Stub::UpdateStatusSelection);
+  };
+  channels->Clear(); channels->Add("state.zzother"); channels->Add("state.zznew");
+  ASSERT_TRUE(update().status.ok());
+  ASSERT_TRUE(watch.wait(has_channel("state.zznew")));
+  const auto initial_reads = world_.telemetryCount("r1", "state.test");
+  const auto last = watch.frames().size();
+  channels->Add("state.test");
+  ASSERT_TRUE(update().status.ok());
+  EXPECT_TRUE(watch.waitAfter(last, has_channel("state.test"), milliseconds(1500)))
+      << "reselected channel did not replay the still-live shared source fact";
+  EXPECT_EQ(initial_reads, world_.telemetryCount("r1", "state.test"));
+  const auto before_coalesced = watch.frames().size();
+  channels->RemoveLast();
+  ASSERT_TRUE(update().status.ok());
+  channels->Add("state.test");
+  ASSERT_TRUE(update().status.ok());
+  EXPECT_TRUE(watch.waitAfter(before_coalesced, has_channel("state.test"), milliseconds(1500)))
+      << "back-to-back changes lost the still-live shared source fact";
+  EXPECT_EQ(initial_reads, world_.telemetryCount("r1", "state.test"));
 }
 
 TEST_F(ServerController, UnknownOpenIsFencedBeforeLateAdmission) {

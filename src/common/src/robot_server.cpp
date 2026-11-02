@@ -1580,7 +1580,6 @@ private:
         : selection(std::make_shared<const StatusSelection>(std::move(value))) {}
     std::shared_ptr<const StatusSelection> selection; // guarded by subscribers_mutex_
     std::condition_variable changed;
-    std::uint64_t selection_revision = 1;
     std::uint64_t revision = 1;
     std::uint64_t delivered = 0;
   };
@@ -1667,6 +1666,7 @@ private:
     bool control = false;
     std::shared_ptr<Subscriber> subscriber; // guarded by subscribers_mutex_
     std::timed_mutex selection_update_mutex;
+    Stream stream; // guarded by selection_update_mutex
     std::mutex io_mutex;
     std::condition_variable io_changed;
     bool io_done = false, io_ok = false, done_received = false;
@@ -1680,19 +1680,10 @@ private:
       io_changed.wait(lock, [this] { return io_done; });
       return io_ok;
     }
-    bool write(const wire::SubscribeStatusResponse &frame,
-               const std::shared_ptr<Subscriber> &selected = {},
-               std::uint64_t selection_revision = 0, bool *skipped = nullptr) {
+    bool write(const wire::SubscribeStatusResponse &frame) {
       std::unique_lock<std::mutex> lock(io_mutex);
       if (cancelled.load(std::memory_order_acquire))
         return false;
-      if (selected) {
-        std::lock_guard<std::mutex> selection_lock(owner.subscribers_mutex_);
-        if (selected->selection_revision != selection_revision) {
-          if (skipped) *skipped = true;
-          return true;
-        }
-      }
       io_done = false;
       owner.status_writes_started_.fetch_add(1, std::memory_order_relaxed);
       owner.status_protobuf_bytes_.fetch_add(frame.ByteSizeLong(), std::memory_order_relaxed);
@@ -2101,8 +2092,23 @@ private:
       before = call->subscriber->selection;
       if (!sameStatusSelection(*before, replacement)) {
         after = std::make_shared<const StatusSelection>(std::move(replacement));
+        if (!after->all) {
+          for (auto member = call->stream.seen.begin(); member != call->stream.seen.end();) {
+            const auto wanted = after->members.find(member->first);
+            const auto identity = call->stream.identities.find(member->first);
+            if (wanted == after->members.end() ||
+                (identity != call->stream.identities.end() && !sameIdentity(identity->second, wanted->second.identity))) {
+              member = call->stream.seen.erase(member);
+              continue;
+            }
+            for (auto channel = member->second.begin(); channel != member->second.end();) {
+              if (!wanted->second.channels.count(channel->first)) channel = member->second.erase(channel);
+              else ++channel;
+            }
+            ++member;
+          }
+        }
         call->subscriber->selection = after;
-        ++call->subscriber->selection_revision;
         ++call->subscriber->revision;
         call->subscriber->changed.notify_one();
       }
@@ -2525,7 +2531,7 @@ private:
       else call.io_changed.wait_until(lock, deadline, finished);
       return grpc::Status::CANCELLED;
     }
-    Stream stream;
+    auto &stream = call.stream;
     auto subscriber = std::make_shared<Subscriber>(std::move(selection));
     for (const auto &entry : subscriber->selection->members)
       stream.identities.emplace(entry.first, entry.second.identity);
@@ -2575,7 +2581,6 @@ private:
     while (!shutdown_ && !call.cancelled.load(std::memory_order_acquire) &&
            Steady::now() < deadline) {
       std::shared_ptr<const StatusSelection> selected;
-      std::uint64_t selection_revision = 0;
       {
         std::unique_lock<std::mutex> lock(subscribers_mutex_);
         if (subscriber->revision == observed) {
@@ -2588,9 +2593,14 @@ private:
           if (subscriber->revision == observed)
             continue;
         }
+      }
+      // Serialize the stream's delivered facts with the same owner update.
+      // A removed channel is forgotten before an immediately following re-add.
+      std::lock_guard<std::timed_mutex> selection_lock(call.selection_update_mutex);
+      {
+        std::lock_guard<std::mutex> lock(subscribers_mutex_);
         observed = subscriber->revision;
         selected = subscriber->selection;
-        selection_revision = subscriber->selection_revision;
       }
       status_snapshots_.fetch_add(1, std::memory_order_relaxed);
       std::map<std::string, std::shared_ptr<Member>> members;
@@ -2611,10 +2621,8 @@ private:
       auto flush = [&] {
         if (!stream.sending.members_size())
           return true;
-        bool skipped = false;
-        const auto success = call.write(stream.sending, subscriber, selection_revision, &skipped);
+        const auto success = call.write(stream.sending);
         stream.sending.Clear();
-        if (skipped) stream.seen.clear();
         return success;
       };
       for (auto i = stream.identities.begin(); i != stream.identities.end();) {
