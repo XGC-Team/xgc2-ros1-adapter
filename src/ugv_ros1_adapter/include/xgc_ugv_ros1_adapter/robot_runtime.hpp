@@ -106,7 +106,7 @@ public:
   const std::string &profileId() const { return profile_id_; }
   bool channelEnabled(const std::string &channel_id) const;
 
-  void emitPeriodic(const ros::WallTime &now);
+  void emitPeriodic();
   void SetStatusDemand(const std::set<std::string> &channels);
   std::pair<bool, std::string> DescribeHealth();
 

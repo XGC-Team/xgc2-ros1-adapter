@@ -1860,13 +1860,15 @@ void RobotRuntime::controllerStatusCallback(
   emit(std::move(output));
 }
 
-void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
+void RobotRuntime::emitPeriodic() {
   CallbackGuard callback(this);
   if (!callback)
     return;
   std::vector<xgc::robot::v1::RobotMessage> messages;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Compare health against source timestamps accepted under this lock.
+    const auto now = ros::WallTime::now();
     emitHealthLocked(now, &messages);
     emitStreamHealthLocked(now, &messages);
   }

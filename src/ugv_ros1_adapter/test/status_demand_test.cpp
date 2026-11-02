@@ -100,7 +100,28 @@ public:
     result->detail = "arrived";
     runtime_->resetResultCallback(result);
   }
-  void periodic() { runtime_->emitPeriodic(ros::WallTime::now()); }
+  void periodic() { runtime_->emitPeriodic(); }
+  void periodicAcrossFirstSource() {
+    std::promise<ros::WallTime> captured;
+    auto captured_future = captured.get_future();
+    std::unique_lock<std::mutex> lock(runtime_->mutex_);
+    auto &source = runtime_->sources_.at("state.imu");
+    const auto stale_after = source.stale_after_seconds;
+    source = RobotRuntime::SourceTracker{};
+    source.stale_after_seconds = stale_after;
+    runtime_->last_output_.erase("diagnostic.stream-health");
+    std::thread periodic([&] {
+      const auto now = ros::WallTime::now();
+      captured.set_value(now);
+      runtime_->emitPeriodic();
+    });
+    const auto before = captured_future.get();
+    auto observed = ros::WallTime::now();
+    while (observed <= before) observed = ros::WallTime::now();
+    runtime_->recordSourceLocked("state.imu", observed);
+    lock.unlock();
+    periodic.join();
+  }
   void stop() { runtime_->Stop(); }
   void demand(std::set<std::string> channels) { runtime_->SetStatusDemand(channels); }
   std::pair<bool, std::string> health() { return runtime_->DescribeHealth(); }
@@ -253,6 +274,26 @@ TEST(StatusDemand, ScoutRetirementAndStopJoinRealRosEmitter) {
   stopping.get();
   EXPECT_TRUE(waitFor([&] { return !imu.getNumSubscribers(); }));
   spinner.stop();
+}
+
+TEST(StatusDemand, PeriodicHealthSamplesTimeAfterTheSourceLock) {
+  StatusDemandHarness source;
+  source.demand({"state.imu", "diagnostic.stream-health"});
+  source.periodicAcrossFirstSource();
+  const auto frames = source.messages();
+  bool found = false;
+  for (auto it = frames.rbegin(); it != frames.rend(); ++it) {
+    if (it->channel_id() != "diagnostic.stream-health") continue;
+    xgc::semantic::common::v1::StreamHealthReport report;
+    ASSERT_TRUE(report.ParseFromString(it->message().payload().value()));
+    for (const auto &channel : report.channels()) {
+      if (channel.channel_id() != "state.imu") continue;
+      found = true;
+      EXPECT_FALSE(channel.stale());
+    }
+    break;
+  }
+  EXPECT_TRUE(found);
 }
 
 TEST(StatusDemand, NoViewFreshSelectedSnapshotAndReopen) {
