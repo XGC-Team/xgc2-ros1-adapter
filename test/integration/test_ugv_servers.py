@@ -63,6 +63,11 @@ class UgvServerTests:
 
     def assert_subscribed(self, server, robot, subscribed=True):
         node = self.node_of(server)
+        if subscribed:
+            def ready():
+                current = self.roscore.system_state()["subscribers"]
+                return all(node in current.get(topic, ()) for topic in robot.input_topics())
+            wait_until(ready, 10, 0.05, "requested status sources for " + robot.robot_id)
         subscribers = self.roscore.system_state()["subscribers"]
         for topic in robot.input_topics():
             self.assertEqual(node in subscribers.get(topic, ()), subscribed,
@@ -114,14 +119,14 @@ class UgvServerTests:
         self.ready(server)
         robots = self.robots(server, *PROFILES)
         self.start_fake_robots(robots)
+        # Optional ROS sources belong to an actual status consumer, not membership.
+        watch = self.watch(server)
         self.apply_all(server, robots)
         for robot in robots:
             self.assert_subscribed(server, robot)
         health = server.client.health()["response"]
         self.assertEqual((health["serving"], health["robots"], health["members"]), (True, 3, 3))
         self.assertEqual(json.loads(self.ready(server)["facts_json"])["members"], 3)
-
-        watch = self.watch(server)
 
         def streaming():
             latest, removed = watch.members()
@@ -141,6 +146,7 @@ class UgvServerTests:
         foreign_run.run_id = "another-run"
         unknown_profile.profile_id = "no-such-profile"
         bad_epoch.epoch = 0
+        self.watch(server)
         members = self.apply(server, [good, foreign_run, unknown_profile, bad_epoch])
         self.assertNotIn("error", members[0], members[0])
         for member in members[1:]:
@@ -321,6 +327,7 @@ class UgvServerTests:
             count = 2 + len(history) % 2
             robots = self.robots(server, *PROFILES[:count], prefix="cycle{}_".format(len(history)))
             fake = self.start_fake_robots(robots)
+            watch = self.watch(server)
             self.apply_all(server, robots)
             for robot in robots:
                 self.assert_subscribed(server, robot)
@@ -338,6 +345,7 @@ class UgvServerTests:
                 server.signal(signal.SIGTERM)
             self.assert_gone(server, EXIT_OK)
             self.assertFalse(process_exists(pid))
+            watch.close()
             fake.cleanup()
             history.append({"robots": robots, "node": self.node_of(server), "pid": pid})
         self.assertEqual(len({entry["pid"] for entry in history}), 3)

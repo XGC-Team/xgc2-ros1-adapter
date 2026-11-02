@@ -66,13 +66,14 @@ class Px4ServerTest(MasterCase):
 
         robots = self.robots(server, *PROFILES)
         self.start_fake_robots(robots)
+        # Optional ROS sources belong to an actual status consumer, not membership.
+        watch = self.watch(server)
         self.apply_all(server, robots)
-        for robot in robots:
-            self.assertTrue(self.subscribed(server, robot), robot.profile_id)
+        wait_until(lambda: all(self.subscribed(server, robot) for robot in robots),
+                   10, 0.05, "requested status sources for every robot")
         health = server.client.health()["response"]
         self.assertEqual((health["robots"], health["members"]), (3, 3))
 
-        watch = self.watch(server)
         wait_until(lambda: all({"state.pose", "state.imu", "state.power", "state.flight"} <=
                                set(watch.members()[0].get(r.robot_id, ())) for r in robots),
                    30, 0.1, "status of every robot")
@@ -252,9 +253,10 @@ class Px4ServerTest(MasterCase):
             self.ready(server)
             robots = self.robots(server, *PROFILES[:2 + len(history)], prefix="run{}_".format(len(history)))
             fake = self.start_fake_robots(robots)
+            watch = self.watch(server)
             self.apply_all(server, robots)
-            for robot in robots:
-                self.assertTrue(self.subscribed(server, robot))
+            wait_until(lambda: all(self.subscribed(server, robot) for robot in robots),
+                       10, 0.05, "requested status sources of the new Run")
             for earlier in history:
                 for robot in earlier:
                     self.assertFalse(any(self.node_of(server) in nodes for topic, nodes in
@@ -267,6 +269,7 @@ class Px4ServerTest(MasterCase):
                 server.signal(signal.SIGTERM)
             self.assert_gone(server, EXIT_OK)
             self.assertFalse(process_exists(pid))
+            watch.close()
             fake.cleanup()
             history.append(robots)
 
