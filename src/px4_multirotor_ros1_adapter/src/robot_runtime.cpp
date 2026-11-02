@@ -2018,13 +2018,16 @@ void RobotRuntime::timesyncStatusCallback(
   emit(std::move(output));
 }
 
-void RobotRuntime::emitPeriodic(const ros::WallTime &now) {
+void RobotRuntime::emitPeriodic() {
   CallbackGuard callback(this);
   if (!callback)
     return;
   std::vector<xgc::robot::v1::RobotMessage> messages;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Source callbacks record their wall time under this same lock. Sampling
+    // earlier can make a freshly recorded source appear to be in the future.
+    const auto now = ros::WallTime::now();
     emitPx4PeriodicLocked(now, &messages);
     emitStreamHealthLocked(now, &messages);
   }

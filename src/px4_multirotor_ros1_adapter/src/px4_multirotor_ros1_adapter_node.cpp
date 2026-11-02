@@ -24,7 +24,7 @@ public:
   ros::Subscriber state_subscriber;
   ~Native() override { Stop(); }
   void Stop() override { if (runtime) runtime->Stop(); if (remote) remote->Stop(); state_subscriber.shutdown(); }
-  void Periodic() override { runtime->emitPeriodic(ros::WallTime::now()); if (remote) remote->PublishPeriodic(); }
+  void Periodic() override { runtime->emitPeriodic(); if (remote) remote->PublishPeriodic(); }
   void SetStatusDemand(const std::set<std::string> &channels) override { runtime->SetStatusDemand(channels); }
   std::optional<shared::NativeHealth> DescribeHealth() override {
     const auto value = runtime->DescribeHealth();
