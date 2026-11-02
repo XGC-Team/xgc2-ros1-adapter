@@ -7,8 +7,8 @@ namespace {
 Json values() { return {{"lidar_xrpc_socket", "/tmp/parameter-fixture.sock"}}; }
 Json sessionDocument() {
   return {{"runMode", "simulation"},
-      {"robots", Json::array({{{"namespace", "/robot"}, {"binding", {
-          {"hybridSource", "simulation"}, {"simulationSensors", {{"simpleLidar", {
+      {"robots", Json::array({{{"namespace", "/robot"}, {"source", "simulation"}, {"binding", {
+          {"simulationSensors", {{"simpleLidar", {
               {"enabled", true}, {"mode", "raycast"}, {"acceleration", "cpu"},
               {"rateHz", 4}, {"rangeMeters", 15}, {"hFovDeg", 270}, {"vFovDeg", 45},
               {"hRes", 64}, {"vRes", 4}}}}}}}}})},
@@ -55,6 +55,7 @@ TEST(LidarProfileParameters, GazeboRobotSelectionCannotCreateFleetWithoutVisible
   }
   document = sessionDocument();
   document["runMode"] = "physical";
+  document["robots"][0]["source"] = "physical";
   EXPECT_FALSE(Parameters::parse(values(), "gazebo", lidar::parseSessionInput(document.dump()), true).have_fleet);
 }
 

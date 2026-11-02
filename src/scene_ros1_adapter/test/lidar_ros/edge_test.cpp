@@ -18,7 +18,7 @@ Json parameters() { return {{"lidar_xrpc_socket", "/tmp/lf-edge.sock"}}; }
 Json manifest(std::size_t sensors = 1) {
   Json robots = Json::array();
   for (std::size_t i = 0; i < sensors; ++i)
-    robots.push_back({{"namespace", "/A" + std::to_string(i)}, {"hRes", 1}, {"vRes", 1},
+    robots.push_back({{"namespace", "/A" + std::to_string(i)}, {"source", "simulation"}, {"hRes", 1}, {"vRes", 1},
                      {"hFovDeg", 90}, {"vFovDeg", 0}, {"publishBeams", true}});
   return {{"schemaVersion", 1}, {"robots", robots}, {"referenceCloud", {{"surfaceSpacing", 0.5}}}};
 }

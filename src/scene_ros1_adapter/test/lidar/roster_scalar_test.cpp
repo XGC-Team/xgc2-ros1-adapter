@@ -8,8 +8,8 @@ using namespace xgc_scene::lidar;
 namespace {
 SessionInput input(Json lidar) {
   return parseSessionInput(Json{{"runMode", "simulation"}, {"scene", {{"simulator", "xsim"}}},
-      {"robots", Json::array({{{"namespace", "/robot"}, {"binding", {
-          {"hybridSource", "simulation"}, {"simulationSensors", {{"simpleLidar", std::move(lidar)}}}}}}})},
+      {"robots", Json::array({{{"namespace", "/robot"}, {"source", "simulation"}, {"binding", {
+          {"simulationSensors", {{"simpleLidar", std::move(lidar)}}}}}}})},
       {"visualizationTopics", Json::array()}}.dump());
 }
 Json selection() { return {{"enabled", true}, {"mode", "raycast"}, {"acceleration", "cpu"}}; }
@@ -48,7 +48,7 @@ TEST(RosterScalars, ValidationPrecedesPhysicalAndHybridRosterFiltering) {
   auto authored = selection(); authored["hRes"] = 2.5;
   for (const auto *run_mode : {"physical", "hybrid"}) {
     auto session = input(authored); session.run_mode = run_mode;
-    session.robots[0]["binding"]["hybridSource"] = "physical";
+    session.robots[0]["source"] = "physical";
     rejected(session, "hRes", true);
   }
 }
