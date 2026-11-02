@@ -1194,7 +1194,9 @@ TEST_F(ServerController, OwnedStatusUpdatesSelectionWithoutRetiringIntersection)
   const auto before = server_->SnapshotStatusWork();
   member->add_channel_ids("state.zzother");
   auto update = [&](const wire::SubscribeStatusRequest &value) {
-    return client_->call<wire::UpdateStatusSelectionResponse>(value, &wire::RobotAdapterServerService::Stub::UpdateStatusSelection);
+    wire::UpdateStatusSelectionRequest request;
+    *request.mutable_status() = value;
+    return client_->call<wire::UpdateStatusSelectionResponse>(request, &wire::RobotAdapterServerService::Stub::UpdateStatusSelection);
   };
   const auto added = update(selection);
   ASSERT_TRUE(added.status.ok()) << added.status.error_message();

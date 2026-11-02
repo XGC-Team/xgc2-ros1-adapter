@@ -377,12 +377,12 @@ class RobotServer::Impl {
       return scope.application_error(owner_.retireController(*context, scope, *request, response));
     }
     grpc::Status UpdateStatusSelection(grpc::ServerContext *context,
-                              const wire::SubscribeStatusRequest *request,
+                              const wire::UpdateStatusSelectionRequest *request,
                               wire::UpdateStatusSelectionResponse *response) override {
       auto scope = owner_.admission_.begin(*context);
       if (!scope) return scope.status();
       if (const auto refusal = owner_.requireStarted(scope)) return *refusal;
-      return scope.application_error(owner_.updateStatusSelection(scope, *request, response));
+      return scope.application_error(owner_.updateStatusSelection(scope, request->status(), response));
     }
     grpc::Status RetireStatus(grpc::ServerContext *context,
                               const wire::RetireStatusRequest *request,
