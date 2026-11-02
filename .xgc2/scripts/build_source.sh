@@ -16,14 +16,15 @@ if [[ "${1:-}" == --workspace ]]; then
     -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG" -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
   exit 0
 fi
-work="${1:?usage: build_source.sh BUILD_DIR INSTALL_ROOT ROS_PREFIX common|px4|ugv}"
+work="${1:?usage: build_source.sh BUILD_DIR INSTALL_ROOT ROS_PREFIX common|px4|ugv|tools}"
 stage="${2:?install root}"
 prefix="${3:?ROS prefix}"
 case "${4:?package selection}" in
   common) package=common ;;
   px4) package=px4_multirotor_ros1_adapter ;;
   ugv) package=ugv_ros1_adapter ;;
-  *) echo 'select common, px4 or ugv' >&2; exit 2 ;;
+  tools) package=ros1_tools_adapter ;;
+  *) echo 'select common, px4, ugv or tools' >&2; exit 2 ;;
 esac
 jobs="${BUILD_JOBS:-2}"
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || exit 2

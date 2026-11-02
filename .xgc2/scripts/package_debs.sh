@@ -360,8 +360,10 @@ package_type_server \
   "xgc2-mecanum-ugv-ros1-adapter"
 
 fi
-if [[ "$selection" == all ]]; then
+# The recording and ROS1 service helpers share the common ABI with either
+# selected type server; scene authoring remains an independent all-only package.
 package_tools
+if [[ "$selection" == all ]]; then
 package_scene
 fi
 
