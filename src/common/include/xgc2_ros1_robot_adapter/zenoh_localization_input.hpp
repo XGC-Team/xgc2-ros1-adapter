@@ -18,9 +18,18 @@ std::string ZenohLocalizationKey(const ZenohLocalizationBinding &binding,
 class ZenohLocalizationInput {
 public:
   using PoseCallback = std::function<void(const ZenohPoseSample &)>;
+  using VelocityCallback = std::function<void(const ZenohVelocitySample &)>;
+  using AccelerationCallback =
+      std::function<void(const ZenohAccelerationSample &)>;
+
+  struct Callbacks {
+    PoseCallback pose;
+    VelocityCallback velocity;
+    AccelerationCallback acceleration;
+  };
 
   static std::unique_ptr<ZenohLocalizationInput>
-  Open(const ZenohLocalizationBinding &binding, PoseCallback callback,
+  Open(const ZenohLocalizationBinding &binding, Callbacks callbacks,
        std::string *error);
 
   ~ZenohLocalizationInput();

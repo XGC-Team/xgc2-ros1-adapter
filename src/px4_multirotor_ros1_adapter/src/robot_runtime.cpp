@@ -1145,13 +1145,33 @@ bool RobotRuntime::installZenohLocalization(std::string *error) {
   binding.tracker = zenoh_localization_.tracker;
   binding.sensor = zenoh_localization_.sensor;
   const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
+  xgc2_ros1_robot_adapter::ZenohLocalizationInput::Callbacks callbacks;
+  if (channelRequired("state.mocap.pose")) {
+    callbacks.pose = [weak_self](
+                         const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
+      if (const auto self = weak_self.lock())
+        self->zenohPoseCallback(sample);
+    };
+  }
+  if (channelRequired("state.mocap.velocity") ||
+      channelRequired("state.mocap.speed")) {
+    callbacks.velocity = [weak_self](
+                             const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample) {
+      if (const auto self = weak_self.lock())
+        self->zenohVelocityCallback(sample);
+    };
+  }
+  if (channelRequired("state.mocap.acceleration")) {
+    callbacks.acceleration = [weak_self](
+                                 const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample) {
+      if (const auto self = weak_self.lock())
+        self->zenohAccelerationCallback(sample);
+    };
+  }
+  if (!callbacks.pose && !callbacks.velocity && !callbacks.acceleration)
+    return true;
   auto input = xgc2_ros1_robot_adapter::ZenohLocalizationInput::Open(
-      binding,
-      [weak_self](const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
-        if (const auto self = weak_self.lock())
-          self->zenohPoseCallback(sample);
-      },
-      error);
+      binding, std::move(callbacks), error);
   if (!input)
     return false;
   zenoh_input_ = std::move(input);
@@ -1627,6 +1647,50 @@ void RobotRuntime::zenohPoseCallback(
   mocapPoseCallback(message, &report_time);
 }
 
+void RobotRuntime::zenohVelocityCallback(
+    const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample) {
+  double angular[3];
+  if (!xgc2_ros1_robot_adapter::zenohAngularRate(
+          sample.rotation, sample.interval_seconds, angular))
+    return;
+  geometry_msgs::TwistStamped::Ptr message(new geometry_msgs::TwistStamped);
+  message->header.stamp = ros::Time::now();
+  message->header.frame_id = zenoh_localization_.frame_id;
+  message->twist.linear.x = sample.linear[0];
+  message->twist.linear.y = sample.linear[1];
+  message->twist.linear.z = sample.linear[2];
+  message->twist.angular.x = angular[0];
+  message->twist.angular.y = angular[1];
+  message->twist.angular.z = angular[2];
+  xgc::v1::TimePoint report_time;
+  report_time.set_nanoseconds(sample.report_time_nanos);
+  report_time.set_clock_domain(
+      static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
+  mocapVelocityCallback(message, &report_time);
+}
+
+void RobotRuntime::zenohAccelerationCallback(
+    const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample) {
+  double angular[3];
+  if (!xgc2_ros1_robot_adapter::zenohAngularRate(
+          sample.rotation, sample.interval_seconds, angular))
+    return;
+  geometry_msgs::AccelStamped::Ptr message(new geometry_msgs::AccelStamped);
+  message->header.stamp = ros::Time::now();
+  message->header.frame_id = zenoh_localization_.frame_id;
+  message->accel.linear.x = sample.linear[0];
+  message->accel.linear.y = sample.linear[1];
+  message->accel.linear.z = sample.linear[2];
+  message->accel.angular.x = angular[0];
+  message->accel.angular.y = angular[1];
+  message->accel.angular.z = angular[2];
+  xgc::v1::TimePoint report_time;
+  report_time.set_nanoseconds(sample.report_time_nanos);
+  report_time.set_clock_domain(
+      static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
+  mocapAccelerationCallback(message, &report_time);
+}
+
 void RobotRuntime::mocapPoseCallback(
     const geometry_msgs::PoseStamped::ConstPtr &message,
     const xgc::v1::TimePoint *source_time) {
@@ -1715,7 +1779,8 @@ void RobotRuntime::mocapPoseCallback(
 }
 
 void RobotRuntime::mocapVelocityCallback(
-    const geometry_msgs::TwistStamped::ConstPtr &message) {
+    const geometry_msgs::TwistStamped::ConstPtr &message,
+    const xgc::v1::TimePoint *source_time) {
   static const std::string state_mocap_speed_channel = "state.mocap.speed";
   static const std::string state_mocap_velocity_channel = "state.mocap.velocity";
   CallbackGuard callback(this);
@@ -1726,15 +1791,21 @@ void RobotRuntime::mocapVelocityCallback(
   if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message)) {
     std::lock_guard<std::mutex> lock(mutex_);
     latest_mocap_velocity_.reset();
+    has_mocap_velocity_source_time_ = false;
     return;
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if ((channelEnabled(state_mocap_velocity_channel) || channelEnabled(state_mocap_speed_channel)) &&
-        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
       latest_mocap_velocity_ = message;
-    else
+      has_mocap_velocity_source_time_ = source_time != nullptr;
+      if (source_time != nullptr)
+        latest_mocap_velocity_source_time_ = *source_time;
+    } else {
       latest_mocap_velocity_.reset();
+      has_mocap_velocity_source_time_ = false;
+    }
     if (channelRequired(state_mocap_velocity_channel))
       recordSourceLocked(state_mocap_velocity_channel, now);
     if (channelRequired(state_mocap_speed_channel))
@@ -1747,7 +1818,8 @@ void RobotRuntime::mocapVelocityCallback(
       copyVector(message->twist.linear, payload.mutable_linear());
       copyVector(message->twist.angular, payload.mutable_angular());
       output.push_back(makeEnvelopeLocked(
-          state_mocap_velocity_channel, message->header.stamp, payload));
+          state_mocap_velocity_channel, message->header.stamp, payload,
+          source_time));
       recordOutputLocked(state_mocap_velocity_channel);
     } else if (status_demand_.count(state_mocap_velocity_channel) && channelEnabled(state_mocap_velocity_channel)) {
       ++sources_[state_mocap_velocity_channel].dropped_samples;
@@ -1764,7 +1836,8 @@ void RobotRuntime::mocapVelocityCallback(
       payload.set_frame_id(message->header.frame_id);
       payload.set_meters_per_second(speed);
       output.push_back(makeEnvelopeLocked(
-          state_mocap_speed_channel, message->header.stamp, payload));
+          state_mocap_speed_channel, message->header.stamp, payload,
+          source_time));
       recordOutputLocked(state_mocap_speed_channel);
     } else if (status_demand_.count(state_mocap_speed_channel) && channelEnabled(state_mocap_speed_channel)) {
       ++sources_[state_mocap_speed_channel].dropped_samples;
@@ -1775,7 +1848,8 @@ void RobotRuntime::mocapVelocityCallback(
 }
 
 void RobotRuntime::mocapAccelerationCallback(
-    const geometry_msgs::AccelStamped::ConstPtr &message) {
+    const geometry_msgs::AccelStamped::ConstPtr &message,
+    const xgc::v1::TimePoint *source_time) {
   static const std::string state_mocap_acceleration_channel = "state.mocap.acceleration";
   CallbackGuard callback(this);
   if (!callback)
@@ -1783,6 +1857,7 @@ void RobotRuntime::mocapAccelerationCallback(
   if (!xgc2_ros1_robot_adapter::validLocalizationAcceleration(*message)) {
     std::lock_guard<std::mutex> lock(mutex_);
     latest_mocap_acceleration_.reset();
+    has_mocap_acceleration_source_time_ = false;
     return;
   }
   std::vector<xgc::robot::v1::RobotMessage> output;
@@ -1790,10 +1865,15 @@ void RobotRuntime::mocapAccelerationCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (channelEnabled(state_mocap_acceleration_channel) &&
-        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
       latest_mocap_acceleration_ = message;
-    else
+      has_mocap_acceleration_source_time_ = source_time != nullptr;
+      if (source_time != nullptr)
+        latest_mocap_acceleration_source_time_ = *source_time;
+    } else {
       latest_mocap_acceleration_.reset();
+      has_mocap_acceleration_source_time_ = false;
+    }
     recordSourceLocked(state_mocap_acceleration_channel, now);
     if (latest_mocap_acceleration_ && channelEnabled(state_mocap_acceleration_channel) &&
         shouldEmitLocked(state_mocap_acceleration_channel, now)) {
@@ -1802,7 +1882,8 @@ void RobotRuntime::mocapAccelerationCallback(
       copyVector(message->accel.linear, payload.mutable_linear());
       copyVector(message->accel.angular, payload.mutable_angular());
       output.push_back(makeEnvelopeLocked(
-          state_mocap_acceleration_channel, message->header.stamp, payload));
+          state_mocap_acceleration_channel, message->header.stamp, payload,
+          source_time));
       recordOutputLocked(state_mocap_acceleration_channel);
     } else if (status_demand_.count(state_mocap_acceleration_channel) && channelEnabled(state_mocap_acceleration_channel)) {
       ++sources_[state_mocap_acceleration_channel].dropped_samples;
@@ -2335,7 +2416,11 @@ void RobotRuntime::emitSnapshotLocked(
     payload.set_frame_id(sample->header.frame_id);
     copyVector(sample->twist.linear, payload.mutable_linear());
     copyVector(sample->twist.angular, payload.mutable_angular());
-    messages->push_back(makeEnvelopeLocked(channel, sample->header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, sample->header.stamp, payload,
+        channel == "state.mocap.velocity" && has_mocap_velocity_source_time_
+            ? &latest_mocap_velocity_source_time_
+            : nullptr));
   } else if (channel == "state.mocap.speed" && latest_mocap_velocity_) {
     const auto &sample = *latest_mocap_velocity_;
     const double speed = std::hypot(std::hypot(sample.twist.linear.x, sample.twist.linear.y),
@@ -2344,14 +2429,21 @@ void RobotRuntime::emitSnapshotLocked(
     xgc::semantic::common::v1::SpeedEstimate payload;
     payload.set_frame_id(sample.header.frame_id);
     payload.set_meters_per_second(speed);
-    messages->push_back(makeEnvelopeLocked(channel, sample.header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, sample.header.stamp, payload,
+        has_mocap_velocity_source_time_ ? &latest_mocap_velocity_source_time_
+                                        : nullptr));
   } else if (channel == "state.mocap.acceleration" && latest_mocap_acceleration_) {
     if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::AccelerationEstimate payload;
     payload.set_frame_id(latest_mocap_acceleration_->header.frame_id);
     copyVector(latest_mocap_acceleration_->accel.linear, payload.mutable_linear());
     copyVector(latest_mocap_acceleration_->accel.angular, payload.mutable_angular());
-    messages->push_back(makeEnvelopeLocked(channel, latest_mocap_acceleration_->header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, latest_mocap_acceleration_->header.stamp, payload,
+        has_mocap_acceleration_source_time_
+            ? &latest_mocap_acceleration_source_time_
+            : nullptr));
   } else if (channel == "state.localization.error" && has_local_position_ &&
              has_mocap_position_ && local_position_frame_valid_) {
     const double distance = positionDistanceMeters(local_position_, mocap_position_);

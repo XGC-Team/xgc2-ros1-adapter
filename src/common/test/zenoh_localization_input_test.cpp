@@ -60,13 +60,13 @@ TEST(ZenohLocalizationInput, ReceivesTheExactPoseKeyAndPreservesReportTime) {
   std::atomic<bool> received{false};
   ZenohPoseSample observed;
   std::string error;
-  auto input = ZenohLocalizationInput::Open(
-      binding,
-      [&](const ZenohPoseSample &pose) {
-        observed = pose;
-        received.store(true, std::memory_order_release);
-      },
-      &error);
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [&](const ZenohPoseSample &pose) {
+    observed = pose;
+    received.store(true, std::memory_order_release);
+  };
+  auto input = ZenohLocalizationInput::Open(binding, std::move(callbacks),
+                                            &error);
   ASSERT_NE(nullptr, input) << error;
 
   xgc2::vrpn_zenoh::v1::Pose sample;
@@ -114,8 +114,10 @@ TEST(ZenohLocalizationInput, StopIsIdempotentAndDestructorSafe) {
   binding.source = "gazebo";
   binding.tracker = "uav1";
   std::string error;
-  auto input = ZenohLocalizationInput::Open(
-      binding, [](const ZenohPoseSample &) {}, &error);
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [](const ZenohPoseSample &) {};
+  auto input = ZenohLocalizationInput::Open(binding, std::move(callbacks),
+                                            &error);
   // A failed open is allowed here; the double-Stop contract is exercised by
   // the successful loopback test below.
   if (input) {
@@ -154,15 +156,15 @@ TEST(ZenohLocalizationInput, StopJoinsAnInFlightCallbackBeforeDrop) {
   bool entered = false;
   bool release = false;
   std::string error;
-  auto input = ZenohLocalizationInput::Open(
-      binding,
-      [&](const ZenohPoseSample &) {
-        std::unique_lock<std::mutex> lock(mutex);
-        entered = true;
-        changed.notify_all();
-        changed.wait(lock, [&] { return release; });
-      },
-      &error);
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [&](const ZenohPoseSample &) {
+    std::unique_lock<std::mutex> lock(mutex);
+    entered = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return release; });
+  };
+  auto input = ZenohLocalizationInput::Open(binding, std::move(callbacks),
+                                            &error);
   ASSERT_NE(nullptr, input) << error;
 
   xgc2::vrpn_zenoh::v1::Pose sample;
@@ -200,6 +202,24 @@ TEST(ZenohLocalizationInput, StopJoinsAnInFlightCallbackBeforeDrop) {
   input.reset();
   z_drop(z_move(publisher));
   z_drop(z_move(publisher_session));
+}
+
+TEST(ZenohAngularRate, ConvertsRotationOverIntervalToRadiansPerSecond) {
+  const double identity[4] = {0.0, 0.0, 0.0, 1.0};
+  double rate[3] = {1.0, 1.0, 1.0};
+  ASSERT_TRUE(zenohAngularRate(identity, 0.1, rate));
+  EXPECT_DOUBLE_EQ(0.0, rate[0]);
+  EXPECT_DOUBLE_EQ(0.0, rate[1]);
+  EXPECT_DOUBLE_EQ(0.0, rate[2]);
+
+  const double quarter = 0.7071067811865476;
+  const double rotation[4] = {0.0, 0.0, quarter, quarter};
+  ASSERT_TRUE(zenohAngularRate(rotation, 1.0, rate));
+  EXPECT_NEAR(0.0, rate[0], 1e-12);
+  EXPECT_NEAR(0.0, rate[1], 1e-12);
+  EXPECT_NEAR(1.5707963267948966, rate[2], 1e-12);
+
+  EXPECT_FALSE(zenohAngularRate(identity, 0.0, rate));
 }
 
 } // namespace

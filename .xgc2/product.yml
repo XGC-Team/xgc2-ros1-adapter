@@ -158,6 +158,7 @@ release:
   - libxgc2-math-dev
   - xgc2-gazebo-sim-scenes
   - xgc2-zenoh
+  - xgc2-vrpn-zenoh
   dependency_policy:
     xsim: rebuild
     xgc2-xrpc: rebuild
@@ -166,5 +167,6 @@ release:
     xgc2-ros-msgs: rebuild
     xgc2-gazebo-sim-scenes: verify
     xgc2-zenoh: verify
+    xgc2-vrpn-zenoh: verify
   apt_versions:
     focal: 0.9.0-6

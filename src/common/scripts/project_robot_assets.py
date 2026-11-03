@@ -101,12 +101,23 @@ def apply_runtime(params, derived, binding, context, simulated):
     mode, simulator = context["runMode"], context["simulator"]
     params["ros_master_uri"], params["ros_ip"] = context["rosMasterUri"], context["rosIp"]
     offset = context["localizationOffset"]
+    params["mocap_source_root"] = "/vrpn_client_node" if mode != "hybrid" else "/vrpn_client_node_simulation" if simulated else "/vrpn_client_node_physical"
     if simulated:
-        params["mocap_source_root"] = "/vrpn_client_node" if mode != "hybrid" else "/vrpn_client_node_simulation" if simulated else "/vrpn_client_node_physical"
         params["mocap_rigid_body"] = binding["namespace"].lstrip("/")
         offset = dict(x=0, y=0, z=0)
     params.update({"localization_offset_" + axis: scalar(offset[axis]) for axis in ("x", "y", "z")})
-    if simulated and simulator in ("xsim", "none"):
+    authored = binding.get("runtimeParameters") or {}
+    # A frozen explicit binding selects the shared Zenoh input. Until the
+    # source producer supplies endpoint/source, keep the existing ROS path
+    # rather than removing its root and leaving the Adapter with no input.
+    if authored.get("zenoh_endpoint") and authored.get("localization_source"):
+        for name in ("zenoh_endpoint", "localization_source", "mocap_sensor", "mocap_frame_id"):
+            if name in authored:
+                params[name] = str(authored[name])
+        params.pop("mocap_source_root", None)
+        params["localization_pose_topic"] = binding["namespace"] + "/pose"
+        params["localization_twist_topic"] = binding["namespace"] + "/twist"
+    elif simulated and simulator in ("xsim", "none"):
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
         params["localization_twist_topic"] = binding["namespace"] + "/twist"
     elif simulated:
@@ -115,12 +126,12 @@ def apply_runtime(params, derived, binding, context, simulated):
         params["localization_pose_topic"] = root + '/pose'
         params["localization_twist_topic"] = root + '/twist'
     else:
-        # External localization reaches the Adapter through Zenoh. The recorder
-        # consumes the actual slot output, never the retired VRPN topic root.
-        # The first candidate exposes pose only; do not invent a twist topic.
+        # External localization reaches the Adapter through Zenoh. The selected
+        # source/endpoint/sensor producer is still Open; do not restore the old
+        # VRPN root as a compatibility path.
         params.pop("mocap_source_root", None)
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
-        params.pop("localization_twist_topic", None)
+        params["localization_twist_topic"] = binding["namespace"] + "/twist"
     return params, derived
 
 

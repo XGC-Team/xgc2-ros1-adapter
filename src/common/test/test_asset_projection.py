@@ -76,7 +76,7 @@ class AssetProjectionTest(unittest.TestCase):
         row["source"] = "physical"
         physical = projection.project(row, context(mode="hybrid"))
         self.assertEqual(physical["parameters"]["localization_pose_topic"], "/uav1/pose")
-        self.assertNotIn("localization_twist_topic", physical["parameters"])
+        self.assertEqual(physical["parameters"]["localization_twist_topic"], "/uav1/twist")
         self.assertNotIn("mocap_source_root", physical["parameters"])
         self.assertEqual(authored["slotDeployment"]["plant"], "simulation")
 
@@ -131,7 +131,7 @@ class AssetProjectionTest(unittest.TestCase):
         result = project_batch(request)[0]
         self.assertEqual(result["binding"]["runtimeParameters"], authored)
         self.assertEqual(result["parameters"]["localization_pose_topic"], "/robot7/pose")
-        self.assertNotIn("localization_twist_topic", result["parameters"])
+        self.assertEqual(result["parameters"]["localization_twist_topic"], "/robot7/twist")
         self.assertEqual(request, before)
         self.assertIsNot(result["binding"]["runtimeParameters"], authored)
 
@@ -253,10 +253,32 @@ class AssetProjectionTest(unittest.TestCase):
                         self.assertEqual(row["profileId"], asset["profileId"])
                         self.assertEqual(row["physicalBinding"], request["robots"][0]["physicalBinding"])
                         self.assertEqual(row["parameters"]["localization_pose_topic"], "/robot7/pose")
-                        self.assertNotIn("localization_twist_topic", row["parameters"])
+                        self.assertEqual(row["parameters"]["localization_twist_topic"], "/robot7/twist")
                         self.assertNotIn("mocap_source_root", row["parameters"])
                         self.assertNotIn("sitlInstanceId", row["derived"])
                         self.assertEqual(row["parameters"]["localization_offset_y"], "-2")
+
+    def test_explicit_zenoh_binding_selects_slot_outputs_without_old_root(self):
+        authored = {"zenoh_endpoint": "tcp/127.0.0.1:7447",
+                    "localization_source": "gazebo", "mocap_sensor": 0,
+                    "mocap_frame_id": "world"}
+        for simulated, simulator in ((False, "gazebo"), (True, "gazebo")):
+            with self.subTest(simulated=simulated):
+                row_binding = dict(binding("slot", "/robot7", source="physical" if not simulated else "simulation"),
+                                   runtimeParameters=authored)
+                request = dict(context=context(mode="physical" if not simulated else "simulation", simulator=simulator),
+                               robots=[dict(model=model("scout_mini", 4), binding=row_binding,
+                                            physicalBinding=dict(assetId="real-asset", assetCommitId="commit",
+                                                                 asset=scout_asset()))])
+                row = project_batch(request)[0]
+                params = row["parameters"]
+                self.assertEqual(params["localization_pose_topic"], "/robot7/pose")
+                self.assertEqual(params["localization_twist_topic"], "/robot7/twist")
+                self.assertNotIn("mocap_source_root", params)
+                self.assertEqual(params["zenoh_endpoint"], "tcp/127.0.0.1:7447")
+                self.assertEqual(params["localization_source"], "gazebo")
+                self.assertEqual(params["mocap_sensor"], "0")
+                self.assertEqual(params["mocap_frame_id"], "world")
 
     def test_gazebo_derives_local_sitl_endpoints_from_ordinal(self):
         robots = [dict(model=model("px4_multirotor", ordinal),
