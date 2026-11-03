@@ -202,6 +202,9 @@ if grep -q 'not found' <<<"${tools_libraries}"; then
   exit 1
 fi
 grep -q 'libxgc2_xrpc' <<<"${tools_libraries}"
+tools_depends="$(dpkg-query -W -f='${Depends}' "${TOOLS_PACKAGE}")"
+grep -Fq 'python3-xgc2-xrpc (>= 0.2.1)' <<<"${tools_depends}"
+/usr/lib/xgc2/xrpc/python/bin/python3 -I -c 'from xgc2_xrpc import Endpoint, Fault, Host, Runtime, ServiceRef'
 python3 - <<'PYTOOLS'
 import json
 with open('/usr/share/xgc2/process-definitions/xgc2-ros1-tools-adapter.json') as source:

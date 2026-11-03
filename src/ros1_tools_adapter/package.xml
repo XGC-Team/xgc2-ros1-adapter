@@ -17,6 +17,7 @@
   <build_depend>libjsoncpp-dev</build_depend>
   <build_depend>libxgc2-xrpc-dev</build_depend>
   <exec_depend>python3</exec_depend>
+  <exec_depend version_gte="0.2.1">python3-xgc2-xrpc</exec_depend>
   <exec_depend>rosbag</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>libjsoncpp1</exec_depend>

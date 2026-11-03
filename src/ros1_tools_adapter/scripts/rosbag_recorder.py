@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/lib/xgc2/xrpc/python/bin/python3
 import os, stat, sys
 
 # Planning and API previews execute this same recorder entry before any ROS

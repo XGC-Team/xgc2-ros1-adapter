@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.9.0-5
+version: 0.9.0-6
 kind: ros1-apt
 summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and
   scene authoring.
@@ -56,6 +56,7 @@ apt:
   - ros-noetic-visualization-msgs
   - ros-noetic-xgc2-geometry-msgs (>= 1.5.0-4)
   - python3
+  - python3-xgc2-xrpc (>= 0.2.1)
   - ros-noetic-rosbag
   - ros-noetic-rospy
   - libjsoncpp1

@@ -289,7 +289,7 @@ package_tools() {
     "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_probe" \
     "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_clock_wait")"
   write_control "${tools_root}" "${TOOLS_PACKAGE}" \
-    "${tools_depends}, python3, ros-${ROS_DISTRO}-rosbag, ros-${ROS_DISTRO}-rospy, ros-${ROS_DISTRO}-ros-babel-fish, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-roslib, ros-${ROS_DISTRO}-rosgraph-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-std-srvs" \
+    "${tools_depends}, python3, python3-xgc2-xrpc (>= 0.2.1), ros-${ROS_DISTRO}-rosbag, ros-${ROS_DISTRO}-rospy, ros-${ROS_DISTRO}-ros-babel-fish, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-roslib, ros-${ROS_DISTRO}-rosgraph-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-std-srvs" \
     "Typed ROS1 Tools XRPC service and native ROS helpers" \
     "Run-owned ROS1 Tools process: typed topic publishing and service calls over XRPC http.v1."
   build_deb "${tools_root}" "${TOOLS_PACKAGE}"
