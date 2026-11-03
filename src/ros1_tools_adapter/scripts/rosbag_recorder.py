@@ -266,7 +266,7 @@ def normalize_parameters(value, context, preview):
             if not isinstance(file, dict) or set(file) != {"role", "path"}:
                 raise ValueError(name + " requires role and path")
             role, path = file["role"].strip(), file["path"].strip()
-            if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", role) or role in roles or not os.path.isabs(path) or os.path.normpath(path) != path or "\x00" in path or os.path.splitext(path)[1].lower() not in extensions:
+            if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", role) or role in roles or not os.path.isabs(path) or "\x00" in path or os.path.splitext(path)[1].lower() not in extensions:
                 raise ValueError("invalid or duplicate sidecar declaration")
             roles.add(role)
             file.update(role=role, path=path)
