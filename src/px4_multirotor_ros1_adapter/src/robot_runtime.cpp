@@ -464,16 +464,20 @@ bool BuildNativeProfileConfig(
 
   contract::ParameterMetadata mocap_descriptor{};
   const bool canonical_input = !InstalledContract().parameterMetadata(config.profile_id, "mocap_rigid_body", &mocap_descriptor);
+  const bool zenoh_requested = config.parameters.count("zenoh_endpoint") != 0u ||
+                               config.parameters.count("localization_source") != 0u;
   if (!canonical_input) {
-    if (config.parameters.size() - config.parameters.count("ros_master_uri") -
-            config.parameters.count("ros_ip") -
-            config.parameters.count("publish_vision") -
-            config.parameters.count("localization_pose_topic") -
-            config.parameters.count("localization_twist_topic") -
-            config.parameters.count("zenoh_endpoint") -
-            config.parameters.count("localization_source") -
-            config.parameters.count("mocap_sensor") -
-            config.parameters.count("mocap_frame_id") != 8u)
+    const std::size_t binding_count =
+        config.parameters.size() - config.parameters.count("ros_master_uri") -
+        config.parameters.count("ros_ip") -
+        config.parameters.count("publish_vision") -
+        config.parameters.count("localization_pose_topic") -
+        config.parameters.count("localization_twist_topic") -
+        config.parameters.count("zenoh_endpoint") -
+        config.parameters.count("localization_source") -
+        config.parameters.count("mocap_sensor") -
+        config.parameters.count("mocap_frame_id");
+    if (binding_count != 8u && !(zenoh_requested && binding_count == 7u))
       return fail(error, "PX4 native parameter binding is not exhaustive");
     contract::ParameterMetadata publish_vision_parameter{};
     contract::ParameterMetadata namespace_descriptor{};
@@ -533,8 +537,6 @@ bool BuildNativeProfileConfig(
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
   if (!canonical_input) {
-    const bool zenoh_requested = config.parameters.count("zenoh_endpoint") != 0u ||
-                                 config.parameters.count("localization_source") != 0u;
     if (zenoh_requested) {
       const auto endpoint = config.parameters.find("zenoh_endpoint");
       const auto source = config.parameters.find("localization_source");
