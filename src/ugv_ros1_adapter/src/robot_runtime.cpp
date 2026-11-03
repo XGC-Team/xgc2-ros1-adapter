@@ -1451,7 +1451,8 @@ void RobotRuntime::zenohVelocityCallback(
     const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample) {
   double angular[3];
   if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, angular))
+          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
+          angular))
     return;
   geometry_msgs::TwistStamped::Ptr message(new geometry_msgs::TwistStamped);
   message->header.stamp = ros::Time::now();
@@ -1473,7 +1474,8 @@ void RobotRuntime::zenohAccelerationCallback(
     const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample) {
   double angular[3];
   if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, angular))
+          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
+          angular))
     return;
   geometry_msgs::AccelStamped::Ptr message(new geometry_msgs::AccelStamped);
   message->header.stamp = ros::Time::now();
