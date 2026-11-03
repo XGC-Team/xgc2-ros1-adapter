@@ -113,6 +113,28 @@ public:
     runtime_->zenoh_localization_.frame_id = frame;
     runtime_->zenohPoseCallback(sample);
   }
+  void zenohVelocity(double linear_x, double rotation_z, double interval,
+                     std::int64_t report_ns) {
+    xgc2_ros1_robot_adapter::ZenohVelocitySample sample;
+    sample.report_time_nanos = report_ns;
+    sample.clock_domain = static_cast<std::int32_t>(xgc::v1::CLOCK_DOMAIN_SIMULATION);
+    sample.linear[0] = linear_x;
+    sample.rotation[2] = rotation_z;
+    sample.rotation[3] = 0.7071067811865476;
+    sample.interval_seconds = interval;
+    runtime_->zenohVelocityCallback(sample);
+  }
+  void zenohAcceleration(double linear_x, double rotation_z, double interval,
+                         std::int64_t report_ns) {
+    xgc2_ros1_robot_adapter::ZenohAccelerationSample sample;
+    sample.report_time_nanos = report_ns;
+    sample.clock_domain = static_cast<std::int32_t>(xgc::v1::CLOCK_DOMAIN_SIMULATION);
+    sample.linear[0] = linear_x;
+    sample.rotation[2] = rotation_z;
+    sample.rotation[3] = 0.7071067811865476;
+    sample.interval_seconds = interval;
+    runtime_->zenohAccelerationCallback(sample);
+  }
   void periodic() { runtime_->emitPeriodic(); }
   void periodicAcrossFirstSource() {
     std::promise<ros::WallTime> captured;
@@ -216,6 +238,35 @@ TEST(StatusDemand, ZenohPoseUsesSlotOutputAndPreservesSourceTime) {
     found = true;
   }
   EXPECT_TRUE(found);
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, ZenohVelocityAndAccelerationFeedCanonicalOutputs) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  StatusDemandHarness source(true, scoutMini());
+  std::atomic<unsigned> twist_received{0}, accel_received{0};
+  geometry_msgs::TwistStamped twist;
+  geometry_msgs::AccelStamped accel;
+  auto twist_sub = node.subscribe<geometry_msgs::TwistStamped>("/demand_ugv/canonical_velocity", 10,
+      [&](const geometry_msgs::TwistStamped::ConstPtr &message) {
+        twist = *message; ++twist_received;
+      });
+  auto accel_sub = node.subscribe<geometry_msgs::AccelStamped>("/demand_ugv/canonical_accel", 10,
+      [&](const geometry_msgs::AccelStamped::ConstPtr &message) {
+        accel = *message; ++accel_received;
+      });
+  ASSERT_TRUE(waitFor([&] { return twist_sub.getNumPublishers() > 0 && accel_sub.getNumPublishers() > 0; }));
+  source.demand({"vrpn.velocity", "vrpn.acceleration"});
+  source.zenohVelocity(3.0, 0.7071067811865476, 1.0, 42);
+  source.zenohAcceleration(4.0, 0.7071067811865476, 1.0, 43);
+  ASSERT_TRUE(waitFor([&] { return twist_received.load() > 0 && accel_received.load() > 0; }));
+  EXPECT_NEAR(3.0, twist.twist.linear.x, 1e-12);
+  EXPECT_NEAR(1.5707963267948966, twist.twist.angular.z, 1e-12);
+  EXPECT_NEAR(4.0, accel.accel.linear.x, 1e-12);
+  EXPECT_NEAR(1.5707963267948966, accel.accel.angular.z, 1e-12);
   source.stop();
   spinner.stop();
 }

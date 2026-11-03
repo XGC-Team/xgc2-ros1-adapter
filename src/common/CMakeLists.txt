@@ -14,6 +14,7 @@ pkg_check_modules(GRPC REQUIRED grpc++>=1.16 grpc)
 find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS grpc)
 find_package(nlohmann_json 3.7 REQUIRED)
 find_package(zenohc 1.8.0 EXACT CONFIG REQUIRED)
+find_package(xgc2_vrpn_zenoh CONFIG REQUIRED)
 if(NOT XGC2_PROTOBUF_PROTO_ROOT)
   find_package(xgc2_protobuf CONFIG REQUIRED)
 endif()
@@ -51,14 +52,9 @@ set(protocol_files
   xgc/semantic/ground/v1/locomotion.proto
   xgc/semantic/ground/v1/reset.proto
 )
-if(NOT XGC2_VRPN_ZENOH_PROTO_ROOT)
-  find_path(XGC2_VRPN_ZENOH_PROTO_ROOT
-    NAMES xgc2/vrpn_zenoh/v1/tracker.proto
-    HINTS /opt/xgc2/vrpn-zenoh/include /usr/include)
-endif()
 if(NOT XGC2_VRPN_ZENOH_PROTO_ROOT OR
    NOT EXISTS "${XGC2_VRPN_ZENOH_PROTO_ROOT}/xgc2/vrpn_zenoh/v1/tracker.proto")
-  message(FATAL_ERROR "xgc2-vrpn-zenoh development package is required: xgc2/vrpn_zenoh/v1/tracker.proto")
+  message(FATAL_ERROR "xgc2-vrpn-zenoh development package must export XGC2_VRPN_ZENOH_PROTO_ROOT")
 endif()
 set(vrpn_zenoh_proto_dir "${CMAKE_CURRENT_BINARY_DIR}/vrpn_zenoh_proto")
 set(vrpn_zenoh_proto "${XGC2_VRPN_ZENOH_PROTO_ROOT}/xgc2/vrpn_zenoh/v1/tracker.proto")

@@ -228,9 +228,15 @@ private:
   void zenohPoseCallback(const xgc2_ros1_robot_adapter::ZenohPoseSample &sample);
   bool installZenohLocalization(std::string *error);
   void vrpnVelocityCallback(
-      const geometry_msgs::TwistStamped::ConstPtr &message);
+      const geometry_msgs::TwistStamped::ConstPtr &message,
+      const xgc::v1::TimePoint *source_time = nullptr);
   void vrpnAccelerationCallback(
-      const geometry_msgs::AccelStamped::ConstPtr &message);
+      const geometry_msgs::AccelStamped::ConstPtr &message,
+      const xgc::v1::TimePoint *source_time = nullptr);
+  void zenohVelocityCallback(
+      const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample);
+  void zenohAccelerationCallback(
+      const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample);
   void commandVelocityCallback(const geometry_msgs::Twist::ConstPtr &message);
   void imuCallback(const sensor_msgs::Imu::ConstPtr &message);
   void voltageCallback(const std_msgs::Float32::ConstPtr &message);
@@ -314,10 +320,14 @@ private:
   bool has_pose_source_time_ = false;
   geometry_msgs::Twist::ConstPtr latest_command_velocity_;
   geometry_msgs::TwistStamped::ConstPtr latest_velocity_;
+  xgc::v1::TimePoint latest_velocity_source_time_;
+  bool has_velocity_source_time_ = false;
   geometry_msgs::Twist latest_velocity_value_;
   ros::Time latest_velocity_stamp_;
   bool has_velocity_ = false;
   geometry_msgs::AccelStamped::ConstPtr latest_acceleration_;
+  xgc::v1::TimePoint latest_acceleration_source_time_;
+  bool has_acceleration_source_time_ = false;
   sensor_msgs::Imu::ConstPtr latest_imu_;
   std_msgs::String::ConstPtr latest_controller_;
   ros::Time latest_controller_stamp_;

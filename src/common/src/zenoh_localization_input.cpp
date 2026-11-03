@@ -1,8 +1,8 @@
 #include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
-#include <cstdio>
 #include <stdexcept>
 #include <utility>
 
@@ -64,6 +64,22 @@ struct PoseState {
   std::atomic<bool> stopping{false};
 };
 
+struct VelocityState {
+  ZenohLocalizationInput::VelocityCallback callback;
+  std::atomic<bool> stopping{false};
+};
+
+struct AccelerationState {
+  ZenohLocalizationInput::AccelerationCallback callback;
+  std::atomic<bool> stopping{false};
+};
+
+void decodeTime(const xgc::v1::TimePoint &source, std::int64_t *nanoseconds,
+                std::int32_t *clock_domain) {
+  *nanoseconds = source.nanoseconds();
+  *clock_domain = static_cast<std::int32_t>(source.clock_domain());
+}
+
 void onPoseSample(z_loaned_sample_t *sample, void *context) noexcept {
   if (sample == nullptr || context == nullptr ||
       z_sample_kind(sample) != Z_SAMPLE_KIND_PUT) {
@@ -89,9 +105,8 @@ void onPoseSample(z_loaned_sample_t *sample, void *context) noexcept {
     return;
   }
   ZenohPoseSample decoded;
-  decoded.report_time_nanos = message.report_time().nanoseconds();
-  decoded.clock_domain = static_cast<std::int32_t>(
-      message.report_time().clock_domain());
+  decodeTime(message.report_time(), &decoded.report_time_nanos,
+             &decoded.clock_domain);
   decoded.position[0] = message.position_m().x();
   decoded.position[1] = message.position_m().y();
   decoded.position[2] = message.position_m().z();
@@ -105,9 +120,128 @@ void onPoseSample(z_loaned_sample_t *sample, void *context) noexcept {
   }
 }
 
+void onVelocitySample(z_loaned_sample_t *sample, void *context) noexcept {
+  if (sample == nullptr || context == nullptr ||
+      z_sample_kind(sample) != Z_SAMPLE_KIND_PUT) {
+    return;
+  }
+  auto *state = static_cast<VelocityState *>(context);
+  if (state->stopping.load(std::memory_order_acquire)) {
+    return;
+  }
+  const auto *bytes = z_sample_payload(sample);
+  if (bytes == nullptr || z_bytes_len(bytes) == 0u) {
+    return;
+  }
+  z_owned_slice_t slice;
+  if (z_bytes_to_slice(bytes, &slice) < 0) {
+    return;
+  }
+  xgc2::vrpn_zenoh::v1::Velocity message;
+  const bool parsed = message.ParseFromArray(
+      z_slice_data(z_loan(slice)), static_cast<int>(z_slice_len(z_loan(slice))));
+  z_drop(z_move(slice));
+  if (!parsed) {
+    return;
+  }
+  ZenohVelocitySample decoded;
+  decodeTime(message.report_time(), &decoded.report_time_nanos,
+             &decoded.clock_domain);
+  decoded.linear[0] = message.linear_mps().x();
+  decoded.linear[1] = message.linear_mps().y();
+  decoded.linear[2] = message.linear_mps().z();
+  decoded.rotation[0] = message.rotation_over_interval_xyzw().x();
+  decoded.rotation[1] = message.rotation_over_interval_xyzw().y();
+  decoded.rotation[2] = message.rotation_over_interval_xyzw().z();
+  decoded.rotation[3] = message.rotation_over_interval_xyzw().w();
+  decoded.interval_seconds = message.interval_seconds();
+  try {
+    state->callback(decoded);
+  } catch (...) {
+  }
+}
+
+void onAccelerationSample(z_loaned_sample_t *sample, void *context) noexcept {
+  if (sample == nullptr || context == nullptr ||
+      z_sample_kind(sample) != Z_SAMPLE_KIND_PUT) {
+    return;
+  }
+  auto *state = static_cast<AccelerationState *>(context);
+  if (state->stopping.load(std::memory_order_acquire)) {
+    return;
+  }
+  const auto *bytes = z_sample_payload(sample);
+  if (bytes == nullptr || z_bytes_len(bytes) == 0u) {
+    return;
+  }
+  z_owned_slice_t slice;
+  if (z_bytes_to_slice(bytes, &slice) < 0) {
+    return;
+  }
+  xgc2::vrpn_zenoh::v1::Acceleration message;
+  const bool parsed = message.ParseFromArray(
+      z_slice_data(z_loan(slice)), static_cast<int>(z_slice_len(z_loan(slice))));
+  z_drop(z_move(slice));
+  if (!parsed) {
+    return;
+  }
+  ZenohAccelerationSample decoded;
+  decodeTime(message.report_time(), &decoded.report_time_nanos,
+             &decoded.clock_domain);
+  decoded.linear[0] = message.linear_mps2().x();
+  decoded.linear[1] = message.linear_mps2().y();
+  decoded.linear[2] = message.linear_mps2().z();
+  decoded.rotation[0] = message.velocity_rotation_change_xyzw().x();
+  decoded.rotation[1] = message.velocity_rotation_change_xyzw().y();
+  decoded.rotation[2] = message.velocity_rotation_change_xyzw().z();
+  decoded.rotation[3] = message.velocity_rotation_change_xyzw().w();
+  decoded.interval_seconds = message.interval_seconds();
+  try {
+    state->callback(decoded);
+  } catch (...) {
+  }
+}
+
 void onPoseDrop(void *context) { delete static_cast<PoseState *>(context); }
+void onVelocityDrop(void *context) {
+  delete static_cast<VelocityState *>(context);
+}
+void onAccelerationDrop(void *context) {
+  delete static_cast<AccelerationState *>(context);
+}
 
 } // namespace
+
+bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
+                      double output[3]) {
+  if (rotation_xyzw == nullptr || output == nullptr)
+    return false;
+  double x = rotation_xyzw[0], y = rotation_xyzw[1], z = rotation_xyzw[2],
+         w = rotation_xyzw[3];
+  const double norm_squared = x * x + y * y + z * z + w * w;
+  if (!std::isfinite(norm_squared) || norm_squared <= 0.0)
+    return false;
+  const double norm = std::sqrt(norm_squared);
+  x /= norm;
+  y /= norm;
+  z /= norm;
+  w /= norm;
+  const double sin_half = std::sqrt(x * x + y * y + z * z);
+  const double angle = 2.0 * std::atan2(sin_half, w);
+  if (!std::isfinite(angle) || !std::isfinite(interval_seconds) ||
+      interval_seconds <= 0.0)
+    return false;
+  if (sin_half < 1.0e-12) {
+    output[0] = output[1] = output[2] = 0.0;
+    return true;
+  }
+  const double scale = angle / (sin_half * interval_seconds);
+  output[0] = x * scale;
+  output[1] = y * scale;
+  output[2] = z * scale;
+  return std::isfinite(output[0]) && std::isfinite(output[1]) &&
+         std::isfinite(output[2]);
+}
 
 std::string ZenohLocalizationKey(const ZenohLocalizationBinding &binding,
                                  const char *kind) {
@@ -121,32 +255,64 @@ std::string ZenohLocalizationKey(const ZenohLocalizationBinding &binding,
 
 struct ZenohLocalizationInput::Impl {
   z_owned_session_t session{};
-  z_owned_subscriber_t subscriber{};
-  PoseState *state = nullptr;
+  z_owned_subscriber_t subscribers[3]{};
+  bool open[3] = {false, false, false};
+  PoseState *pose_state = nullptr;
+  VelocityState *velocity_state = nullptr;
+  AccelerationState *acceleration_state = nullptr;
   bool session_open = false;
-  bool subscriber_open = false;
   bool stopped = false;
   std::mutex stop_mutex;
 
   ~Impl() { Stop(); }
+
+  template <typename State, typename Callback, typename OnSample, typename OnDrop>
+  bool Declare(std::size_t index, const char *kind,
+                         const ZenohLocalizationBinding &binding,
+                         Callback callback, OnSample on_sample, OnDrop on_drop,
+                         State **state_out, std::string *error) {
+    const std::string key = ZenohLocalizationKey(binding, kind);
+    z_view_keyexpr_t expression;
+    if (z_view_keyexpr_from_str(&expression, key.c_str()) < 0) {
+      if (error != nullptr)
+        *error = "invalid Zenoh localization key: " + key;
+      return false;
+    }
+    auto *state = new State{std::move(callback)};
+    z_owned_closure_sample_t closure;
+    z_closure(&closure, on_sample, on_drop, state);
+    if (z_declare_subscriber(z_loan(session), &subscribers[index],
+                             z_loan(expression), z_move(closure), nullptr) < 0) {
+      if (error != nullptr)
+        *error = "cannot subscribe to Zenoh localization key: " + key;
+      return false;
+    }
+    open[index] = true;
+    *state_out = state;
+    return true;
+  }
 
   void Stop() {
     std::lock_guard<std::mutex> lock(stop_mutex);
     if (stopped)
       return;
     stopped = true;
-    if (state != nullptr)
-      state->stopping.store(true, std::memory_order_release);
-    if (subscriber_open) {
-      // Dropping the subscriber drops its closure. The SDK guarantees drop
-      // runs only after every in-flight call has ended, so the callback state
-      // cannot be deleted while a callback still uses it.
-      z_drop(z_move(subscriber));
-      subscriber_open = false;
+    if (pose_state != nullptr)
+      pose_state->stopping.store(true, std::memory_order_release);
+    if (velocity_state != nullptr)
+      velocity_state->stopping.store(true, std::memory_order_release);
+    if (acceleration_state != nullptr)
+      acceleration_state->stopping.store(true, std::memory_order_release);
+    for (std::size_t index = 0u; index < 3u; ++index) {
+      if (open[index]) {
+        // The SDK guarantees closure drop after every in-flight call ends.
+        z_drop(z_move(subscribers[index]));
+        open[index] = false;
+      }
     }
-    // onPoseDrop owns and deletes the callback state; never touch `state`
-    // after the subscriber drop, including from the destructor's second Stop.
-    state = nullptr;
+    pose_state = nullptr;
+    velocity_state = nullptr;
+    acceleration_state = nullptr;
     if (session_open) {
       z_drop(z_move(session));
       session_open = false;
@@ -167,7 +333,7 @@ void ZenohLocalizationInput::Stop() {
 
 std::unique_ptr<ZenohLocalizationInput>
 ZenohLocalizationInput::Open(const ZenohLocalizationBinding &binding,
-                             PoseCallback callback, std::string *error) {
+                             Callbacks callbacks, std::string *error) {
   if (binding.endpoint.empty()) {
     if (error != nullptr)
       *error = "Zenoh localization endpoint is required";
@@ -178,18 +344,9 @@ ZenohLocalizationInput::Open(const ZenohLocalizationBinding &binding,
       *error = "Zenoh localization source and tracker are required";
     return nullptr;
   }
-  if (!callback) {
+  if (!callbacks.pose && !callbacks.velocity && !callbacks.acceleration) {
     if (error != nullptr)
-      *error = "Zenoh localization pose callback is required";
-    return nullptr;
-  }
-
-  std::string key;
-  try {
-    key = ZenohLocalizationKey(binding, kPoseKind);
-  } catch (const std::exception &exception) {
-    if (error != nullptr)
-      *error = exception.what();
+      *error = "at least one Zenoh localization callback is required";
     return nullptr;
   }
 
@@ -213,24 +370,26 @@ ZenohLocalizationInput::Open(const ZenohLocalizationBinding &binding,
   }
   impl->session_open = true;
 
-  z_view_keyexpr_t expression;
-  if (z_view_keyexpr_from_str(&expression, key.c_str()) < 0) {
-    if (error != nullptr)
-      *error = "invalid Zenoh localization key: " + key;
+  if (callbacks.pose &&
+      !impl->Declare<PoseState>(
+          0u, kPoseKind, binding, std::move(callbacks.pose),
+          onPoseSample, onPoseDrop, &impl->pose_state, error)) {
     return nullptr;
   }
-
-  auto *state = new PoseState{std::move(callback)};
-  z_owned_closure_sample_t closure;
-  z_closure(&closure, onPoseSample, onPoseDrop, state);
-  if (z_declare_subscriber(z_loan(impl->session), &impl->subscriber,
-                           z_loan(expression), z_move(closure), nullptr) < 0) {
-    if (error != nullptr)
-      *error = "cannot subscribe to Zenoh localization key: " + key;
+  if (callbacks.velocity &&
+      !impl->Declare<VelocityState>(
+          1u, kVelocityKind, binding,
+          std::move(callbacks.velocity), onVelocitySample, onVelocityDrop,
+          &impl->velocity_state, error)) {
     return nullptr;
   }
-  impl->subscriber_open = true;
-  impl->state = state;
+  if (callbacks.acceleration &&
+      !impl->Declare<AccelerationState>(
+          2u, kAccelerationKind, binding,
+          std::move(callbacks.acceleration), onAccelerationSample,
+          onAccelerationDrop, &impl->acceleration_state, error)) {
+    return nullptr;
+  }
   return std::unique_ptr<ZenohLocalizationInput>(
       new ZenohLocalizationInput(std::move(impl)));
 }
