@@ -62,16 +62,19 @@ std::string jsonString(const std::string &value) {
 struct PoseState {
   ZenohLocalizationInput::PoseCallback callback;
   std::atomic<bool> stopping{false};
+  bool angular_is_rpy = false; // unused; keeps the declaration helper generic
 };
 
 struct VelocityState {
   ZenohLocalizationInput::VelocityCallback callback;
   std::atomic<bool> stopping{false};
+  bool angular_is_rpy = false;
 };
 
 struct AccelerationState {
   ZenohLocalizationInput::AccelerationCallback callback;
   std::atomic<bool> stopping{false};
+  bool angular_is_rpy = false;
 };
 
 void decodeTime(const xgc::v1::TimePoint &source, std::int64_t *nanoseconds,
@@ -155,6 +158,7 @@ void onVelocitySample(z_loaned_sample_t *sample, void *context) noexcept {
   decoded.rotation[2] = message.rotation_over_interval_xyzw().z();
   decoded.rotation[3] = message.rotation_over_interval_xyzw().w();
   decoded.interval_seconds = message.interval_seconds();
+  decoded.angular_is_rpy = state->angular_is_rpy;
   try {
     state->callback(decoded);
   } catch (...) {
@@ -196,6 +200,7 @@ void onAccelerationSample(z_loaned_sample_t *sample, void *context) noexcept {
   decoded.rotation[2] = message.velocity_rotation_change_xyzw().z();
   decoded.rotation[3] = message.velocity_rotation_change_xyzw().w();
   decoded.interval_seconds = message.interval_seconds();
+  decoded.angular_is_rpy = state->angular_is_rpy;
   try {
     state->callback(decoded);
   } catch (...) {
@@ -213,7 +218,7 @@ void onAccelerationDrop(void *context) {
 } // namespace
 
 bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
-                      double output[3]) {
+                      bool angular_is_rpy, double output[3]) {
   if (rotation_xyzw == nullptr || output == nullptr)
     return false;
   double x = rotation_xyzw[0], y = rotation_xyzw[1], z = rotation_xyzw[2],
@@ -226,6 +231,23 @@ bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
   y /= norm;
   z /= norm;
   w /= norm;
+  if (angular_is_rpy) {
+    // gazebo_sim_vrpn_bridge encodes an already differentiated RPY angular
+    // vector as setRPY(...) and sends report_interval separately. Decode that
+    // source-specific representation without dividing by dt a second time.
+    const double sin_roll = 2.0 * (w * x + y * z);
+    const double cos_roll = 1.0 - 2.0 * (x * x + y * y);
+    const double sin_pitch = 2.0 * (w * y - z * x);
+    if (sin_pitch < -1.0 || sin_pitch > 1.0)
+      return false;
+    const double sin_yaw = 2.0 * (w * z + x * y);
+    const double cos_yaw = 1.0 - 2.0 * (y * y + z * z);
+    output[0] = std::atan2(sin_roll, cos_roll);
+    output[1] = std::asin(sin_pitch);
+    output[2] = std::atan2(sin_yaw, cos_yaw);
+    return std::isfinite(output[0]) && std::isfinite(output[1]) &&
+           std::isfinite(output[2]);
+  }
   const double sin_half = std::sqrt(x * x + y * y + z * z);
   const double angle = 2.0 * std::atan2(sin_half, w);
   if (!std::isfinite(angle) || !std::isfinite(interval_seconds) ||
@@ -270,7 +292,8 @@ struct ZenohLocalizationInput::Impl {
   bool Declare(std::size_t index, const char *kind,
                          const ZenohLocalizationBinding &binding,
                          Callback callback, OnSample on_sample, OnDrop on_drop,
-                         State **state_out, std::string *error) {
+                         State **state_out, std::string *error,
+                         bool angular_is_rpy = false) {
     const std::string key = ZenohLocalizationKey(binding, kind);
     z_view_keyexpr_t expression;
     if (z_view_keyexpr_from_str(&expression, key.c_str()) < 0) {
@@ -279,6 +302,7 @@ struct ZenohLocalizationInput::Impl {
       return false;
     }
     auto *state = new State{std::move(callback)};
+    state->angular_is_rpy = angular_is_rpy;
     z_owned_closure_sample_t closure;
     z_closure(&closure, on_sample, on_drop, state);
     if (z_declare_subscriber(z_loan(session), &subscribers[index],

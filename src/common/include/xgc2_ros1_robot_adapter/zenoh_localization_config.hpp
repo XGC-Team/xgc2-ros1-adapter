@@ -27,6 +27,7 @@ struct ZenohVelocitySample {
   double linear[3] = {0.0, 0.0, 0.0};
   double rotation[4] = {0.0, 0.0, 0.0, 1.0};
   double interval_seconds = 0.0;
+  bool angular_is_rpy = false;
 };
 
 struct ZenohAccelerationSample {
@@ -35,12 +36,13 @@ struct ZenohAccelerationSample {
   double linear[3] = {0.0, 0.0, 0.0};
   double rotation[4] = {0.0, 0.0, 0.0, 1.0};
   double interval_seconds = 0.0;
+  bool angular_is_rpy = false;
 };
 
 // Converts a VRPN rotation-over-interval quaternion and its dt into an
 // angular-rate vector. This is a numeric conversion, not a quality gate.
 bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
-                      double output[3]);
+                      bool angular_is_rpy, double output[3]);
 
 struct ZenohLocalizationConfig {
   bool enabled = false;
