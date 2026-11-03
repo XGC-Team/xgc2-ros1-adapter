@@ -194,7 +194,7 @@ docker exec "${container_name}" bash -lc '
       planned="$(cat)"
       while read -r package; do
         case "${package%%:*}" in
-          libxgc2-*|xgc2-*|ros-noetic-xgc2-*) ;;
+          libxgc2-*|xgc2-*|ros-noetic-xgc2-*|python3-xgc2-*) ;;
           *)
             echo "Managed build image lacks dependency ${package}; refusing third-party install" >&2
             exit 1
