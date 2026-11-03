@@ -164,4 +164,4 @@ release:
     xgc2-ros-msgs: rebuild
     xgc2-gazebo-sim-scenes: verify
   apt_versions:
-    focal: 0.9.0-5
+    focal: 0.9.0-6
