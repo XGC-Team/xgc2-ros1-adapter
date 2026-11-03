@@ -57,15 +57,28 @@ bool parseLocalizationProjectionConfig(
   }
   LocalizationProjectionConfig candidate;
   candidate.source_root = root->second;
-  if (!parseFinite(parameters, "localization_offset_x", &candidate.offset_x,
+  if (!parseLocalizationOffsets(parameters, &candidate, error))
+    return false;
+  *output = candidate;
+  return true;
+}
+
+bool parseLocalizationOffsets(
+    const std::map<std::string, std::string> &parameters,
+    LocalizationProjectionConfig *output, std::string *error) {
+  if (output == nullptr) {
+    if (error != nullptr)
+      *error = "localization projection output is required";
+    return false;
+  }
+  if (!parseFinite(parameters, "localization_offset_x", &output->offset_x,
                    error) ||
-      !parseFinite(parameters, "localization_offset_y", &candidate.offset_y,
+      !parseFinite(parameters, "localization_offset_y", &output->offset_y,
                    error) ||
-      !parseFinite(parameters, "localization_offset_z", &candidate.offset_z,
+      !parseFinite(parameters, "localization_offset_z", &output->offset_z,
                    error)) {
     return false;
   }
-  *output = candidate;
   return true;
 }
 

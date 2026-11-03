@@ -43,6 +43,7 @@ apt:
   - ros-noetic-xgc2-ugv-reset-msgs (>= 2.0.0-1)
   - libxgc2-xrpc2 (>= 0.2.1-2~focal)
   - libxgc2-math-dev (>= 0.6.0-6~focal)
+  - xgc2-zenoh
   - nlohmann-json3-dev
   - libyaml-cpp-dev
   - libssl-dev
@@ -156,6 +157,7 @@ release:
   - xgc2-protobuf
   - libxgc2-math-dev
   - xgc2-gazebo-sim-scenes
+  - xgc2-zenoh
   dependency_policy:
     xsim: rebuild
     xgc2-xrpc: rebuild
@@ -163,5 +165,6 @@ release:
     libxgc2-math-dev: rebuild
     xgc2-ros-msgs: rebuild
     xgc2-gazebo-sim-scenes: verify
+    xgc2-zenoh: verify
   apt_versions:
     focal: 0.9.0-6

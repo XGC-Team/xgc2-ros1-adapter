@@ -16,6 +16,7 @@ EXPECTED_PROTOBUF_DEB_VERSION="${EXPECTED_PROTOBUF_PRODUCT_VERSION}~focal"
 XGC2_PROTOBUF_DEB_VERSION="${XGC2_PROTOBUF_DEB_VERSION:-${EXPECTED_PROTOBUF_DEB_VERSION}}"
 XGC2_XRPC_DEB_VERSION="0.2.1-5~focal"
 XGC2_MATH_DEB_VERSION="0.6.0-6~focal"
+XGC2_ZENOH_DEB_VERSION="1.8.0-1~focal"
 XGC2_ROSMSGS_BUILD_DEB_VERSION="2.0.0-1"
 XGC2_GEOMETRY_MSGS_DEB_VERSION="${XGC2_ROSMSGS_BUILD_DEB_VERSION}"
 XGC2_UGV_RESET_MSGS_DEB_VERSION="${XGC2_ROSMSGS_BUILD_DEB_VERSION}"
@@ -138,6 +139,7 @@ docker_env_args=(
   -e "XGC2_PROTOBUF_DEB_VERSION=${XGC2_PROTOBUF_DEB_VERSION}"
   -e "XGC2_XRPC_DEB_VERSION=${XGC2_XRPC_DEB_VERSION}"
   -e "XGC2_MATH_DEB_VERSION=${XGC2_MATH_DEB_VERSION}"
+  -e "XGC2_ZENOH_DEB_VERSION=${XGC2_ZENOH_DEB_VERSION}"
   -e "XGC2_GEOMETRY_MSGS_DEB_VERSION=${XGC2_GEOMETRY_MSGS_DEB_VERSION}"
   -e "XGC2_UGV_RESET_MSGS_DEB_VERSION=${XGC2_UGV_RESET_MSGS_DEB_VERSION}"
   -e "XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION=${XGC2_GAZEBO_WORLDS_MIN_DEB_VERSION}"
@@ -243,6 +245,7 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      "xgc2-zenoh=${XGC2_ZENOH_DEB_VERSION}" \
       libxgc2-sensing-dev \
       ros-noetic-xgc2-gazebo-sim-worlds \
       "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}" \
@@ -257,6 +260,7 @@ docker exec "${container_name}" bash -lc '
       "libxgc2-xrpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-xrpc-grpc-dev=${XGC2_XRPC_DEB_VERSION}" \
       "libxgc2-math-dev=${XGC2_MATH_DEB_VERSION}" \
+      "xgc2-zenoh=${XGC2_ZENOH_DEB_VERSION}" \
       libxgc2-sensing-dev \
       ros-noetic-xgc2-gazebo-sim-worlds \
       "ros-noetic-xgc2-geometry-msgs=${XGC2_GEOMETRY_MSGS_DEB_VERSION}" \
@@ -265,6 +269,7 @@ docker exec "${container_name}" bash -lc '
       test "$(dpkg-query -W -f="\${Version}" "${package}")" = "${XGC2_XRPC_DEB_VERSION}"
     done
     test "$(dpkg-query -W -f="\${Version}" libxgc2-math-dev)" = "${XGC2_MATH_DEB_VERSION}"
+    test "$(dpkg-query -W -f="\${Version}" xgc2-zenoh)" = "${XGC2_ZENOH_DEB_VERSION}"
     test "$(dpkg-query -W -f="\${Version}" ros-noetic-xgc2-geometry-msgs)" = "${XGC2_GEOMETRY_MSGS_DEB_VERSION}"
     test "$(dpkg-query -W -f="\${Version}" ros-noetic-xgc2-ugv-reset-msgs)" = "${XGC2_UGV_RESET_MSGS_DEB_VERSION}"
     dpkg --compare-versions \

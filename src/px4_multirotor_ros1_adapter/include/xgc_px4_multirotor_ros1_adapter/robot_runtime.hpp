@@ -31,6 +31,7 @@
 #include "xgc2_ros1_robot_adapter/contract.hpp"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
+#include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
@@ -70,6 +71,7 @@ struct NativeProfileConfig {
   bool publish_vision = true;
   double vision_publish_rate_hz = 30.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
   std::vector<std::string> allowed_modes;
 };
 
@@ -184,7 +186,8 @@ private:
   xgc::robot::v1::RobotMessage
   makeEnvelopeLocked(const std::string &channel_id,
                      const ros::Time &source_stamp,
-                     const google::protobuf::Message &payload);
+                     const google::protobuf::Message &payload,
+                     const xgc::v1::TimePoint *source_time = nullptr);
   void emit(std::vector<xgc::robot::v1::RobotMessage> messages);
   void ensureSourceLocked(const std::string &channel_id,
                           double stale_after_seconds);
@@ -203,7 +206,10 @@ private:
                                       const ros::WallTime &now) const;
 
   void px4PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
-  void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message,
+                         const xgc::v1::TimePoint *source_time = nullptr);
+  void zenohPoseCallback(const xgc2_ros1_robot_adapter::ZenohPoseSample &sample);
+  bool installZenohLocalization(std::string *error);
   void mocapVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void mocapAccelerationCallback(
@@ -302,8 +308,12 @@ private:
   bool has_mocap_position_ = false;
   bool local_position_frame_valid_ = false;
   geometry_msgs::PoseStamped::ConstPtr latest_pose_, latest_mocap_pose_;
+  xgc::v1::TimePoint latest_mocap_pose_source_time_;
+  bool has_mocap_pose_source_time_ = false;
   geometry_msgs::PoseStamped latest_vision_pose_;
+  xgc::v1::TimePoint latest_vision_source_time_;
   bool has_vision_pose_ = false;
+  bool has_vision_source_time_ = false;
   geometry_msgs::TwistStamped::ConstPtr latest_mocap_velocity_, latest_velocity_;
   geometry_msgs::AccelStamped::ConstPtr latest_mocap_acceleration_;
   sensor_msgs::Imu::ConstPtr latest_imu_;
@@ -324,6 +334,8 @@ private:
   } latest_timesync_;
   bool local_setpoint_frame_valid_ = false, attitude_setpoint_frame_valid_ = false;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization_;
+  std::unique_ptr<xgc2_ros1_robot_adapter::ZenohLocalizationInput> zenoh_input_;
   xgc2_ros1_robot_adapter::VisionPublishCadence vision_publish_cadence_;
 
   ros::Subscriber pose_subscriber_;

@@ -100,21 +100,27 @@ def visualization(arm, scene, package, description, visuals):
 def apply_runtime(params, derived, binding, context, simulated):
     mode, simulator = context["runMode"], context["simulator"]
     params["ros_master_uri"], params["ros_ip"] = context["rosMasterUri"], context["rosIp"]
-    params["mocap_source_root"] = "/vrpn_client_node" if mode != "hybrid" else "/vrpn_client_node_simulation" if simulated else "/vrpn_client_node_physical"
     offset = context["localizationOffset"]
     if simulated:
+        params["mocap_source_root"] = "/vrpn_client_node" if mode != "hybrid" else "/vrpn_client_node_simulation" if simulated else "/vrpn_client_node_physical"
         params["mocap_rigid_body"] = binding["namespace"].lstrip("/")
         offset = dict(x=0, y=0, z=0)
     params.update({"localization_offset_" + axis: scalar(offset[axis]) for axis in ("x", "y", "z")})
     if simulated and simulator in ("xsim", "none"):
         params["localization_pose_topic"] = binding["namespace"] + "/pose"
         params["localization_twist_topic"] = binding["namespace"] + "/twist"
-    else:
-        # The recorder consumes explicit frozen topics, never profile or mode
-        # guesses. These are the same product-owned VRPN topics as localization.
+    elif simulated:
+        # Same-machine Gazebo keeps the existing local measurement short chain.
         root = params["mocap_source_root"].rstrip('/') + '/' + params["mocap_rigid_body"]
         params["localization_pose_topic"] = root + '/pose'
         params["localization_twist_topic"] = root + '/twist'
+    else:
+        # External localization reaches the Adapter through Zenoh. The recorder
+        # consumes the actual slot output, never the retired VRPN topic root.
+        # The first candidate exposes pose only; do not invent a twist topic.
+        params.pop("mocap_source_root", None)
+        params["localization_pose_topic"] = binding["namespace"] + "/pose"
+        params.pop("localization_twist_topic", None)
     return params, derived
 
 

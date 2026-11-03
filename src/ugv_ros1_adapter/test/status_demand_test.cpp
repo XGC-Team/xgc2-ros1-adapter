@@ -15,7 +15,10 @@
 namespace xgc_ugv_ros1_adapter {
 class StatusDemandHarness {
 public:
-  explicit StatusDemandHarness(bool live_sources = false, const UgvVariant &variant = scoutMini()) {
+  explicit StatusDemandHarness(bool live_sources = false, const UgvVariant &variant = scoutMini(),
+                               const std::string &canonical_pose = "/demand_ugv/canonical_pose",
+                               const std::string &mocap_body = "body",
+                               const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {}) {
     ros::NodeHandle node;
     std::set<std::string> channels{"vrpn.position", "command.velocity", "vrpn.velocity", "vrpn.acceleration",
         "vrpn.speed", "state.imu", "state.power", "state.health", "state.chassis", "state.controller",
@@ -23,8 +26,8 @@ public:
     const std::string prefix = live_sources ? "/demand_ugv" : "";
     runtime_.reset(new RobotRuntime(variant, std::move(node), "r1",
         variant.contract.primaryProfile().profile_id, "/r1", channels, channels,
-        "body", prefix + "/pose", prefix + "/velocity", prefix + "/accel",
-        prefix + "/canonical_pose", prefix + "/canonical_velocity", prefix + "/canonical_accel", {},
+        mocap_body, prefix + "/pose", prefix + "/velocity", prefix + "/accel",
+        canonical_pose, prefix + "/canonical_velocity", prefix + "/canonical_accel", localization, {},
         prefix + "/command", prefix + "/imu", prefix + "/battery", prefix + "/chassis",
         prefix + "/controller", prefix + "/session", prefix + "/result", {}, {},
         [this](xgc::robot::v1::RobotMessage message) {
@@ -100,6 +103,16 @@ public:
     result->detail = "arrived";
     runtime_->resetResultCallback(result);
   }
+  void zenohPose(double x, std::int64_t report_ns,
+                 const std::string &frame = "world") {
+    xgc2_ros1_robot_adapter::ZenohPoseSample sample;
+    sample.report_time_nanos = report_ns;
+    sample.clock_domain = static_cast<std::int32_t>(xgc::v1::CLOCK_DOMAIN_SIMULATION);
+    sample.position[0] = x;
+    sample.orientation[3] = 1.0;
+    runtime_->zenoh_localization_.frame_id = frame;
+    runtime_->zenohPoseCallback(sample);
+  }
   void periodic() { runtime_->emitPeriodic(); }
   void periodicAcrossFirstSource() {
     std::promise<ros::WallTime> captured;
@@ -166,6 +179,45 @@ bool waitFor(Predicate ready, double seconds = 3.0) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return ready();
+}
+
+TEST(StatusDemand, ZenohPoseUsesSlotOutputAndPreservesSourceTime) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  StatusDemandHarness source(true, scoutMini(), "/slot4/pose", "tracked_body", localization);
+  std::atomic<unsigned> forwarded{0};
+  geometry_msgs::PoseStamped observed;
+  auto canonical = node.subscribe<geometry_msgs::PoseStamped>("/slot4/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &message) {
+        observed = *message;
+        ++forwarded;
+      });
+  ASSERT_TRUE(waitFor([&] { return canonical.getNumPublishers() > 0; }));
+  source.zenohPose(2.5, 123456789012345LL);
+  ASSERT_TRUE(waitFor([&] { return forwarded.load() > 0; }));
+  EXPECT_NEAR(3.75, observed.pose.position.x, 1e-12);
+  EXPECT_EQ("world", observed.header.frame_id);
+
+  source.demand({"vrpn.position"});
+  ASSERT_TRUE(waitFor([&] { return !source.messages().empty(); }));
+  bool found = false;
+  for (const auto &item : source.messages()) {
+    if (item.channel_id() != "vrpn.position") continue;
+    const auto &message = item.message();
+    EXPECT_EQ(123456789012345LL, message.source_time().nanoseconds());
+    EXPECT_EQ(xgc::v1::CLOCK_DOMAIN_SIMULATION,
+              message.source_time().clock_domain());
+    xgc::semantic::common::v1::PoseEstimate pose;
+    ASSERT_TRUE(pose.ParseFromString(message.payload().value()));
+    EXPECT_NEAR(3.75, pose.position().x(), 1e-12);
+    found = true;
+  }
+  EXPECT_TRUE(found);
+  source.stop();
+  spinner.stop();
 }
 
 TEST(StatusDemand, ScoutRosSourcesFollowDemandWhileChassisAndPoseStayLive) {

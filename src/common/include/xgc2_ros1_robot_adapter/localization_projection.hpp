@@ -22,6 +22,12 @@ bool parseLocalizationProjectionConfig(
     const std::map<std::string, std::string> &parameters,
     LocalizationProjectionConfig *output, std::string *error);
 
+// World-offset fields only. Zenoh localization does not carry a ROS source
+// root, so its binding uses this instead of requiring mocap_source_root.
+bool parseLocalizationOffsets(
+    const std::map<std::string, std::string> &parameters,
+    LocalizationProjectionConfig *output, std::string *error);
+
 bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
                              const LocalizationProjectionConfig &config,
                              geometry_msgs::PoseStamped *output);

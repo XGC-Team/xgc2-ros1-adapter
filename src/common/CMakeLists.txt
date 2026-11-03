@@ -13,6 +13,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED grpc++>=1.16 grpc)
 find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS grpc)
 find_package(nlohmann_json 3.7 REQUIRED)
+find_package(zenohc 1.8.0 EXACT CONFIG REQUIRED)
 if(NOT XGC2_PROTOBUF_PROTO_ROOT)
   find_package(xgc2_protobuf CONFIG REQUIRED)
 endif()
@@ -49,6 +50,31 @@ set(protocol_files
   xgc/semantic/ground/v1/control.proto
   xgc/semantic/ground/v1/locomotion.proto
   xgc/semantic/ground/v1/reset.proto
+)
+if(NOT XGC2_VRPN_ZENOH_PROTO_ROOT)
+  find_path(XGC2_VRPN_ZENOH_PROTO_ROOT
+    NAMES xgc2/vrpn_zenoh/v1/tracker.proto
+    HINTS /opt/xgc2/vrpn-zenoh/include /usr/include)
+endif()
+if(NOT XGC2_VRPN_ZENOH_PROTO_ROOT OR
+   NOT EXISTS "${XGC2_VRPN_ZENOH_PROTO_ROOT}/xgc2/vrpn_zenoh/v1/tracker.proto")
+  message(FATAL_ERROR "xgc2-vrpn-zenoh development package is required: xgc2/vrpn_zenoh/v1/tracker.proto")
+endif()
+set(vrpn_zenoh_proto_dir "${CMAKE_CURRENT_BINARY_DIR}/vrpn_zenoh_proto")
+set(vrpn_zenoh_proto "${XGC2_VRPN_ZENOH_PROTO_ROOT}/xgc2/vrpn_zenoh/v1/tracker.proto")
+set(vrpn_zenoh_source "${vrpn_zenoh_proto_dir}/xgc2/vrpn_zenoh/v1/tracker.pb.cc")
+set(vrpn_zenoh_header "${vrpn_zenoh_proto_dir}/xgc2/vrpn_zenoh/v1/tracker.pb.h")
+add_custom_command(
+  OUTPUT "${vrpn_zenoh_source}" "${vrpn_zenoh_header}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${vrpn_zenoh_proto_dir}"
+  COMMAND "${Protobuf_PROTOC_EXECUTABLE}"
+          "--proto_path=${XGC2_VRPN_ZENOH_PROTO_ROOT}"
+          "--proto_path=${XGC2_PROTOBUF_PROTO_ROOT}"
+          "--cpp_out=${vrpn_zenoh_proto_dir}"
+          "${vrpn_zenoh_proto}"
+  DEPENDS "${vrpn_zenoh_proto}"
+  COMMENT "Generating the frozen VRPN/Zenoh localization protocol"
+  VERBATIM
 )
 set(proto_dir "${CMAKE_CURRENT_BINARY_DIR}/proto")
 set(protocol_inputs)
@@ -92,6 +118,8 @@ add_library(xgc2_robot_server SHARED
   src/robot_domain.cpp
   src/robot_server.cpp
   src/robot_server_options.cpp
+  src/zenoh_localization_input.cpp
+  "${vrpn_zenoh_source}"
   ${protocol_sources}
   "${grpc_source}"
 )
@@ -102,10 +130,12 @@ set_target_properties(xgc2_robot_server PROPERTIES VERSION ${PROJECT_VERSION}
 target_include_directories(xgc2_robot_server
   PUBLIC include
   PRIVATE ${GRPC_INCLUDE_DIRS})
-target_include_directories(xgc2_robot_server SYSTEM PUBLIC "${proto_dir}")
+target_include_directories(xgc2_robot_server SYSTEM PUBLIC "${proto_dir}"
+  "${vrpn_zenoh_proto_dir}")
 target_link_libraries(xgc2_robot_server
   PUBLIC protobuf::libprotobuf Threads::Threads
-  PRIVATE XgcXrpc::grpc nlohmann_json::nlohmann_json OpenSSL::Crypto ${GRPC_LDFLAGS})
+  PRIVATE XgcXrpc::grpc nlohmann_json::nlohmann_json OpenSSL::Crypto
+          zenohc::static ${GRPC_LDFLAGS})
 set_source_files_properties(${protocol_sources} "${grpc_source}" PROPERTIES
   COMPILE_FLAGS "-Wno-array-bounds")
 

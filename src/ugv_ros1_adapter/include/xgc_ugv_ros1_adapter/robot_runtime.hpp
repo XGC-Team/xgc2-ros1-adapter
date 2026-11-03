@@ -30,6 +30,7 @@
 #include "xgc/semantic/ground/v1/chassis.pb.h"
 #include "xgc2_ros1_robot_adapter/ground_health.hpp"
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
+#include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
 #include "xgc_ugv_ros1_adapter/variant.hpp"
 
@@ -186,6 +187,7 @@ private:
                std::string canonical_velocity_endpoint,
                std::string canonical_acceleration_endpoint,
                xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
+               xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization,
                std::string command_velocity_endpoint, std::string imu_endpoint,
                std::string voltage_endpoint, std::string chassis_state_endpoint,
                std::string controller_status_endpoint,
@@ -208,7 +210,8 @@ private:
   xgc::robot::v1::RobotMessage
   makeEnvelopeLocked(const std::string &channel_id,
                      const ros::Time &source_stamp,
-                     const google::protobuf::Message &payload);
+                     const google::protobuf::Message &payload,
+                     const xgc::v1::TimePoint *source_time = nullptr);
   void emit(std::vector<xgc::robot::v1::RobotMessage> messages);
   void ensureSourceLocked(const std::string &endpoint,
                           double stale_after_seconds);
@@ -220,7 +223,10 @@ private:
   std::uint64_t sourceAgeMillisLocked(const std::string &endpoint,
                                       const ros::WallTime &now) const;
 
-  void poseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
+  void poseCallback(const geometry_msgs::PoseStamped::ConstPtr &message,
+                    const xgc::v1::TimePoint *source_time = nullptr);
+  void zenohPoseCallback(const xgc2_ros1_robot_adapter::ZenohPoseSample &sample);
+  bool installZenohLocalization(std::string *error);
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message);
   void vrpnAccelerationCallback(
@@ -275,6 +281,8 @@ private:
   const std::string reset_session_endpoint_;
   const std::string reset_result_endpoint_;
   const xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization_;
+  std::unique_ptr<xgc2_ros1_robot_adapter::ZenohLocalizationInput> zenoh_input_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
   const std::vector<xgc2_ros1_robot_adapter::BatteryCurvePoint> battery_curve_;
   xgc2_ros1_robot_adapter::BatteryVoltageFilter battery_voltage_filter_;
@@ -302,6 +310,8 @@ private:
   geometry_msgs::Quaternion vrpn_orientation_;
   bool has_vrpn_orientation_ = false;
   geometry_msgs::PoseStamped::ConstPtr latest_pose_;
+  xgc::v1::TimePoint latest_pose_source_time_;
+  bool has_pose_source_time_ = false;
   geometry_msgs::Twist::ConstPtr latest_command_velocity_;
   geometry_msgs::TwistStamped::ConstPtr latest_velocity_;
   geometry_msgs::Twist latest_velocity_value_;
