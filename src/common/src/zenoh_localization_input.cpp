@@ -1,6 +1,7 @@
 #include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 
 #include <atomic>
+#include <mutex>
 #include <cstdio>
 #include <stdexcept>
 #include <utility>
@@ -124,17 +125,28 @@ struct ZenohLocalizationInput::Impl {
   PoseState *state = nullptr;
   bool session_open = false;
   bool subscriber_open = false;
+  bool stopped = false;
+  std::mutex stop_mutex;
 
   ~Impl() { Stop(); }
 
   void Stop() {
-    if (state != nullptr) {
+    std::lock_guard<std::mutex> lock(stop_mutex);
+    if (stopped)
+      return;
+    stopped = true;
+    if (state != nullptr)
       state->stopping.store(true, std::memory_order_release);
-    }
     if (subscriber_open) {
+      // Dropping the subscriber drops its closure. The SDK guarantees drop
+      // runs only after every in-flight call has ended, so the callback state
+      // cannot be deleted while a callback still uses it.
       z_drop(z_move(subscriber));
       subscriber_open = false;
     }
+    // onPoseDrop owns and deletes the callback state; never touch `state`
+    // after the subscriber drop, including from the destructor's second Stop.
+    state = nullptr;
     if (session_open) {
       z_drop(z_move(session));
       session_open = false;

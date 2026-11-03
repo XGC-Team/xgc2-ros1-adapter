@@ -277,6 +277,23 @@ TEST(OnlineProjection, RequiresFreshConnectedMavrosState) {
   EXPECT_FALSE(px4IsOnline(true, true, false));
 }
 
+TEST(InstalledProfile, ZenohBindingAcceptsNoVrpnRosRoot) {
+  auto config = makeProfileConfig();
+  config.parameters.erase("mocap_source_root");
+  config.parameters["zenoh_endpoint"] = "tcp/127.0.0.1:7447";
+  config.parameters["localization_source"] = "gazebo";
+  config.parameters["mocap_sensor"] = "0";
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_TRUE(native.zenoh_localization.enabled);
+  EXPECT_EQ("tcp/127.0.0.1:7447", native.zenoh_localization.endpoint);
+  EXPECT_EQ("gazebo", native.zenoh_localization.source);
+  EXPECT_EQ("FS150_01", native.zenoh_localization.tracker);
+  EXPECT_EQ(0, native.zenoh_localization.sensor);
+  EXPECT_DOUBLE_EQ(1.25, native.localization.offset_x);
+}
+
 TEST(InstalledProfile, VisionForwardingIsOptionalAndRequiresAnExplicitBoolean) {
   auto config = makeProfileConfig();
   NativeProfileConfig native;
