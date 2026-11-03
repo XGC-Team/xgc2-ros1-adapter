@@ -16,7 +16,10 @@
 namespace xgc_px4_multirotor_ros1_adapter {
 class StatusDemandHarness {
 public:
-  explicit StatusDemandHarness(bool live_sources = false) {
+  explicit StatusDemandHarness(bool live_sources = false,
+                               const std::string &canonical_pose = "/demand_sources/canonical_pose",
+                               const std::string &vision_pose = "/demand_sources/vision",
+                               const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {}) {
     ros::NodeHandle node;
     std::set<std::string> channels{"state.pose", "state.mocap.pose", "state.vision.pose", "state.velocity",
         "state.mocap.velocity", "state.mocap.acceleration", "state.mocap.speed", "state.localization.error",
@@ -24,16 +27,18 @@ public:
         "setpoint.attitude", "diagnostic.fcu-link", "diagnostic.offboard-input", "diagnostic.stream-health"};
     NativeProfileConfig native;
     native.vision_publish_rate_hz = 30;
+    native.publish_vision = true;
+    native.localization = localization;
     if (live_sources) {
       const std::string prefix = "/demand_sources";
       native.pose_endpoint = prefix + "/pose";
       native.mocap_endpoint = prefix + "/mocap";
       native.mocap_velocity_endpoint = prefix + "/mocap_velocity";
       native.mocap_acceleration_endpoint = prefix + "/mocap_acceleration";
-      native.canonical_pose_endpoint = prefix + "/canonical_pose";
+      native.canonical_pose_endpoint = canonical_pose;
       native.canonical_velocity_endpoint = prefix + "/canonical_velocity";
       native.canonical_acceleration_endpoint = prefix + "/canonical_acceleration";
-      native.vision_pose_endpoint = prefix + "/vision";
+      native.vision_pose_endpoint = vision_pose;
       native.velocity_endpoint = prefix + "/velocity";
       native.imu_endpoint = prefix + "/imu";
       native.power_endpoint = prefix + "/power";
@@ -142,6 +147,16 @@ public:
     sync->remote_timestamp_ns = 42;
     runtime_->timesyncStatusCallback(sync);
   }
+  void zenohPose(double x, std::int64_t report_ns,
+                 const std::string &frame = "world") {
+    xgc2_ros1_robot_adapter::ZenohPoseSample sample;
+    sample.report_time_nanos = report_ns;
+    sample.clock_domain = static_cast<std::int32_t>(xgc::v1::CLOCK_DOMAIN_SIMULATION);
+    sample.position[0] = x;
+    sample.orientation[3] = 1.0;
+    runtime_->zenoh_localization_.frame_id = frame;
+    runtime_->zenohPoseCallback(sample);
+  }
   void periodic() { runtime_->emitPeriodic(); }
   // Model a real callback recording its first source after Periodic captured
   // time, but before Periodic acquires the runtime's source lock.
@@ -210,6 +225,44 @@ bool waitFor(Predicate ready, double seconds = 3.0) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return ready();
+}
+
+TEST(StatusDemand, ZenohPosePublishesSlotPoseAndVisionWithSourceTime) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  StatusDemandHarness source(true, "/slot4/pose", "/slot4/mavros/vision_pose/pose",
+                             localization);
+  std::atomic<unsigned> pose_received{0}, vision_received{0};
+  auto pose = node.subscribe<geometry_msgs::PoseStamped>("/slot4/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++pose_received; });
+  auto vision = node.subscribe<geometry_msgs::PoseStamped>("/slot4/mavros/vision_pose/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++vision_received; });
+  ASSERT_TRUE(waitFor([&] { return pose.getNumPublishers() > 0 && vision.getNumPublishers() > 0; }));
+  source.demand({"state.mocap.pose"});
+  source.zenohPose(2.5, 123456789012345LL);
+  ASSERT_TRUE(waitFor([&] { return pose_received.load() > 0 && vision_received.load() > 0; }));
+
+  source.demand({"state.mocap.pose", "state.vision.pose"});
+  ASSERT_TRUE(waitFor([&] { return !source.messages().empty(); }));
+  bool found_pose = false, found_vision = false;
+  for (const auto &item : source.messages()) {
+    if (item.channel_id() == "state.mocap.pose") {
+      found_pose = true;
+      EXPECT_EQ(123456789012345LL, item.message().source_time().nanoseconds());
+      EXPECT_EQ(xgc::v1::CLOCK_DOMAIN_SIMULATION,
+                item.message().source_time().clock_domain());
+    } else if (item.channel_id() == "state.vision.pose") {
+      found_vision = true;
+      EXPECT_EQ(123456789012345LL, item.message().source_time().nanoseconds());
+    }
+  }
+  EXPECT_TRUE(found_pose);
+  EXPECT_TRUE(found_vision);
+  source.stop();
+  spinner.stop();
 }
 
 TEST(StatusDemand, RealRosInputsFollowUnionAndKeepIndependentLocalization) {

@@ -69,14 +69,32 @@ class PreparationTests(unittest.TestCase):
             prepare(document)
 
     def test_missing_or_invalid_frozen_measurement_topics_never_infer_a_fallback(self):
-        for parameters in ({}, {"localization_pose_topic": "/pose"},
-                           {"localization_twist_topic": "/twist"},
+        for parameters in ({}, {"localization_twist_topic": "/twist"},
                            {"localization_pose_topic": "relative", "localization_twist_topic": "/twist"}):
             document = request()
             document["parameters"]["includeMotionCapture"] = True
             document["robots"]["robots"][0]["runtimeParameters"] = parameters
-            with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, "explicit frozen localization topics"):
+            with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, "explicit frozen localization pose topic"):
                 prepare(document)
+        document = request()
+        document["parameters"] = {"globalTopics": [], "includeMotionCapture": True}
+        document["robots"]["robots"][0]["runtimeParameters"] = {"localization_pose_topic": "/pose"}
+        self.assertEqual(prepare(document)[1]["topics"], ["/pose"])
+        document["robots"]["robots"][0]["runtimeParameters"]["localization_twist_topic"] = "relative"
+        with self.assertRaisesRegex(ValueError, "invalid frozen localization twist topic"):
+            prepare(document)
+
+    def test_pose_only_slot_output_and_effective_tracker_reach_the_manifest(self):
+        document = request()
+        document["parameters"] = {"globalTopics": [], "includeMotionCapture": True}
+        document["robots"]["robots"][0].update(
+            runtimeParameters={"localization_pose_topic": "/uav1/pose",
+                               "mocap_rigid_body": "slot-uav1"},
+            px4={"mocapRigidBodyName": "physical-body"})
+        parameters, resolved, manifest = prepare(document)
+        self.assertEqual(resolved["topics"], ["/uav1/pose"])
+        self.assertEqual(manifest["robots"][0]["mocapRigidBodyName"], "slot-uav1")
+        self.assertNotIn("localization_twist_topic", parameters)
 
     def test_recording_requires_the_frozen_master_but_preview_does_not(self):
         for master in (None, "", "   ", "not-a-url"):

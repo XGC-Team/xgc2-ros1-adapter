@@ -48,9 +48,13 @@ def resolve_recording_topics(document):
                 continue
             runtime = robot.get("runtimeParameters") or {}
             pose, twist = runtime.get("localization_pose_topic"), runtime.get("localization_twist_topic")
-            if any(not isinstance(topic, str) or not measurement_topic.fullmatch(topic) for topic in (pose, twist)):
-                raise ValueError("robot %s requires explicit frozen localization topics" % robot["id"])
-            topics.update((pose, twist))
+            if not isinstance(pose, str) or not measurement_topic.fullmatch(pose):
+                raise ValueError("robot %s requires an explicit frozen localization pose topic" % robot["id"])
+            topics.add(pose)
+            if twist is not None:
+                if not isinstance(twist, str) or not measurement_topic.fullmatch(twist):
+                    raise ValueError("robot %s has an invalid frozen localization twist topic" % robot["id"])
+                topics.add(twist)
             added = True
         if not added:
             raise ValueError("robot measurement was requested but the selected asset scope declares no rigid bodies")
@@ -313,12 +317,15 @@ def prepare(document, preview=False):
     for robot in robots.get("robots") or []:
         item = {key: copy.deepcopy(robot.get(key)) for key in ("id", "kind", "namespace", "hybridSource", "modelId", "robotAssetId", "robotAssetCommitId", "robotAssetDigest", "profileId", "initialPose", "visualization")}
         item["visualizationDigest"] = hashlib.sha256(json_bytes(item["visualization"])).hexdigest()
-        for kind in ("px4", "scout", "mecanum"):
-            if robot.get(kind) is not None:
-                body = robot[kind].get("mocapRigidBodyName", "").strip()
-                if body:
-                    item["mocapRigidBodyName"] = body
-                break
+        runtime = robot.get("runtimeParameters") or {}
+        body = runtime.get("mocap_rigid_body", "").strip()
+        if not body:
+            for kind in ("px4", "scout", "mecanum"):
+                if robot.get(kind) is not None:
+                    body = robot[kind].get("mocapRigidBodyName", "").strip()
+                    break
+        if body:
+            item["mocapRigidBodyName"] = body
         sidecar.append(item)
     manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "experimentName": context["experimentName"], "runMode": context["runMode"], "recordingProfile": p["recordingProfile"], "recordAllTopics": p["recordAllTopics"], "includeMotionCapture": p["includeMotionCapture"], "experimentResourceId": robots["experimentResourceId"], "experimentCommitId": robots["experimentCommitId"], "slotIds": resolved["slotIds"], "cameras": p["cameras"], "cameraTopicRoots": [c["root"] for c in p["cameras"]], "excludedTopics": p["excludedTopics"], "topics": resolved["topics"], "expectedDurationMinutes": p["expectedDurationMinutes"], "estimatedVideoBitrateMbps": p["estimatedVideoBitrateMbps"], "capacitySafetyFactor": p["capacitySafetyFactor"], "estimatedBytes": estimated, "robots": sidecar, "requestEvidence": "workflow-bound-request-not-producer-applied", "requestedParameters": document["parameters"], "factSources": {name: p[name] for name in ("calibrationFiles", "algorithmSidecarFiles")}, "timestampContract": {"imageTime": "xgc_camera_msgs/FrameTiming.source_time", "sceneTime": "ROS message header stamp or /clock", "alignment": "immutable sidecar; source bags are never rewritten"}}
     manifest["factSources"]["parameters"] = p["factParameters"]

@@ -469,7 +469,11 @@ bool BuildNativeProfileConfig(
             config.parameters.count("ros_ip") -
             config.parameters.count("publish_vision") -
             config.parameters.count("localization_pose_topic") -
-            config.parameters.count("localization_twist_topic") != 8u)
+            config.parameters.count("localization_twist_topic") -
+            config.parameters.count("zenoh_endpoint") -
+            config.parameters.count("localization_source") -
+            config.parameters.count("mocap_sensor") -
+            config.parameters.count("mocap_frame_id") != 8u)
       return fail(error, "PX4 native parameter binding is not exhaustive");
     contract::ParameterMetadata publish_vision_parameter{};
     contract::ParameterMetadata namespace_descriptor{};
@@ -527,9 +531,46 @@ bool BuildNativeProfileConfig(
                                      &parameter_error))
     return fail(error, "PX4 positioning parameters are invalid: " + parameter_error);
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
-  if (!canonical_input && !xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
-          config.parameters, &localization, &parameter_error))
-    return fail(error, "PX4 localization parameters are invalid: " + parameter_error);
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
+  if (!canonical_input) {
+    const bool zenoh_requested = config.parameters.count("zenoh_endpoint") != 0u ||
+                                 config.parameters.count("localization_source") != 0u;
+    if (zenoh_requested) {
+      const auto endpoint = config.parameters.find("zenoh_endpoint");
+      const auto source = config.parameters.find("localization_source");
+      if (endpoint == config.parameters.end() || endpoint->second.empty() ||
+          source == config.parameters.end() || source->second.empty()) {
+        return fail(error, "PX4 Zenoh localization requires endpoint and source");
+      }
+      zenoh_localization.enabled = true;
+      zenoh_localization.endpoint = endpoint->second;
+      zenoh_localization.source = source->second;
+      zenoh_localization.tracker = mocap_value->second;
+      const auto sensor = config.parameters.find("mocap_sensor");
+      if (sensor != config.parameters.end()) {
+        std::size_t parsed = 0u;
+        try {
+          const long value = std::stol(sensor->second, &parsed);
+          if (parsed != sensor->second.size() ||
+              value < std::numeric_limits<std::int32_t>::min() ||
+              value > std::numeric_limits<std::int32_t>::max())
+            return fail(error, "PX4 mocap_sensor is out of range");
+          zenoh_localization.sensor = static_cast<std::int32_t>(value);
+        } catch (const std::exception &) {
+          return fail(error, "PX4 mocap_sensor is invalid");
+        }
+      }
+      const auto frame = config.parameters.find("mocap_frame_id");
+      if (frame != config.parameters.end() && !frame->second.empty())
+        zenoh_localization.frame_id = frame->second;
+      if (!xgc2_ros1_robot_adapter::parseLocalizationOffsets(
+              config.parameters, &localization, &parameter_error))
+        return fail(error, "PX4 localization parameters are invalid: " + parameter_error);
+    } else if (!xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+                   config.parameters, &localization, &parameter_error)) {
+      return fail(error, "PX4 localization parameters are invalid: " + parameter_error);
+    }
+  }
 
   contract::ChannelMetadata pose_channel{};
   bool apply_world_offset = false;
@@ -710,6 +751,7 @@ bool BuildNativeProfileConfig(
                 "PX4 force-disarm and reboot must share mavros/cmd/command");
   }
   candidate.localization = localization;
+  candidate.zenoh_localization = zenoh_localization;
   if (!canonical_input) {
     candidate.mocap_endpoint = topicName(localization.source_root, candidate.mocap_endpoint);
     candidate.mocap_velocity_endpoint =
@@ -958,6 +1000,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
           std::move(native_profile.attitude_setpoint_endpoint)),
       timesync_endpoint_(std::move(native_profile.timesync_endpoint)),
       localization_(native_profile.localization),
+      zenoh_localization_(native_profile.zenoh_localization),
       vision_publish_cadence_(native_profile.vision_publish_rate_hz, 5u) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
@@ -1043,6 +1086,8 @@ void RobotRuntime::Stop() {
     attitude_setpoint_subscriber_.shutdown();
     timesync_subscriber_.shutdown();
   }
+  if (zenoh_input_)
+    zenoh_input_->Stop();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1082,10 +1127,32 @@ bool RobotRuntime::install(std::string *error) {
     if (!installPx4(error))
       return false;
   }
+  if (zenoh_localization_.enabled && !installZenohLocalization(error))
+    return false;
 
   ROS_INFO_STREAM("XGC Robot Adapter robot="
                   << robot_id_ << " profile=" << profile_id_ << " namespace=/"
                   << robot_namespace_);
+  return true;
+}
+
+bool RobotRuntime::installZenohLocalization(std::string *error) {
+  xgc2_ros1_robot_adapter::ZenohLocalizationBinding binding;
+  binding.endpoint = zenoh_localization_.endpoint;
+  binding.source = zenoh_localization_.source;
+  binding.tracker = zenoh_localization_.tracker;
+  binding.sensor = zenoh_localization_.sensor;
+  const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
+  auto input = xgc2_ros1_robot_adapter::ZenohLocalizationInput::Open(
+      binding,
+      [weak_self](const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
+        if (const auto self = weak_self.lock())
+          self->zenohPoseCallback(sample);
+      },
+      error);
+  if (!input)
+    return false;
+  zenoh_input_ = std::move(input);
   return true;
 }
 
@@ -1126,7 +1193,7 @@ bool RobotRuntime::installPx4(std::string *error) {
     if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
       return false;
   }
-  if (channelRequired("state.mocap.pose")) {
+  if (!zenoh_localization_.enabled && channelRequired("state.mocap.pose")) {
     ensureSourceLocked(
         "state.mocap.pose",
         channelStaleAfterSeconds(profile_id_, "state.mocap.pose"));
@@ -1144,8 +1211,9 @@ bool RobotRuntime::installPx4(std::string *error) {
         "state.vision.pose",
         channelStaleAfterSeconds(profile_id_, "state.vision.pose"));
   }
-  if (channelRequired("state.mocap.velocity") ||
-      channelRequired("state.mocap.speed")) {
+  if (!zenoh_localization_.enabled &&
+      (channelRequired("state.mocap.velocity") ||
+       channelRequired("state.mocap.speed"))) {
     if (channelRequired("state.mocap.velocity")) {
       ensureSourceLocked(
           "state.mocap.velocity",
@@ -1167,7 +1235,7 @@ bool RobotRuntime::installPx4(std::string *error) {
                                 mocap_velocity_endpoint_, error))
       return false;
   }
-  if (channelRequired("state.mocap.acceleration")) {
+  if (!zenoh_localization_.enabled && channelRequired("state.mocap.acceleration")) {
     ensureSourceLocked(
         "state.mocap.acceleration",
         channelStaleAfterSeconds(profile_id_, "state.mocap.acceleration"));
@@ -1274,7 +1342,8 @@ bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
 xgc::robot::v1::RobotMessage
 RobotRuntime::makeEnvelopeLocked(const std::string &channel_id,
                                  const ros::Time &source_stamp,
-                                 const google::protobuf::Message &payload) {
+                                 const google::protobuf::Message &payload,
+                                 const xgc::v1::TimePoint *source_time) {
   auto cached = message_schemas_.find(channel_id);
   if (cached == message_schemas_.end()) {
     contract::ChannelMetadata channel;
@@ -1302,7 +1371,11 @@ RobotRuntime::makeEnvelopeLocked(const std::string &channel_id,
   context.robot_id = robot_id_;
   context.channel_id = channel_id;
   context.sequence = ++sequences_[channel_id];
-  if (!source_stamp.isZero()) {
+  if (source_time != nullptr) {
+    context.has_source_time = true;
+    context.source_time_nanos = source_time->nanoseconds();
+    context.source_clock_domain = source_time->clock_domain();
+  } else if (!source_stamp.isZero()) {
     context.has_source_time = true;
     context.source_time_nanos =
         static_cast<std::int64_t>(source_stamp.toNSec());
@@ -1533,8 +1606,28 @@ void RobotRuntime::px4PoseCallback(
   emit(std::move(output));
 }
 
+void RobotRuntime::zenohPoseCallback(
+    const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
+  geometry_msgs::PoseStamped::Ptr message(new geometry_msgs::PoseStamped);
+  message->header.stamp = ros::Time::now();
+  message->header.frame_id = zenoh_localization_.frame_id;
+  message->pose.position.x = sample.position[0];
+  message->pose.position.y = sample.position[1];
+  message->pose.position.z = sample.position[2];
+  message->pose.orientation.x = sample.orientation[0];
+  message->pose.orientation.y = sample.orientation[1];
+  message->pose.orientation.z = sample.orientation[2];
+  message->pose.orientation.w = sample.orientation[3];
+  xgc::v1::TimePoint report_time;
+  report_time.set_nanoseconds(sample.report_time_nanos);
+  report_time.set_clock_domain(
+      static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
+  mocapPoseCallback(message, &report_time);
+}
+
 void RobotRuntime::mocapPoseCallback(
-    const geometry_msgs::PoseStamped::ConstPtr &message) {
+    const geometry_msgs::PoseStamped::ConstPtr &message,
+    const xgc::v1::TimePoint *source_time) {
   static const std::string state_mocap_pose_channel = "state.mocap.pose";
   static const std::string state_vision_pose_channel = "state.vision.pose";
   CallbackGuard callback(this);
@@ -1550,16 +1643,22 @@ void RobotRuntime::mocapPoseCallback(
     if (!xgc2_ros1_robot_adapter::projectLocalizationPose(
             *message, localization_, &projected)) {
       latest_mocap_pose_.reset();
+      has_mocap_pose_source_time_ = false;
       has_mocap_position_ = false;
       ++sources_[state_mocap_pose_channel].dropped_samples;
       return;
     }
     const bool bounded_frame = projected.header.frame_id.size() <=
                                xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
-    if (channelEnabled(state_mocap_pose_channel) && bounded_frame)
+    if (channelEnabled(state_mocap_pose_channel) && bounded_frame) {
       latest_mocap_pose_ = message;
-    else
+      has_mocap_pose_source_time_ = source_time != nullptr;
+      if (source_time != nullptr)
+        latest_mocap_pose_source_time_ = *source_time;
+    } else {
       latest_mocap_pose_.reset();
+      has_mocap_pose_source_time_ = false;
+    }
     mocap_position_ = projected.pose.position;
     has_mocap_position_ = true;
     positioning_health_.recordPose(
@@ -1574,7 +1673,8 @@ void RobotRuntime::mocapPoseCallback(
       copyQuaternion(projected.pose.orientation,
                      payload.mutable_orientation());
       output.push_back(makeEnvelopeLocked(
-          state_mocap_pose_channel, projected.header.stamp, payload));
+          state_mocap_pose_channel, projected.header.stamp, payload,
+          source_time));
       recordOutputLocked(state_mocap_pose_channel);
     } else if (status_demand_.count(state_mocap_pose_channel) && channelEnabled(state_mocap_pose_channel)) {
       ++sources_[state_mocap_pose_channel].dropped_samples;
@@ -1585,8 +1685,12 @@ void RobotRuntime::mocapPoseCallback(
       if (channelEnabled(state_vision_pose_channel) && bounded_frame) {
         latest_vision_pose_ = projected;
         has_vision_pose_ = true;
+        has_vision_source_time_ = source_time != nullptr;
+        if (source_time != nullptr)
+          latest_vision_source_time_ = *source_time;
       } else {
         has_vision_pose_ = false;
+        has_vision_source_time_ = false;
       }
       if (has_vision_pose_ && channelEnabled(state_vision_pose_channel) &&
           shouldEmitLocked(state_vision_pose_channel, now)) {
@@ -1595,7 +1699,8 @@ void RobotRuntime::mocapPoseCallback(
         copyVector(projected.pose.position, payload.mutable_position());
         copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
         output.push_back(makeEnvelopeLocked(
-            state_vision_pose_channel, projected.header.stamp, payload));
+            state_vision_pose_channel, projected.header.stamp, payload,
+            source_time));
         recordOutputLocked(state_vision_pose_channel);
       }
     }
@@ -2207,14 +2312,19 @@ void RobotRuntime::emitSnapshotLocked(
     payload.set_frame_id(projected.header.frame_id);
     copyVector(projected.pose.position, payload.mutable_position());
     copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
-    messages->push_back(makeEnvelopeLocked(channel, projected.header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, projected.header.stamp, payload,
+        has_mocap_pose_source_time_ ? &latest_mocap_pose_source_time_
+                                    : nullptr));
   } else if (channel == "state.vision.pose" && has_vision_pose_) {
     if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::PoseEstimate payload;
     payload.set_frame_id(latest_vision_pose_.header.frame_id);
     copyVector(latest_vision_pose_.pose.position, payload.mutable_position());
     copyQuaternion(latest_vision_pose_.pose.orientation, payload.mutable_orientation());
-    messages->push_back(makeEnvelopeLocked(channel, latest_vision_pose_.header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, latest_vision_pose_.header.stamp, payload,
+        has_vision_source_time_ ? &latest_vision_source_time_ : nullptr));
   } else if ((channel == "state.mocap.velocity" && latest_mocap_velocity_) ||
              (channel == "state.velocity" && latest_velocity_)) {
     const auto &sample = channel == "state.velocity" ? latest_velocity_ : latest_mocap_velocity_;

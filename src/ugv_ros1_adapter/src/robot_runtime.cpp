@@ -839,9 +839,50 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
     return nullptr;
   }
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
-  if (!canonical_input && !xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
-          config.parameters, &localization, error))
-    return nullptr;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
+  if (!canonical_input) {
+    const bool zenoh_requested = config.parameters.count("zenoh_endpoint") != 0u ||
+                                 config.parameters.count("localization_source") != 0u;
+    if (zenoh_requested) {
+      const auto endpoint = config.parameters.find("zenoh_endpoint");
+      const auto source = config.parameters.find("localization_source");
+      if (endpoint == config.parameters.end() || endpoint->second.empty() ||
+          source == config.parameters.end() || source->second.empty()) {
+        fail(error, "UGV Zenoh localization requires endpoint and source");
+        return nullptr;
+      }
+      zenoh_localization.enabled = true;
+      zenoh_localization.endpoint = endpoint->second;
+      zenoh_localization.source = source->second;
+      zenoh_localization.tracker = mocap_it->second;
+      const auto sensor = config.parameters.find("mocap_sensor");
+      if (sensor != config.parameters.end()) {
+        std::size_t parsed = 0u;
+        try {
+          const long value = std::stol(sensor->second, &parsed);
+          if (parsed != sensor->second.size() ||
+              value < std::numeric_limits<std::int32_t>::min() ||
+              value > std::numeric_limits<std::int32_t>::max()) {
+            fail(error, "UGV mocap_sensor is out of range");
+            return nullptr;
+          }
+          zenoh_localization.sensor = static_cast<std::int32_t>(value);
+        } catch (const std::exception &) {
+          fail(error, "UGV mocap_sensor is invalid");
+          return nullptr;
+        }
+      }
+      const auto frame = config.parameters.find("mocap_frame_id");
+      if (frame != config.parameters.end() && !frame->second.empty())
+        zenoh_localization.frame_id = frame->second;
+      if (!xgc2_ros1_robot_adapter::parseLocalizationOffsets(
+              config.parameters, &localization, error))
+        return nullptr;
+    } else if (!xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
+                   config.parameters, &localization, error)) {
+      return nullptr;
+    }
+  }
   contract::ChannelMetadata pose_channel{};
   bool apply_world_offset = false;
   if (!installed.channelMetadata(config.profile_id, "vrpn.position", &pose_channel) ||
@@ -885,7 +926,7 @@ std::shared_ptr<RobotRuntime> RobotRuntime::Create(
                        std::move(canonical_pose_endpoint),
                        std::move(canonical_velocity_endpoint),
                        std::move(canonical_acceleration_endpoint),
-                       localization,
+                       localization, zenoh_localization,
                        std::move(command_velocity_endpoint),
                        std::move(imu_endpoint),
                        std::move(voltage_endpoint), std::move(chassis_endpoint),
@@ -920,6 +961,7 @@ RobotRuntime::RobotRuntime(const UgvVariant &variant,
                            std::string canonical_velocity_endpoint,
                            std::string canonical_acceleration_endpoint,
                            xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization,
+                           xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization,
                            std::string command_velocity_endpoint,
                            std::string imu_endpoint,
                            std::string voltage_endpoint,
@@ -954,6 +996,7 @@ RobotRuntime::RobotRuntime(const UgvVariant &variant,
       reset_session_endpoint_(std::move(reset_session_endpoint)),
       reset_result_endpoint_(std::move(reset_result_endpoint)),
       localization_(std::move(localization)),
+      zenoh_localization_(std::move(zenoh_localization)),
       positioning_health_(positioning_config),
       battery_curve_(std::move(battery_curve)) {}
 
@@ -1028,6 +1071,8 @@ void RobotRuntime::Stop() {
     reset_session_subscriber_.shutdown();
     reset_result_subscriber_.shutdown();
   }
+  if (zenoh_input_)
+    zenoh_input_->Stop();
 
   {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1045,6 +1090,26 @@ void RobotRuntime::Stop() {
 
 bool RobotRuntime::channelEnabled(const std::string &channel_id) const {
   return enabled_channels_.count(channel_id) != 0;
+}
+
+bool RobotRuntime::installZenohLocalization(std::string *error) {
+  xgc2_ros1_robot_adapter::ZenohLocalizationBinding binding;
+  binding.endpoint = zenoh_localization_.endpoint;
+  binding.source = zenoh_localization_.source;
+  binding.tracker = zenoh_localization_.tracker;
+  binding.sensor = zenoh_localization_.sensor;
+  const std::weak_ptr<RobotRuntime> weak_self = shared_from_this();
+  auto input = xgc2_ros1_robot_adapter::ZenohLocalizationInput::Open(
+      binding,
+      [weak_self](const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
+        if (const auto self = weak_self.lock())
+          self->zenohPoseCallback(sample);
+      },
+      error);
+  if (!input)
+    return false;
+  zenoh_input_ = std::move(input);
+  return true;
 }
 
 bool RobotRuntime::install(std::string *error) {
@@ -1072,8 +1137,9 @@ bool RobotRuntime::install(std::string *error) {
     // Shared ROS callbacks may start immediately after subscribe(). Keep
     // tracking state and subscriber registration behind the callback mutex.
     std::lock_guard<std::mutex> lock(mutex_);
-    if (required_channels_.count("vrpn.position") != 0u ||
-        required_channels_.count("vrpn.speed") != 0u) {
+    if (!zenoh_localization_.enabled &&
+        (required_channels_.count("vrpn.position") != 0u ||
+         required_channels_.count("vrpn.speed") != 0u)) {
       ensureSourceLocked(
           "vrpn.position",
           channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.position"));
@@ -1087,8 +1153,9 @@ bool RobotRuntime::install(std::string *error) {
       if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
         return false;
     }
-    if (required_channels_.count("vrpn.velocity") != 0u ||
-        required_channels_.count("vrpn.speed") != 0u) {
+    if (!zenoh_localization_.enabled &&
+        (required_channels_.count("vrpn.velocity") != 0u ||
+         required_channels_.count("vrpn.speed") != 0u)) {
       if (required_channels_.count("vrpn.velocity") != 0u)
         ensureSourceLocked(
             "vrpn.velocity",
@@ -1108,7 +1175,8 @@ bool RobotRuntime::install(std::string *error) {
                                   vrpn_velocity_endpoint_, error))
         return false;
     }
-    if (required_channels_.count("vrpn.acceleration") != 0u) {
+    if (!zenoh_localization_.enabled &&
+        required_channels_.count("vrpn.acceleration") != 0u) {
       ensureSourceLocked(
           "vrpn.acceleration",
           channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.acceleration"));
@@ -1208,6 +1276,9 @@ bool RobotRuntime::install(std::string *error) {
     }
   }
 
+  if (zenoh_localization_.enabled && !installZenohLocalization(error))
+    return false;
+
   optional_sources_installed_ = true;
   ROS_INFO_STREAM("XGC " << variant_.name << " Robot Adapter robot=" << robot_id_
                   << " namespace=/" << robot_namespace_);
@@ -1235,7 +1306,8 @@ bool RobotRuntime::shouldEmitLocked(const std::string &channel_id,
 
 xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
     const std::string &channel_id, const ros::Time &source_stamp,
-    const google::protobuf::Message &payload) {
+    const google::protobuf::Message &payload,
+    const xgc::v1::TimePoint *source_time) {
   auto cached = message_schemas_.find(channel_id);
   if (cached == message_schemas_.end()) {
     contract::ChannelMetadata channel{};
@@ -1263,7 +1335,11 @@ xgc::robot::v1::RobotMessage RobotRuntime::makeEnvelopeLocked(
   context.robot_id = robot_id_;
   context.channel_id = channel_id;
   context.sequence = ++sequences_[channel_id];
-  if (!source_stamp.isZero()) {
+  if (source_time != nullptr) {
+    context.has_source_time = true;
+    context.source_time_nanos = source_time->nanoseconds();
+    context.source_clock_domain = source_time->clock_domain();
+  } else if (!source_stamp.isZero()) {
     context.has_source_time = true;
     context.source_time_nanos =
         static_cast<std::int64_t>(source_stamp.toNSec());
@@ -1331,8 +1407,28 @@ RobotRuntime::sourceAgeMillisLocked(const std::string &endpoint,
       std::max(0.0, (now - it->second.last_seen).toSec() * 1000.0));
 }
 
+void RobotRuntime::zenohPoseCallback(
+    const xgc2_ros1_robot_adapter::ZenohPoseSample &sample) {
+  geometry_msgs::PoseStamped::Ptr message(new geometry_msgs::PoseStamped);
+  message->header.stamp = ros::Time::now();
+  message->header.frame_id = zenoh_localization_.frame_id;
+  message->pose.position.x = sample.position[0];
+  message->pose.position.y = sample.position[1];
+  message->pose.position.z = sample.position[2];
+  message->pose.orientation.x = sample.orientation[0];
+  message->pose.orientation.y = sample.orientation[1];
+  message->pose.orientation.z = sample.orientation[2];
+  message->pose.orientation.w = sample.orientation[3];
+  xgc::v1::TimePoint report_time;
+  report_time.set_nanoseconds(sample.report_time_nanos);
+  report_time.set_clock_domain(
+      static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
+  poseCallback(message, &report_time);
+}
+
 void RobotRuntime::poseCallback(
-    const geometry_msgs::PoseStamped::ConstPtr &message) {
+    const geometry_msgs::PoseStamped::ConstPtr &message,
+    const xgc::v1::TimePoint *source_time) {
   CallbackGuard callback(this);
   if (!callback)
     return;
@@ -1343,16 +1439,22 @@ void RobotRuntime::poseCallback(
           *message, localization_, &projected)) {
     std::lock_guard<std::mutex> lock(mutex_);
     latest_pose_.reset();
+    has_pose_source_time_ = false;
     has_vrpn_orientation_ = false;
     return;
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (channelEnabled("vrpn.position") &&
-        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes)
+        message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
       latest_pose_ = message;
-    else
+      has_pose_source_time_ = source_time != nullptr;
+      if (source_time != nullptr)
+        latest_pose_source_time_ = *source_time;
+    } else {
       latest_pose_.reset();
+      has_pose_source_time_ = false;
+    }
     vrpn_orientation_ = projected.pose.orientation;
     has_vrpn_orientation_ = true;
     positioning_health_.recordPose(
@@ -1368,7 +1470,8 @@ void RobotRuntime::poseCallback(
       copyQuaternion(projected.pose.orientation,
                      payload.mutable_orientation());
       output.push_back(makeEnvelopeLocked("vrpn.position",
-                                          projected.header.stamp, payload));
+                                          projected.header.stamp, payload,
+                                          source_time));
       recordOutputLocked("vrpn.position");
     } else if (status_demand_.count("vrpn.position") && channelEnabled("vrpn.position")) {
       ++sources_["vrpn.position"].dropped_samples;
@@ -2028,7 +2131,9 @@ void RobotRuntime::emitSnapshotLocked(
     payload.set_child_frame_id(mocap_rigid_body_);
     copyVector(projected.pose.position, payload.mutable_position());
     copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
-    messages->push_back(makeEnvelopeLocked(channel, projected.header.stamp, payload));
+    messages->push_back(makeEnvelopeLocked(
+        channel, projected.header.stamp, payload,
+        has_pose_source_time_ ? &latest_pose_source_time_ : nullptr));
   } else if (channel == "command.velocity" && latest_command_velocity_) {
     if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::VelocityEstimate payload;

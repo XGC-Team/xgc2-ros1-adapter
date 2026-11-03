@@ -35,3 +35,10 @@ target_link_libraries(robot_server_client
   xgc2_robot_server XgcXrpc::grpc nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
 set_target_properties(robot_server_client PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CATKIN_DEVEL_PREFIX}/lib/${PROJECT_NAME}")
+
+catkin_add_gtest(${PROJECT_NAME}_zenoh_localization_test
+  zenoh_localization_input_test.cpp)
+if(TARGET ${PROJECT_NAME}_zenoh_localization_test)
+  target_link_libraries(${PROJECT_NAME}_zenoh_localization_test
+    xgc2_robot_server zenohc::static)
+endif()

@@ -32,6 +32,26 @@ parameters:
     required: false
     delivery: target_binding
     description: Run-frozen raw VRPN source root injected by Robot runtime.
+  localization_source:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Frozen source identity used to derive the exact Zenoh localization key.
+  zenoh_endpoint:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Explicit Zenoh endpoint for the selected localization source.
+  mocap_sensor:
+    type: integer
+    required: false
+    delivery: target_binding
+    description: VRPN sensor id for the selected tracker; defaults to 0.
+  mocap_frame_id:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Existing source frame id for ROS localization output; defaults to world.
   localization_offset_x:
     type: number
     required: false

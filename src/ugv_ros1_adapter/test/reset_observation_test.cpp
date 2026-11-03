@@ -38,7 +38,7 @@ public:
     runtime_ = std::shared_ptr<RobotRuntime>(new RobotRuntime(
         variant, std::move(node), "ugv1", profile, "/ugv1", std::move(enabled),
         std::move(required), "body", "pose", "twist", "accel", "pose", "twist",
-        "accel", {}, "command", "imu", "battery", "chassis", "status",
+        "accel", {}, {}, "command", "imu", "battery", "chassis", "status",
         "reset/session", "reset/result", {}, {},
         [this](xgc::robot::v1::RobotMessage message) {
           messages_.push_back(std::move(message));

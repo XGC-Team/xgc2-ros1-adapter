@@ -75,7 +75,9 @@ class AssetProjectionTest(unittest.TestCase):
         self.assertEqual(simulated["parameters"]["localization_pose_topic"], "/uav1/pose")
         row["source"] = "physical"
         physical = projection.project(row, context(mode="hybrid"))
-        self.assertIn("/vrpn_client_node_physical/", physical["parameters"]["localization_pose_topic"])
+        self.assertEqual(physical["parameters"]["localization_pose_topic"], "/uav1/pose")
+        self.assertNotIn("localization_twist_topic", physical["parameters"])
+        self.assertNotIn("mocap_source_root", physical["parameters"])
         self.assertEqual(authored["slotDeployment"]["plant"], "simulation")
 
     def test_body_returns_follows_scope_independently_of_sensor_enabled(self):
@@ -128,8 +130,8 @@ class AssetProjectionTest(unittest.TestCase):
         before = copy.deepcopy(request)
         result = project_batch(request)[0]
         self.assertEqual(result["binding"]["runtimeParameters"], authored)
-        self.assertEqual(result["parameters"]["localization_pose_topic"], "/vrpn_client_node/tracked/pose")
-        self.assertEqual(result["parameters"]["localization_twist_topic"], "/vrpn_client_node/tracked/twist")
+        self.assertEqual(result["parameters"]["localization_pose_topic"], "/robot7/pose")
+        self.assertNotIn("localization_twist_topic", result["parameters"])
         self.assertEqual(request, before)
         self.assertIsNot(result["binding"]["runtimeParameters"], authored)
 
@@ -247,13 +249,12 @@ class AssetProjectionTest(unittest.TestCase):
                         before = copy.deepcopy(request)
                         row = project_batch(request)[0]
                         arm = projection.MODELS[kind][0]
-                        root = "/vrpn_client_node" if mode == "physical" else "/vrpn_client_node_physical"
-                        topic = root + "/" + asset[arm]["mocapRigidBodyName"]
                         self.assertEqual(request, before)
                         self.assertEqual(row["profileId"], asset["profileId"])
                         self.assertEqual(row["physicalBinding"], request["robots"][0]["physicalBinding"])
-                        self.assertEqual(row["parameters"]["localization_pose_topic"], topic + "/pose")
-                        self.assertEqual(row["parameters"]["localization_twist_topic"], topic + "/twist")
+                        self.assertEqual(row["parameters"]["localization_pose_topic"], "/robot7/pose")
+                        self.assertNotIn("localization_twist_topic", row["parameters"])
+                        self.assertNotIn("mocap_source_root", row["parameters"])
                         self.assertNotIn("sitlInstanceId", row["derived"])
                         self.assertEqual(row["parameters"]["localization_offset_y"], "-2")
 
