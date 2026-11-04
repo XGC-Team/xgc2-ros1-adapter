@@ -1215,27 +1215,28 @@ bool RobotRuntime::installPx4(std::string *error) {
     if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
       return false;
   }
-  if (!zenoh_localization_.enabled && channelRequired("state.mocap.pose")) {
+  if (channelRequired("state.mocap.pose")) {
     ensureSourceLocked(
         "state.mocap.pose",
         channelStaleAfterSeconds(profile_id_, "state.mocap.pose"));
-    mocap_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
-        mocap_endpoint_, 50,
-        [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
-          if (const auto self = weak_self.lock())
-            self->mocapPoseCallback(message);
-        }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(mocap_subscriber_, mocap_endpoint_, error))
-      return false;
+    if (!zenoh_localization_.enabled) {
+      mocap_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
+          mocap_endpoint_, 50,
+          [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
+            if (const auto self = weak_self.lock())
+              self->mocapPoseCallback(message);
+          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+      if (!requireRosRegistration(mocap_subscriber_, mocap_endpoint_, error))
+        return false;
+    }
   }
   if (publish_vision_ && channelRequired("state.vision.pose")) {
     ensureSourceLocked(
         "state.vision.pose",
         channelStaleAfterSeconds(profile_id_, "state.vision.pose"));
   }
-  if (!zenoh_localization_.enabled &&
-      (channelRequired("state.mocap.velocity") ||
-       channelRequired("state.mocap.speed"))) {
+  if (channelRequired("state.mocap.velocity") ||
+      channelRequired("state.mocap.speed")) {
     if (channelRequired("state.mocap.velocity")) {
       ensureSourceLocked(
           "state.mocap.velocity",
@@ -1246,33 +1247,37 @@ bool RobotRuntime::installPx4(std::string *error) {
           "state.mocap.speed",
           channelStaleAfterSeconds(profile_id_, "state.mocap.speed"));
     }
-    mocap_velocity_subscriber_ =
-        node_handle_.subscribe<geometry_msgs::TwistStamped>(
-            mocap_velocity_endpoint_, 20,
-            [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
-              if (const auto self = weak_self.lock())
-                self->mocapVelocityCallback(message);
-            }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(mocap_velocity_subscriber_,
-                                mocap_velocity_endpoint_, error))
-      return false;
+    if (!zenoh_localization_.enabled) {
+      mocap_velocity_subscriber_ =
+          node_handle_.subscribe<geometry_msgs::TwistStamped>(
+              mocap_velocity_endpoint_, 20,
+              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                if (const auto self = weak_self.lock())
+                  self->mocapVelocityCallback(message);
+              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+      if (!requireRosRegistration(mocap_velocity_subscriber_,
+                                  mocap_velocity_endpoint_, error))
+        return false;
+    }
   }
-  if (!zenoh_localization_.enabled && channelRequired("state.mocap.acceleration")) {
+  if (channelRequired("state.mocap.acceleration")) {
     ensureSourceLocked(
         "state.mocap.acceleration",
         channelStaleAfterSeconds(profile_id_, "state.mocap.acceleration"));
-    mocap_acceleration_subscriber_ =
-        node_handle_.subscribe<geometry_msgs::TwistStamped>(
-            mocap_acceleration_endpoint_, 20,
-            [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
-              if (const auto self = weak_self.lock())
-                self->mocapAccelerationCallback(
-                    geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
-                        xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
-            }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-    if (!requireRosRegistration(mocap_acceleration_subscriber_,
-                                mocap_acceleration_endpoint_, error))
-      return false;
+    if (!zenoh_localization_.enabled) {
+      mocap_acceleration_subscriber_ =
+          node_handle_.subscribe<geometry_msgs::TwistStamped>(
+              mocap_acceleration_endpoint_, 20,
+              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                if (const auto self = weak_self.lock())
+                  self->mocapAccelerationCallback(
+                      geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
+                          xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
+              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+      if (!requireRosRegistration(mocap_acceleration_subscriber_,
+                                  mocap_acceleration_endpoint_, error))
+        return false;
+    }
   }
   if (channelRequired("state.velocity")) {
     ensureSourceLocked("state.velocity",
@@ -1649,11 +1654,9 @@ void RobotRuntime::zenohPoseCallback(
 
 void RobotRuntime::zenohVelocityCallback(
     const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample) {
-  double angular[3];
-  if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
-          angular))
-    return;
+  double angular[3] = {0.0, 0.0, 0.0};
+  const bool angular_valid = xgc2_ros1_robot_adapter::zenohAngularRate(
+      sample.rotation, sample.interval_seconds, angular);
   geometry_msgs::TwistStamped::Ptr message(new geometry_msgs::TwistStamped);
   message->header.stamp = ros::Time::now();
   message->header.frame_id = zenoh_localization_.frame_id;
@@ -1667,15 +1670,14 @@ void RobotRuntime::zenohVelocityCallback(
   report_time.set_nanoseconds(sample.report_time_nanos);
   report_time.set_clock_domain(
       static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
-  mocapVelocityCallback(message, &report_time);
+  mocapVelocityCallback(message, &report_time, angular_valid);
 }
 
 void RobotRuntime::zenohAccelerationCallback(
     const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample) {
   double angular[3];
   if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
-          angular))
+          sample.rotation, sample.interval_seconds, angular))
     return;
   geometry_msgs::AccelStamped::Ptr message(new geometry_msgs::AccelStamped);
   message->header.stamp = ros::Time::now();
@@ -1782,7 +1784,7 @@ void RobotRuntime::mocapPoseCallback(
 
 void RobotRuntime::mocapVelocityCallback(
     const geometry_msgs::TwistStamped::ConstPtr &message,
-    const xgc::v1::TimePoint *source_time) {
+    const xgc::v1::TimePoint *source_time, bool angular_valid) {
   static const std::string state_mocap_speed_channel = "state.mocap.speed";
   static const std::string state_mocap_velocity_channel = "state.mocap.velocity";
   CallbackGuard callback(this);
@@ -1790,10 +1792,12 @@ void RobotRuntime::mocapVelocityCallback(
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message)) {
+  if (!(angular_valid ? xgc2_ros1_robot_adapter::validLocalizationTwist(*message)
+                     : xgc2_ros1_robot_adapter::validLocalizationLinear(*message))) {
     std::lock_guard<std::mutex> lock(mutex_);
     latest_mocap_velocity_.reset();
     has_mocap_velocity_source_time_ = false;
+    has_mocap_velocity_angular_ = false;
     return;
   }
   {
@@ -1801,19 +1805,22 @@ void RobotRuntime::mocapVelocityCallback(
     if ((channelEnabled(state_mocap_velocity_channel) || channelEnabled(state_mocap_speed_channel)) &&
         message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
       latest_mocap_velocity_ = message;
+      has_mocap_velocity_angular_ = angular_valid;
       has_mocap_velocity_source_time_ = source_time != nullptr;
       if (source_time != nullptr)
         latest_mocap_velocity_source_time_ = *source_time;
     } else {
       latest_mocap_velocity_.reset();
       has_mocap_velocity_source_time_ = false;
+      has_mocap_velocity_angular_ = false;
     }
     if (channelRequired(state_mocap_velocity_channel))
       recordSourceLocked(state_mocap_velocity_channel, now);
     if (channelRequired(state_mocap_speed_channel))
       recordSourceLocked(state_mocap_speed_channel, now);
 
-    if (latest_mocap_velocity_ && channelEnabled(state_mocap_velocity_channel) &&
+    if (has_mocap_velocity_angular_ && latest_mocap_velocity_ &&
+        channelEnabled(state_mocap_velocity_channel) &&
         shouldEmitLocked(state_mocap_velocity_channel, now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1845,7 +1852,8 @@ void RobotRuntime::mocapVelocityCallback(
       ++sources_[state_mocap_speed_channel].dropped_samples;
     }
   }
-  if (canonical_velocity_publisher_) canonical_velocity_publisher_.publish(*message);
+  if (angular_valid && canonical_velocity_publisher_)
+    canonical_velocity_publisher_.publish(*message);
   emit(std::move(output));
 }
 
@@ -2410,7 +2418,8 @@ void RobotRuntime::emitSnapshotLocked(
     messages->push_back(makeEnvelopeLocked(
         channel, latest_vision_pose_.header.stamp, payload,
         has_vision_source_time_ ? &latest_vision_source_time_ : nullptr));
-  } else if ((channel == "state.mocap.velocity" && latest_mocap_velocity_) ||
+  } else if ((channel == "state.mocap.velocity" && latest_mocap_velocity_ &&
+              has_mocap_velocity_angular_) ||
              (channel == "state.velocity" && latest_velocity_)) {
     const auto &sample = channel == "state.velocity" ? latest_velocity_ : latest_mocap_velocity_;
     if (!shouldEmitLocked(channel, now)) return;

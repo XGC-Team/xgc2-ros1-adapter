@@ -1158,25 +1158,25 @@ bool RobotRuntime::install(std::string *error) {
     // Shared ROS callbacks may start immediately after subscribe(). Keep
     // tracking state and subscriber registration behind the callback mutex.
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!zenoh_localization_.enabled &&
-        (required_channels_.count("vrpn.position") != 0u ||
-         required_channels_.count("vrpn.speed") != 0u)) {
+    if (required_channels_.count("vrpn.position") != 0u ||
+        required_channels_.count("vrpn.speed") != 0u) {
       ensureSourceLocked(
           "vrpn.position",
           channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.position"));
-      pose_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
-          pose_endpoint_, 20,
-          [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
-            if (const auto self = weak_self.lock()) {
-              self->poseCallback(message);
-            }
-          }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-      if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
-        return false;
+      if (!zenoh_localization_.enabled) {
+        pose_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
+            pose_endpoint_, 20,
+            [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
+              if (const auto self = weak_self.lock()) {
+                self->poseCallback(message);
+              }
+            }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+        if (!requireRosRegistration(pose_subscriber_, pose_endpoint_, error))
+          return false;
+      }
     }
-    if (!zenoh_localization_.enabled &&
-        (required_channels_.count("vrpn.velocity") != 0u ||
-         required_channels_.count("vrpn.speed") != 0u)) {
+    if (required_channels_.count("vrpn.velocity") != 0u ||
+        required_channels_.count("vrpn.speed") != 0u) {
       if (required_channels_.count("vrpn.velocity") != 0u)
         ensureSourceLocked(
             "vrpn.velocity",
@@ -1184,36 +1184,39 @@ bool RobotRuntime::install(std::string *error) {
       if (required_channels_.count("vrpn.speed") != 0u)
         ensureSourceLocked(
             "vrpn.speed", channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.speed"));
-      vrpn_velocity_subscriber_ =
-          node_handle_.subscribe<geometry_msgs::TwistStamped>(
-              vrpn_velocity_endpoint_, 20,
-              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
-                if (const auto self = weak_self.lock()) {
-                  self->vrpnVelocityCallback(message);
-                }
-              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-      if (!requireRosRegistration(vrpn_velocity_subscriber_,
-                                  vrpn_velocity_endpoint_, error))
-        return false;
+      if (!zenoh_localization_.enabled) {
+        vrpn_velocity_subscriber_ =
+            node_handle_.subscribe<geometry_msgs::TwistStamped>(
+                vrpn_velocity_endpoint_, 20,
+                [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                  if (const auto self = weak_self.lock()) {
+                    self->vrpnVelocityCallback(message);
+                  }
+                }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+        if (!requireRosRegistration(vrpn_velocity_subscriber_,
+                                    vrpn_velocity_endpoint_, error))
+          return false;
+      }
     }
-    if (!zenoh_localization_.enabled &&
-        required_channels_.count("vrpn.acceleration") != 0u) {
+    if (required_channels_.count("vrpn.acceleration") != 0u) {
       ensureSourceLocked(
           "vrpn.acceleration",
           channelStaleAfterSeconds(variant_.contract, profile_id_, "vrpn.acceleration"));
-      vrpn_acceleration_subscriber_ =
-          node_handle_.subscribe<geometry_msgs::TwistStamped>(
-              vrpn_acceleration_endpoint_, 20,
-              [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
-                if (const auto self = weak_self.lock()) {
-                  self->vrpnAccelerationCallback(
-                      geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
-                          xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
-                }
-              }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
-      if (!requireRosRegistration(vrpn_acceleration_subscriber_,
-                                  vrpn_acceleration_endpoint_, error))
-        return false;
+      if (!zenoh_localization_.enabled) {
+        vrpn_acceleration_subscriber_ =
+            node_handle_.subscribe<geometry_msgs::TwistStamped>(
+                vrpn_acceleration_endpoint_, 20,
+                [weak_self](const geometry_msgs::TwistStamped::ConstPtr &message) {
+                  if (const auto self = weak_self.lock()) {
+                    self->vrpnAccelerationCallback(
+                        geometry_msgs::AccelStamped::Ptr(new geometry_msgs::AccelStamped(
+                            xgc2_ros1_robot_adapter::projectVrpnAcceleration(*message))));
+                  }
+                }, ros::VoidConstPtr(), ros::TransportHints().tcpNoDelay());
+        if (!requireRosRegistration(vrpn_acceleration_subscriber_,
+                                    vrpn_acceleration_endpoint_, error))
+          return false;
+      }
     }
     if (required_channels_.count("command.velocity") != 0u) {
       ensureSourceLocked(
@@ -1449,11 +1452,9 @@ void RobotRuntime::zenohPoseCallback(
 
 void RobotRuntime::zenohVelocityCallback(
     const xgc2_ros1_robot_adapter::ZenohVelocitySample &sample) {
-  double angular[3];
-  if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
-          angular))
-    return;
+  double angular[3] = {0.0, 0.0, 0.0};
+  const bool angular_valid = xgc2_ros1_robot_adapter::zenohAngularRate(
+      sample.rotation, sample.interval_seconds, angular);
   geometry_msgs::TwistStamped::Ptr message(new geometry_msgs::TwistStamped);
   message->header.stamp = ros::Time::now();
   message->header.frame_id = zenoh_localization_.frame_id;
@@ -1467,15 +1468,14 @@ void RobotRuntime::zenohVelocityCallback(
   report_time.set_nanoseconds(sample.report_time_nanos);
   report_time.set_clock_domain(
       static_cast<xgc::v1::ClockDomain>(sample.clock_domain));
-  vrpnVelocityCallback(message, &report_time);
+  vrpnVelocityCallback(message, &report_time, angular_valid);
 }
 
 void RobotRuntime::zenohAccelerationCallback(
     const xgc2_ros1_robot_adapter::ZenohAccelerationSample &sample) {
   double angular[3];
   if (!xgc2_ros1_robot_adapter::zenohAngularRate(
-          sample.rotation, sample.interval_seconds, sample.angular_is_rpy,
-          angular))
+          sample.rotation, sample.interval_seconds, angular))
     return;
   geometry_msgs::AccelStamped::Ptr message(new geometry_msgs::AccelStamped);
   message->header.stamp = ros::Time::now();
@@ -1578,16 +1578,18 @@ void RobotRuntime::commandVelocityCallback(
 
 void RobotRuntime::vrpnVelocityCallback(
     const geometry_msgs::TwistStamped::ConstPtr &message,
-    const xgc::v1::TimePoint *source_time) {
+    const xgc::v1::TimePoint *source_time, bool angular_valid) {
   CallbackGuard callback(this);
   if (!callback)
     return;
   std::vector<xgc::robot::v1::RobotMessage> output;
   const ros::WallTime now = ros::WallTime::now();
-  if (!xgc2_ros1_robot_adapter::validLocalizationTwist(*message)) {
+  if (!(angular_valid ? xgc2_ros1_robot_adapter::validLocalizationTwist(*message)
+                     : xgc2_ros1_robot_adapter::validLocalizationLinear(*message))) {
     std::lock_guard<std::mutex> lock(mutex_);
     latest_velocity_.reset();
     has_velocity_source_time_ = false;
+    has_velocity_angular_ = false;
     has_velocity_ = false;
     return;
   }
@@ -1601,7 +1603,7 @@ void RobotRuntime::vrpnVelocityCallback(
       if (source_time != nullptr)
         latest_velocity_source_time_ = *source_time;
     }
-    if (channelEnabled("vrpn.velocity") &&
+    if (angular_valid && channelEnabled("vrpn.velocity") &&
         message->header.frame_id.size() <= xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes) {
       latest_velocity_ = message;
       has_velocity_source_time_ = source_time != nullptr;
@@ -1612,12 +1614,13 @@ void RobotRuntime::vrpnVelocityCallback(
       if (!channelEnabled("vrpn.speed"))
         has_velocity_source_time_ = false;
     }
+    has_velocity_angular_ = angular_valid;
     if (required_channels_.count("vrpn.velocity") != 0u)
       recordSourceLocked("vrpn.velocity", now);
     if (required_channels_.count("vrpn.speed") != 0u)
       recordSourceLocked("vrpn.speed", now);
 
-    if (latest_velocity_ && channelEnabled("vrpn.velocity") &&
+    if (angular_valid && latest_velocity_ && channelEnabled("vrpn.velocity") &&
         shouldEmitLocked("vrpn.velocity", now)) {
       xgc::semantic::common::v1::VelocityEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1651,7 +1654,8 @@ void RobotRuntime::vrpnVelocityCallback(
       }
     }
   }
-  if (canonical_velocity_publisher_) canonical_velocity_publisher_.publish(*message);
+  if (angular_valid && canonical_velocity_publisher_)
+    canonical_velocity_publisher_.publish(*message);
   emit(std::move(output));
 }
 
@@ -2140,6 +2144,10 @@ void RobotRuntime::clearRetiredSourceLocked(const std::string &channel) {
     source->second.stale_after_seconds = stale_after;
   }
   last_output_.erase(channel);
+  if (channel == "vrpn.velocity") {
+    latest_velocity_.reset();
+    has_velocity_angular_ = false;
+  }
   if (channel == "command.velocity") latest_command_velocity_.reset();
   else if (channel == "state.imu") latest_imu_.reset();
   else if (channel == "state.power") {
@@ -2227,7 +2235,8 @@ void RobotRuntime::emitSnapshotLocked(
     copyVector(latest_command_velocity_->linear, payload.mutable_linear());
     copyVector(latest_command_velocity_->angular, payload.mutable_angular());
     messages->push_back(makeEnvelopeLocked(channel, ros::Time(), payload));
-  } else if (channel == "vrpn.velocity" && latest_velocity_) {
+  } else if (channel == "vrpn.velocity" && latest_velocity_ &&
+             has_velocity_angular_) {
     if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::VelocityEstimate payload;
     payload.set_frame_id(latest_velocity_->header.frame_id);

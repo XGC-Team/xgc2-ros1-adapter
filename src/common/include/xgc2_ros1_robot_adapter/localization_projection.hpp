@@ -32,6 +32,7 @@ bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
                              const LocalizationProjectionConfig &config,
                              geometry_msgs::PoseStamped *output);
 bool validLocalizationTwist(const geometry_msgs::TwistStamped &source);
+bool validLocalizationLinear(const geometry_msgs::TwistStamped &source);
 geometry_msgs::AccelStamped
 projectVrpnAcceleration(const geometry_msgs::TwistStamped &source);
 bool validLocalizationAcceleration(const geometry_msgs::AccelStamped &source);

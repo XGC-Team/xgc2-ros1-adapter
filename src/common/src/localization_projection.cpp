@@ -109,7 +109,12 @@ bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
 }
 
 bool validLocalizationTwist(const geometry_msgs::TwistStamped &source) {
-  return finiteVector(source.twist.linear) && finiteVector(source.twist.angular);
+  return validLocalizationLinear(source) &&
+         finiteVector(source.twist.angular);
+}
+
+bool validLocalizationLinear(const geometry_msgs::TwistStamped &source) {
+  return finiteVector(source.twist.linear);
 }
 
 geometry_msgs::AccelStamped

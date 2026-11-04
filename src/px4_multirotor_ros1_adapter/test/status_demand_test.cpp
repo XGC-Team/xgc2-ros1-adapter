@@ -8,18 +8,65 @@
 #include <thread>
 #include <vector>
 #include <ros/ros.h>
+#include <zenoh.h>
+
+#include <unistd.h>
 #include "xgc_px4_multirotor_ros1_adapter/generated_contract.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc/semantic/aerial/v1/diagnostic.pb.h"
+#include "xgc2/vrpn_zenoh/v1/tracker.pb.h"
 
 namespace xgc_px4_multirotor_ros1_adapter {
+class ZenohPosePublisher {
+public:
+  ZenohPosePublisher(const std::string &endpoint, const std::string &key) {
+    const std::string config =
+        "{\"mode\":\"peer\",\"listen\":{\"endpoints\":[\"" + endpoint +
+        "\"]},\"scouting\":{\"multicast\":{\"enabled\":false},"
+        "\"gossip\":{\"enabled\":false}}}";
+    if (zc_config_from_str(&config_, config.c_str()) < 0 ||
+        z_open(&session_, z_move(config_), nullptr) < 0) {
+      return;
+    }
+    session_open_ = true;
+    if (z_view_keyexpr_from_str(&key_expression_, key.c_str()) < 0 ||
+        z_declare_publisher(z_loan(session_), &publisher_,
+                            z_loan(key_expression_), nullptr) < 0) {
+      return;
+    }
+    publisher_open_ = true;
+  }
+  ~ZenohPosePublisher() {
+    if (publisher_open_) z_drop(z_move(publisher_));
+    if (session_open_) z_drop(z_move(session_));
+  }
+  bool ready() const { return publisher_open_; }
+  void publish(const xgc2::vrpn_zenoh::v1::Pose &sample) {
+    std::string payload;
+    if (!sample.SerializeToString(&payload)) return;
+    z_owned_bytes_t bytes;
+    if (z_bytes_copy_from_buf(
+            &bytes, reinterpret_cast<const std::uint8_t *>(payload.data()),
+            payload.size()) < 0)
+      return;
+    z_publisher_put(z_loan(publisher_), z_move(bytes), nullptr);
+  }
+private:
+  z_owned_config_t config_{};
+  z_owned_session_t session_{};
+  z_view_keyexpr_t key_expression_{};
+  z_owned_publisher_t publisher_{};
+  bool session_open_ = false, publisher_open_ = false;
+};
+
 class StatusDemandHarness {
 public:
   explicit StatusDemandHarness(bool live_sources = false,
                                const std::string &canonical_pose = "/demand_sources/canonical_pose",
                                const std::string &vision_pose = "/demand_sources/vision",
-                               const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {}) {
+                               const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {},
+                               const xgc2_ros1_robot_adapter::ZenohLocalizationConfig &zenoh = {}) {
     ros::NodeHandle node;
     std::set<std::string> channels{"state.pose", "state.mocap.pose", "state.vision.pose", "state.velocity",
         "state.mocap.velocity", "state.mocap.acceleration", "state.mocap.speed", "state.localization.error",
@@ -29,6 +76,7 @@ public:
     native.vision_publish_rate_hz = 30;
     native.publish_vision = true;
     native.localization = localization;
+    native.zenoh_localization = zenoh;
     if (live_sources) {
       const std::string prefix = "/demand_sources";
       native.pose_endpoint = prefix + "/pose";
@@ -247,6 +295,61 @@ bool waitFor(Predicate ready, double seconds = 3.0) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return ready();
+}
+
+TEST(StatusDemand, ZenohOpenReachesPx4CanonicalPoseAndVision) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  const std::uint16_t port =
+      static_cast<std::uint16_t>(20000u + (getpid() % 20000) + 4u);
+  const std::string endpoint = "tcp/127.0.0.1:" + std::to_string(port);
+  xgc2_ros1_robot_adapter::ZenohLocalizationBinding binding;
+  binding.endpoint = endpoint;
+  binding.source = "gazebo";
+  binding.tracker = "tracked_body";
+  binding.sensor = 0;
+  ZenohPosePublisher publisher(endpoint,
+                               xgc2_ros1_robot_adapter::ZenohLocalizationKey(binding, "pose"));
+  ASSERT_TRUE(publisher.ready());
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh;
+  zenoh.enabled = true;
+  zenoh.endpoint = endpoint;
+  zenoh.source = "gazebo";
+  zenoh.tracker = "tracked_body";
+  zenoh.sensor = 0;
+  zenoh.frame_id = "world";
+  StatusDemandHarness source(true, "/slot4/pose", "/slot4/mavros/vision_pose/pose",
+                             localization, zenoh);
+  std::atomic<unsigned> pose_received{0}, vision_received{0};
+  auto pose = node.subscribe<geometry_msgs::PoseStamped>("/slot4/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++pose_received; });
+  auto vision = node.subscribe<geometry_msgs::PoseStamped>("/slot4/mavros/vision_pose/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &) { ++vision_received; });
+  ASSERT_TRUE(waitFor([&] {
+    xgc2::vrpn_zenoh::v1::Pose sample;
+    sample.mutable_report_time()->set_nanoseconds(123456789012345LL);
+    sample.mutable_report_time()->set_clock_domain(xgc::v1::CLOCK_DOMAIN_SIMULATION);
+    sample.mutable_position_m()->set_x(2.5);
+    sample.mutable_orientation_xyzw()->set_w(1.0);
+    publisher.publish(sample);
+    return pose_received.load() > 0 && vision_received.load() > 0;
+  }));
+  EXPECT_GT(pose_received.load(), 0u);
+  EXPECT_GT(vision_received.load(), 0u);
+  source.demand({"state.mocap.pose"});
+  ASSERT_TRUE(waitFor([&] { return !source.messages().empty(); }));
+  bool found = false;
+  for (const auto &item : source.messages()) {
+    if (item.channel_id() != "state.mocap.pose") continue;
+    EXPECT_EQ(123456789012345LL, item.message().source_time().nanoseconds());
+    found = true;
+  }
+  EXPECT_TRUE(found);
+  source.stop();
+  spinner.stop();
 }
 
 TEST(StatusDemand, ZenohPosePublishesSlotPoseAndVisionWithSourceTime) {

@@ -208,43 +208,19 @@ TEST(ZenohLocalizationInput, StopJoinsAnInFlightCallbackBeforeDrop) {
 TEST(ZenohAngularRate, ConvertsRotationOverIntervalToRadiansPerSecond) {
   const double identity[4] = {0.0, 0.0, 0.0, 1.0};
   double rate[3] = {1.0, 1.0, 1.0};
-  ASSERT_TRUE(zenohAngularRate(identity, 0.1, false, rate));
+  ASSERT_TRUE(zenohAngularRate(identity, 0.1, rate));
   EXPECT_DOUBLE_EQ(0.0, rate[0]);
   EXPECT_DOUBLE_EQ(0.0, rate[1]);
   EXPECT_DOUBLE_EQ(0.0, rate[2]);
 
   const double quarter = 0.7071067811865476;
   const double rotation[4] = {0.0, 0.0, quarter, quarter};
-  ASSERT_TRUE(zenohAngularRate(rotation, 1.0, false, rate));
+  ASSERT_TRUE(zenohAngularRate(rotation, 1.0, rate));
   EXPECT_NEAR(0.0, rate[0], 1e-12);
   EXPECT_NEAR(0.0, rate[1], 1e-12);
   EXPECT_NEAR(1.5707963267948966, rate[2], 1e-12);
 
-  EXPECT_FALSE(zenohAngularRate(identity, 0.0, false, rate));
-}
-
-TEST(ZenohAngularRate, DecodesGazeboRpyEncodedAngularVelocityWithoutDtDivision) {
-  // gazebo_sim_vrpn_bridge computes filtered angular velocity in rad/s and
-  // writes it with tf2::Quaternion::setRPY before sending report_interval_s.
-  const double rpy[3] = {0.3, -0.2, 0.5};
-  const double cr = std::cos(rpy[0] / 2.0), sr = std::sin(rpy[0] / 2.0);
-  const double cp = std::cos(rpy[1] / 2.0), sp = std::sin(rpy[1] / 2.0);
-  const double cy = std::cos(rpy[2] / 2.0), sy = std::sin(rpy[2] / 2.0);
-  const double quaternion[4] = {
-      sr * cp * cy - cr * sp * sy,
-      cr * sp * cy + sr * cp * sy,
-      cr * cp * sy - sr * sp * cy,
-      cr * cp * cy + sr * sp * sy,
-  };
-  double rate[3] = {0.0, 0.0, 0.0};
-  ASSERT_TRUE(zenohAngularRate(quaternion, 0.1, true, rate));
-  EXPECT_NEAR(rpy[0], rate[0], 1e-12);
-  EXPECT_NEAR(rpy[1], rate[1], 1e-12);
-  EXPECT_NEAR(rpy[2], rate[2], 1e-12);
-  // The same quaternion under the standard rotation-over-interval meaning is
-  // not silently treated as the Gazebo vector.
-  ASSERT_TRUE(zenohAngularRate(quaternion, 0.1, false, rate));
-  EXPECT_GT(std::fabs(rate[2]), 1.0);
+  EXPECT_FALSE(zenohAngularRate(identity, 0.0, rate));
 }
 
 } // namespace
