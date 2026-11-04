@@ -226,6 +226,28 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disagrees"):
             prepare(document)
 
+    def test_record_archive_receives_only_the_allocated_session_fields(self):
+        document = request()
+        document["context"].update(targetId="target-a", slotId="uav-1",
+                                   experimentResourceId="experiment-a")
+        archive = {"userFilesDir": "/tmp/operator", "recordId": "record-a",
+                   "plannedAt": "2026-11-04T00:00:00Z",
+                   "path": "/tmp/operator/Experiments/Frozen experiment/Runs/20261104_000000_simulation/Data/record-a.bag"}
+        with patch("subprocess.check_output", return_value=json.dumps(archive).encode()) as check_output, \
+             patch.dict(os.environ, {"XGC_RECORDER_RUN_ID": "run-a"}):
+            arguments = namespace["record_arguments"](document)
+        self.assertIn("rosMasterUri", document["context"])
+        self.assertIn("experimentResourceId", document["context"])
+        self.assertTrue(arguments)
+        input_call = check_output.call_args
+        payload = json.loads(input_call.kwargs["input"])
+        self.assertEqual(set(payload), {"session", "run", "kind"})
+        self.assertEqual(set(payload["session"]),
+                         {"experimentResourceId", "experimentName", "runMode"})
+        self.assertEqual(payload["run"], {"id": "run-a"})
+        self.assertEqual(payload["kind"], "rosbag")
+        self.assertIn("/tmp/operator/Experiments/Frozen experiment", arguments[2])
+
     def test_capacity_exclusion_and_bounded_transport_are_fail_closed(self):
         for extra in ({"splitSizeMiB": 64, "maxSplits": 1, "estimatedVideoBitrateMbps": 24},
                       {"excludedTopics": [{"topic": "/clock", "reason": "excluded"}]},
