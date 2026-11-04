@@ -351,7 +351,8 @@ ZenohLocalizationInput::Open(const ZenohLocalizationBinding &binding,
   }
 
   const std::string config =
-      std::string("{\"mode\":\"peer\",\"connect\":{\"endpoints\":[") +
+      std::string("{\"mode\":\"client\",\"listen\":{\"endpoints\":[]},"
+                  "\"connect\":{\"endpoints\":[") +
       jsonString(binding.endpoint) +
       "]},\"scouting\":{\"multicast\":{\"enabled\":false},"
       "\"gossip\":{\"enabled\":false}}}";

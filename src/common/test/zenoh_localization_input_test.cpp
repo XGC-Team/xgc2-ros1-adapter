@@ -109,6 +109,62 @@ TEST(ZenohLocalizationInput, ReceivesTheExactPoseKeyAndPreservesReportTime) {
   z_drop(z_move(publisher_session));
 }
 
+TEST(ZenohLocalizationInput, ReceivesOverUdpUnicast) {
+  const std::uint16_t port =
+      static_cast<std::uint16_t>(20000u + (getpid() % 20000) + 2u);
+  const std::string endpoint = "udp/127.0.0.1:" + std::to_string(port);
+  const std::string listen_config =
+      "{\"mode\":\"peer\",\"listen\":{\"endpoints\":[\"" + endpoint +
+      "\"]},\"scouting\":{\"multicast\":{\"enabled\":false},"
+      "\"gossip\":{\"enabled\":false}}}";
+  z_owned_config_t config;
+  ASSERT_GE(zc_config_from_str(&config, listen_config.c_str()), 0);
+  z_owned_session_t publisher_session;
+  ASSERT_GE(z_open(&publisher_session, z_move(config), nullptr), 0);
+  ZenohLocalizationBinding binding;
+  binding.endpoint = endpoint;
+  binding.source = "gazebo";
+  binding.tracker = "udp1";
+  const std::string key = ZenohLocalizationKey(binding, "pose");
+  z_view_keyexpr_t key_expression;
+  ASSERT_GE(z_view_keyexpr_from_str(&key_expression, key.c_str()), 0);
+  z_owned_publisher_t publisher;
+  ASSERT_GE(z_declare_publisher(z_loan(publisher_session), &publisher,
+                                z_loan(key_expression), nullptr),
+            0);
+  std::atomic<bool> received{false};
+  std::string error;
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [&](const ZenohPoseSample &) {
+    received.store(true, std::memory_order_release);
+  };
+  auto input = ZenohLocalizationInput::Open(binding, std::move(callbacks),
+                                            &error);
+  ASSERT_NE(nullptr, input) << error;
+  xgc2::vrpn_zenoh::v1::Pose sample;
+  sample.mutable_report_time()->set_nanoseconds(7);
+  sample.mutable_position_m()->set_x(1.0);
+  sample.mutable_orientation_xyzw()->set_w(1.0);
+  std::string payload;
+  ASSERT_TRUE(sample.SerializeToString(&payload));
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!received.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    z_owned_bytes_t bytes;
+    ASSERT_GE(z_bytes_copy_from_buf(
+                  &bytes, reinterpret_cast<const std::uint8_t *>(payload.data()),
+                  payload.size()),
+              0);
+    z_publisher_put(z_loan(publisher), z_move(bytes), nullptr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(received.load(std::memory_order_acquire));
+  input->Stop();
+  z_drop(z_move(publisher));
+  z_drop(z_move(publisher_session));
+}
+
 TEST(ZenohLocalizationInput, StopIsIdempotentAndDestructorSafe) {
   ZenohLocalizationBinding binding;
   binding.endpoint = "tcp/127.0.0.1:1";
