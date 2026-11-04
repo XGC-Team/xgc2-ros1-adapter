@@ -229,7 +229,8 @@ private:
   bool installZenohLocalization(std::string *error);
   void vrpnVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message,
-      const xgc::v1::TimePoint *source_time = nullptr);
+      const xgc::v1::TimePoint *source_time = nullptr,
+      bool angular_valid = true);
   void vrpnAccelerationCallback(
       const geometry_msgs::AccelStamped::ConstPtr &message,
       const xgc::v1::TimePoint *source_time = nullptr);
@@ -322,6 +323,7 @@ private:
   geometry_msgs::TwistStamped::ConstPtr latest_velocity_;
   xgc::v1::TimePoint latest_velocity_source_time_;
   bool has_velocity_source_time_ = false;
+  bool has_velocity_angular_ = false;
   geometry_msgs::Twist latest_velocity_value_;
   ros::Time latest_velocity_stamp_;
   bool has_velocity_ = false;

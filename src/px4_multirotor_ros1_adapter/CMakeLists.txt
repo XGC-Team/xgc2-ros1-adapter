@@ -77,7 +77,8 @@ if(CATKIN_ENABLE_TESTING)
     test/status_demand.test test/status_demand_test.cpp src/robot_runtime.cpp)
   if(TARGET ${PROJECT_NAME}_status_demand_test)
     add_dependencies(${PROJECT_NAME}_status_demand_test ${PROJECT_NAME}_profiles ${catkin_EXPORTED_TARGETS})
-    target_link_libraries(${PROJECT_NAME}_status_demand_test ${catkin_LIBRARIES} protobuf::libprotobuf)
+    target_link_libraries(${PROJECT_NAME}_status_demand_test
+      ${catkin_LIBRARIES} protobuf::libprotobuf zenohc::static)
   endif()
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp

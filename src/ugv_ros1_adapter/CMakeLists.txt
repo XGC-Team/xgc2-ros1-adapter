@@ -84,7 +84,8 @@ if(CATKIN_ENABLE_TESTING)
   add_rostest_gtest(${PROJECT_NAME}_status_demand_test
     test/status_demand.test test/status_demand_test.cpp)
   if(TARGET ${PROJECT_NAME}_status_demand_test)
-    target_link_libraries(${PROJECT_NAME}_status_demand_test ${PROJECT_NAME}_runtime)
+    target_link_libraries(${PROJECT_NAME}_status_demand_test
+      ${PROJECT_NAME}_runtime zenohc::static)
   endif()
   catkin_add_gtest(${PROJECT_NAME}_test test/robot_runtime_test.cpp)
   if(TARGET ${PROJECT_NAME}_test)

@@ -212,7 +212,8 @@ private:
   bool installZenohLocalization(std::string *error);
   void mocapVelocityCallback(
       const geometry_msgs::TwistStamped::ConstPtr &message,
-      const xgc::v1::TimePoint *source_time = nullptr);
+      const xgc::v1::TimePoint *source_time = nullptr,
+      bool angular_valid = true);
   void mocapAccelerationCallback(
       const geometry_msgs::AccelStamped::ConstPtr &message,
       const xgc::v1::TimePoint *source_time = nullptr);
@@ -323,6 +324,7 @@ private:
   geometry_msgs::TwistStamped::ConstPtr latest_mocap_velocity_, latest_velocity_;
   xgc::v1::TimePoint latest_mocap_velocity_source_time_;
   bool has_mocap_velocity_source_time_ = false;
+  bool has_mocap_velocity_angular_ = false;
   geometry_msgs::AccelStamped::ConstPtr latest_mocap_acceleration_;
   xgc::v1::TimePoint latest_mocap_acceleration_source_time_;
   bool has_mocap_acceleration_source_time_ = false;
