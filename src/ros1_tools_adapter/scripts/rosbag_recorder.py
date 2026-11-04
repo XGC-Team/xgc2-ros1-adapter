@@ -336,7 +336,9 @@ def record_arguments(document):
     context = document["context"]
     archive = json.loads(subprocess.check_output(
         ["/usr/lib/xgc2/xgc-storage", "record-archive"], input=json_bytes({
-            "session": context, "run": {"id": os.environ["XGC_RECORDER_RUN_ID"]}, "kind": "rosbag"
+            "session": {name: context[name] for name in (
+                "experimentResourceId", "experimentName", "runMode")},
+            "run": {"id": os.environ["XGC_RECORDER_RUN_ID"]}, "kind": "rosbag"
         }), timeout=10))
     os.environ["XGC_USER_FILES_DIR"] = archive["userFilesDir"]
     os.environ["ROS_MASTER_URI"] = p["rosMasterUri"]
