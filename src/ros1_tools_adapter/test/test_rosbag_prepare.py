@@ -2,9 +2,11 @@
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -214,6 +216,49 @@ class PreparationTests(unittest.TestCase):
             document["parameters"].update(copy.deepcopy(extra))
             with self.assertRaises(ValueError):
                 prepare(document)
+
+    def test_real_parent_segment_sidecar_paths_are_read_not_shape_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "ros1_ws").mkdir()
+            install = root / "ws_impc_dr/install"
+            install.mkdir(parents=True)
+            (install / "build-inputs.yaml").write_text("build: {}\n")
+            (install / "calibration.yml").write_text("calibration: {}\n")
+            algorithm_path = str(root / "ros1_ws" / ".." / "ws_impc_dr/install/build-inputs.yaml")
+            calibration_path = str(root / "ros1_ws" / ".." / "ws_impc_dr/install/calibration.yml")
+            for path in (algorithm_path, calibration_path):
+                self.assertNotEqual(os.path.normpath(path), path)
+                self.assertTrue(os.path.isfile(path))
+            document = request()
+            document["parameters"] = {
+                "algorithmSidecarFiles": [{"role": "build-inputs", "path": algorithm_path}],
+                "calibrationFiles": [{"role": "camera-calibration", "path": calibration_path}]}
+            parameters, _, manifest = prepare(document)
+            self.assertEqual(parameters["algorithmSidecarFiles"][0]["path"], algorithm_path)
+            self.assertEqual(parameters["calibrationFiles"][0]["path"], calibration_path)
+            self.assertEqual(manifest["factSources"]["algorithmSidecarFiles"], parameters["algorithmSidecarFiles"])
+            self.assertEqual(manifest["factSources"]["calibrationFiles"], parameters["calibrationFiles"])
+            self.assertEqual(manifest["requestedParameters"]["algorithmSidecarFiles"][0]["path"], algorithm_path)
+
+    def test_sidecar_path_safety_keeps_abs_null_extension_and_unique_role(self):
+        for field, path in (("algorithmSidecarFiles", "relative/build-inputs.yaml"),
+                            ("algorithmSidecarFiles", "/tmp/build-inputs.yaml\x00"),
+                            ("algorithmSidecarFiles", "/tmp/build-inputs.txt"),
+                            ("calibrationFiles", "/tmp/calibration.json")):
+            document = request()
+            document["parameters"] = {field: [{"role": "sidecar", "path": path}]}
+            with self.subTest(field=field, path=path), self.assertRaisesRegex(ValueError, "invalid or duplicate sidecar"):
+                prepare(document)
+        document = request()
+        document["parameters"] = {"algorithmSidecarFiles": [
+            {"role": "same", "path": "/tmp/a.yaml"}, {"role": "same", "path": "/tmp/b.yaml"}]}
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate sidecar"):
+            prepare(document)
+        document = request()
+        document["parameters"] = {"rosInstallPath": "/opt/ros/../noetic"}
+        with self.assertRaisesRegex(ValueError, "rosInstallPath must be a clean absolute path"):
+            prepare(document)
 
 
 if __name__ == "__main__":

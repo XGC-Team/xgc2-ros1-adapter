@@ -114,6 +114,24 @@ class RecordFactsTests(unittest.TestCase):
             self.assertIsNone(event["validUntil"])
             self.assertEqual(hashlib.sha256(self.body(event, destination)).hexdigest(), event["content"]["sha256"])
 
+    def test_parent_segment_source_copies_to_role_destination_not_raw_path(self):
+        (self.directory / "ros1_ws").mkdir()
+        install = self.directory / "ws_impc_dr/install"
+        install.mkdir(parents=True)
+        source = install / "build-inputs.yaml"
+        source.write_bytes(b"K: 1\n")
+        path = str(self.directory / "ros1_ws" / ".." / "ws_impc_dr/install/build-inputs.yaml")
+        self.assertNotEqual(os.path.normpath(path), path)
+        self.facts.file({"role": "build-inputs", "path": path}, "algorithm-file")
+        event, = self.document()["events"]
+        self.assertEqual(event["evidence"], "snapshot-observed")
+        self.assertEqual(event["source"], "build-inputs")
+        self.assertEqual(event["content"]["relativePath"],
+                         "record-facts/algorithm-file-build-inputs-revision-000001.yaml")
+        self.assertNotIn("..", event["content"]["relativePath"])
+        self.assertNotIn(str(self.directory), event["content"]["relativePath"])
+        self.assertEqual(self.body(event), b"K: 1\n")
+
     def test_only_declared_parameters_and_runtime_changes_are_observed(self):
         server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
         values = {"/controller/gain": 2.5}
