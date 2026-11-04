@@ -31,6 +31,7 @@
 #include <thread>
 #include <type_traits>
 #include <unistd.h>
+#include <utility>
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
@@ -2704,7 +2705,7 @@ private:
           presence = false;
           return true;
         };
-        for (const auto &channel : updates) {
+        for (auto &channel : updates) {
           const auto channel_bytes = channel.second.second.ByteSizeLong() + 16;
           if (member->identity.ByteSizeLong() + channel_bytes + 16 > frame_limit)
             return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
@@ -2715,7 +2716,7 @@ private:
             update.Clear();
             *update.mutable_identity() = member->identity;
           }
-          *update.add_messages() = channel.second.second;
+          *update.add_messages() = std::move(channel.second.second);
           stream.seen[entry.first][channel.first] = channel.second.first;
         }
         if (!append_update())

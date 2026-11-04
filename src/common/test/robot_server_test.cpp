@@ -2657,6 +2657,70 @@ TEST_F(ServerMembers, IdenticalViewsShareOneSourceAndLastReleaseJoinsIt) {
   EXPECT_GE(world_.telemetryCount("r1", "state.test"), before_idle + 1);
 }
 
+TEST_F(ServerMembers, SelectedViewsReceiveTheSameCompleteTelemetry) {
+  startReady();
+  wire::ApplyMembersRequest apply;
+  auto registration_with_payload = registration("r1", "/fleet/r1");
+  auto *channel = registration_with_payload.mutable_configuration()->add_channels();
+  channel->set_channel_id("command.velocity");
+  channel->set_enabled(true);
+  *apply.add_members() = registration_with_payload;
+  ASSERT_TRUE(client_->apply(apply).status.ok());
+
+  wire::SubscribeStatusRequest selection;
+  auto *item = selection.mutable_selected()->add_members();
+  *item->mutable_identity() = identity("r1");
+  item->add_channel_ids("command.velocity");
+  Client::Watch first(*client_, milliseconds(20000), selection);
+  const auto has_payload = [](const wire::SubscribeStatusResponse &frame) {
+    for (const auto &member : frame.members())
+      for (const auto &message : member.messages())
+        if (message.channel_id() == "command.velocity" &&
+            message.message().sequence() > 0 && message.message().has_payload())
+          return true;
+    return false;
+  };
+  ASSERT_TRUE(first.wait(has_payload));
+  Client::Watch second(*client_, milliseconds(20000), selection);
+  std::uint64_t shared_sequence = 0;
+  ASSERT_TRUE(second.wait([&](const wire::SubscribeStatusResponse &frame) {
+    for (const auto &member : frame.members())
+      for (const auto &message : member.messages()) {
+        if (message.channel_id() != "command.velocity" ||
+            message.message().sequence() == 0 || !message.message().has_payload())
+          continue;
+        for (const auto &earlier : first.frames())
+          for (const auto &first_member : earlier.members())
+            for (const auto &first_message : first_member.messages())
+              if (first_message.SerializeAsString() == message.SerializeAsString()) {
+                shared_sequence = message.message().sequence();
+                return true;
+              }
+      }
+    return false;
+  }));
+  ASSERT_TRUE(second.wait([&](const wire::SubscribeStatusResponse &frame) {
+    for (const auto &member : frame.members())
+      for (const auto &message : member.messages())
+        if (message.message().sequence() > shared_sequence)
+          return true;
+    return false;
+  }));
+  std::uint64_t previous_sequence = 0;
+  for (const auto &frame : second.frames())
+    for (const auto &member : frame.members())
+      for (const auto &message : member.messages()) {
+        ASSERT_EQ("r1", message.robot_id());
+        ASSERT_EQ("command.velocity", message.channel_id());
+        ASSERT_GT(message.message().sequence(), previous_sequence);
+        previous_sequence = message.message().sequence();
+        ASSERT_EQ("xgc.semantic.common.v1.VelocityEstimate",
+                  message.message().payload().schema().type_name());
+        ASSERT_EQ(R"({"linear":{"x":1}})",
+                  message.message().payload().value());
+      }
+}
+
 TEST_F(ServerMembers, StatusSelectionRejectsMissingDuplicateForeignAndOversizedRequests) {
   startReady();
   std::vector<wire::SubscribeStatusRequest> invalid(2);
