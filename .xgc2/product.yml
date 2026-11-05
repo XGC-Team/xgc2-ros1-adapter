@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-ros1-adapters
 name: XGC2 ROS1 Services
-version: 0.9.0-6
+version: 0.9.0-7
 kind: ros1-apt
 summary: Run-owned ROS1 services for PX4, Scout Mini, Mecanum, typed ROS1 Tools and
   scene authoring.
@@ -43,7 +43,7 @@ apt:
   - ros-noetic-xgc2-ugv-reset-msgs (>= 2.0.0-1)
   - libxgc2-xrpc2 (>= 0.2.1-2~focal)
   - libxgc2-math-dev (>= 0.6.0-6~focal)
-  - xgc2-zenoh
+  - xgc2-zenoh (>= 1.10.2-1~focal)
   - nlohmann-json3-dev
   - libyaml-cpp-dev
   - libssl-dev
@@ -169,4 +169,4 @@ release:
     xgc2-zenoh: verify
     xgc2-vrpn-zenoh: verify
   apt_versions:
-    focal: 0.9.0-6
+    focal: 0.9.0-7
