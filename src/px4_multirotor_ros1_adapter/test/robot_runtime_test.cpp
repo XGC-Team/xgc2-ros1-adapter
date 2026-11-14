@@ -28,6 +28,36 @@ xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   return config;
 }
 
+TEST(LocalizationError, DelayComesFromProfileAndAcceptsExplicitOverride) {
+  auto config = makeProfileConfig();
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.05, native.localization_delay_seconds);
+  config.parameters["localization_delay_ms"] = "25";
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.025, native.localization_delay_seconds);
+  for (const std::string invalid : {"-1", "nan", "inf", "1001", "50ms"}) {
+    config.parameters["localization_delay_ms"] = invalid;
+    EXPECT_FALSE(BuildNativeProfileConfig(config, &native, &error)) << invalid;
+  }
+}
+
+TEST(LocalizationProjection, AssetExtrinsicIsOnlyAcceptedByPhysicalProfile) {
+  auto config = makeProfileConfig();
+  config.profile_id = "px4-multirotor.physical.vrpn";
+  config.parameters["mocap_marker_from_body"] =
+      "{\"translation\":[0.01,0.02,-0.03],\"rotation\":[0,0,0,1]}";
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.05, native.localization_delay_seconds);
+  for (const std::string profile : {"px4-multirotor.xsim.ros", "px4-multirotor.gazebo.vrpn"}) {
+    config.profile_id = profile;
+    EXPECT_FALSE(BuildNativeProfileConfig(config, &native, &error)) << profile;
+  }
+}
+
 TEST(RosNames, BuildsNamespacedMavrosTopics) {
   EXPECT_EQ("/uav1/mavros/state", topicName("/uav1", "mavros/state"));
   EXPECT_EQ("/fleet/uav2/mavros/local_position/pose",
@@ -215,7 +245,6 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
   EXPECT_DOUBLE_EQ(5.0, native.maximum_operation_timeout_seconds);
   EXPECT_TRUE(native.publish_vision);
-  EXPECT_DOUBLE_EQ(30.0, native.vision_publish_rate_hz);
   EXPECT_EQ(
       (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
       native.allowed_modes);
@@ -232,11 +261,7 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
                                         &vision_pose));
   EXPECT_STREQ("px4.vision-pose", vision_pose.processor);
   EXPECT_EQ(1u, vision_pose.endpoint_count);
-  EXPECT_EQ(1u, vision_pose.policy_count);
-  std::int64_t vision_publish_rate = 0;
-  ASSERT_TRUE(contract::channelPolicyInteger(vision_pose, "publish_rate_hz",
-                                            &vision_publish_rate));
-  EXPECT_EQ(30, vision_publish_rate);
+  EXPECT_EQ(0u, vision_pose.policy_count);
 }
 
 TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {

@@ -2,7 +2,8 @@
 # (xgc/robot/v1/message.pb.h and the semantic payloads) from this directory.
 if(@DEVELSPACE@)
   list(APPEND xgc_ros1_adapter_common_INCLUDE_DIRS
-       "@CMAKE_CURRENT_BINARY_DIR@/proto")
+       "@CMAKE_CURRENT_BINARY_DIR@/proto"
+       "@CMAKE_CURRENT_BINARY_DIR@/vrpn_zenoh_proto")
 else()
   list(APPEND xgc_ros1_adapter_common_INCLUDE_DIRS
        "${xgc_ros1_adapter_common_DIR}/../../../include/xgc_ros1_adapter_common/proto")

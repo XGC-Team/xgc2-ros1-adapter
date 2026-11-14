@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+import sys
+if sys.argv[1:2] == ['--recover-rate']:
+    del sys.argv[1]
+    from xgc_mocap_calibration.rate_recovery import main
+else:
+    from xgc_mocap_calibration.worker import main
+raise SystemExit(main())

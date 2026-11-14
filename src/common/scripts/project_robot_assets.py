@@ -202,6 +202,15 @@ def project_device(row, binding, context, kind, model_id, ordinal):
     # physicalBinding stays inventory. It does not become FCU URLs or management addresses.
     derived = {}
     simulated = simulated_source(row)
+    calibration = spec.get("mocapCalibration") if arm == "px4" and not simulated else None
+    if calibration is not None:
+        # Only the SE3 is a forwarding parameter. Identified delay remains
+        # provenance and cannot overwrite localization_delay_ms / EKF2_EV_DELAY.
+        params["mocap_marker_from_body"] = json.dumps(
+            {"translation": calibration["translation"], "rotation": calibration["rotation"]},
+            separators=(",", ":"), allow_nan=False)
+        derived["mocapCalibration"] = dict(
+            calibrationRunId=calibration["calibrationRunId"], capturedAt=calibration["capturedAt"])
     if gazebo_sitl(kind, binding, context, simulated):
         endpoint = sitl_endpoint(ordinal)
         derived["sitlInstanceId"] = endpoint["sitlInstanceId"]

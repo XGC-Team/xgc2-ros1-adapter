@@ -65,6 +65,31 @@ def mecanum_asset():
 
 
 class AssetProjectionTest(unittest.TestCase):
+    def test_extrinsic_is_only_for_real_plant_not_physical_carrier(self):
+        import json
+        asset = px4_asset()
+        calibration = dict(rigidBodyName="tracked_body", translation=[.04, -.03, .02],
+                           rotation=[0, 0, 0, 1], identifiedDelayMs=47.25,
+                           calibrationRunId="calibration-run", capturedAt="2026-11-15T00:00:00Z")
+        asset["px4"]["mocapCalibration"] = calibration
+        for mode, source, simulator in (("physical", "physical", "none"),
+                                        ("hybrid", "physical", "xsim"),
+                                        ("hybrid", "simulation", "xsim"),
+                                        ("simulation", "simulation", "gazebo"),
+                                        ("simulation", "simulation", "xsim")):
+            with self.subTest(mode=mode, source=source, simulator=simulator):
+                row = dict(source=source, model=model("px4_multirotor", 0),
+                           binding=binding("slot", "/uav1", source=source),
+                           physicalBinding=dict(assetId="real-airframe", assetCommitId="pin", asset=asset))
+                result = projection.project(row, context(mode=mode, simulator=simulator))
+                params = result["parameters"]
+                self.assertEqual("mocap_marker_from_body" in params, source == "physical")
+                if source == "physical":
+                    self.assertEqual(json.loads(params["mocap_marker_from_body"]),
+                                     dict(translation=calibration["translation"], rotation=calibration["rotation"]))
+                self.assertNotIn("localization_delay_ms", params)
+                self.assertNotIn("identifiedDelayMs", params)
+
     def test_v18_uses_effective_source_without_legacy_binding_field(self):
         authored = binding("slot", "/uav1")
         del authored["hybridSource"]

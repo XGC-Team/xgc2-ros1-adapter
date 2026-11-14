@@ -33,6 +33,7 @@
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/position_error_window.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace contract = xgc2_ros1_robot_adapter::contract;
@@ -69,7 +70,7 @@ struct NativeProfileConfig {
   // Core silence after which an active motion intent is released; 0 = never.
   std::int64_t remote_control_core_silence_ms = 0;
   bool publish_vision = true;
-  double vision_publish_rate_hz = 30.0;
+  double localization_delay_seconds = 0.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
   std::vector<std::string> allowed_modes;
@@ -258,6 +259,7 @@ private:
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
+  PositionErrorWindow position_error_;
 
   const std::string pose_endpoint_;
   const std::string velocity_endpoint_;
@@ -307,13 +309,6 @@ private:
   bool has_attitude_setpoint_ = false;
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
-  geometry_msgs::Point local_position_;
-  geometry_msgs::Point mocap_position_;
-  std::string local_position_frame_id_;
-  ros::Time localization_error_stamp_;
-  bool has_local_position_ = false;
-  bool has_mocap_position_ = false;
-  bool local_position_frame_valid_ = false;
   geometry_msgs::PoseStamped::ConstPtr latest_pose_, latest_mocap_pose_;
   xgc::v1::TimePoint latest_mocap_pose_source_time_;
   bool has_mocap_pose_source_time_ = false;
@@ -348,7 +343,6 @@ private:
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization_;
   std::unique_ptr<xgc2_ros1_robot_adapter::ZenohLocalizationInput> zenoh_input_;
-  xgc2_ros1_robot_adapter::VisionPublishCadence vision_publish_cadence_;
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;

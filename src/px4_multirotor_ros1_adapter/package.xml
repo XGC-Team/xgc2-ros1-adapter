@@ -19,6 +19,8 @@
   <build_depend>xgc2-protobuf-dev</build_depend>
   <build_depend>xgc_ros1_adapter_common</build_depend>
 
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
   <exec_depend>roscpp</exec_depend>

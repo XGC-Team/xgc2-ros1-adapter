@@ -67,6 +67,18 @@ parameters:
     required: false
     delivery: target_binding
     description: Run-frozen Experiment world Z translation injected by Robot runtime.
+  localization_delay_ms:
+    type: number
+    required: false
+    delivery: target_binding
+    description: Measurement-to-header delay used only for time-aligned position
+      error; override the profile baseline when using another localization chain.
+  mocap_marker_from_body:
+    type: string
+    required: false
+    delivery: target_binding
+    description: Asset-owned T_marker_body JSON (translation metres, XYZW rotation,
+      body FLU), frozen at Run creation and composed before the world offset.
   publish_vision:
     type: boolean
     required: false
@@ -150,8 +162,6 @@ channels:
   output:
     name: mavros/vision_pose/pose
     type: geometry_msgs/PoseStamped
-  policy:
-    publish_rate_hz: 30
 - id: state.velocity
   kind: stream_out
   output_message_id: 2002
@@ -201,6 +211,8 @@ channels:
   kind: stream_out
   output_message_id: 2007
   processor: px4.localization-position-error
+  policy:
+    measurement_delay_ms: 50.0
   output_rate_hz: 10
   observes:
   - state.pose

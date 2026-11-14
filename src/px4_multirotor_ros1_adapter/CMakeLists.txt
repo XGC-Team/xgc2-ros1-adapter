@@ -72,7 +72,12 @@ install(FILES process/xgc2-px4-multirotor-ros1-adapter.json
 )
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(${PROJECT_NAME}_position_error_test test/position_error_window_test.cpp)
+  if(TARGET ${PROJECT_NAME}_position_error_test)
+    target_link_libraries(${PROJECT_NAME}_position_error_test ${catkin_LIBRARIES})
+  endif()
   find_package(rostest REQUIRED)
+  find_package(zenohc 1.10.2 EXACT CONFIG REQUIRED)
   add_rostest_gtest(${PROJECT_NAME}_status_demand_test
     test/status_demand.test test/status_demand_test.cpp src/robot_runtime.cpp)
   if(TARGET ${PROJECT_NAME}_status_demand_test)
@@ -106,3 +111,8 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 endif()
+
+# The calibration worker has the same lifecycle as its invoking Agent Run.
+install(DIRECTORY python/xgc_mocap_calibration DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  FILES_MATCHING PATTERN "*.py")
+install(PROGRAMS python/mocap-calibration-worker DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

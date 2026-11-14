@@ -66,6 +66,22 @@ the `RosBinding` interface in `robot_server.hpp`; `Ros1Binding` implements it fo
 A robot is a `NativeRobot` created by a factory, with a handle to its ROS node, and owns no
 thread: the core calls it from fixed threads.
 
+The localization publisher owns the pose rate. The PX4 adapter applies its
+Run-scoped world offset and forwards each valid received pose to MAVROS vision
+when enabled, without a second publication clock or rate filter. World offsets
+are applied on the robot; bridge payloads retain their source coordinates.
+The ROS vision publisher has queue size 1 and is not latched.
+
+PX4 `state.localization.error` compares each projected mocap position with an
+interpolated local position at `mocap_stamp - localization_delay_ms`. The physical
+VRPN profile baseline is 50 ms; Gazebo is 0 ms. Set the optional binding explicitly
+for a different calibrated chain or a source stamp that already denotes capture
+time. This changes only the statistic, never the forwarded vision stamp. Inputs
+must share a clock and frame; missing history, gaps over 100 ms, invalid samples
+and time/frame resets do not produce an extrapolated error. Snapshots retain the
+computed pair and its sample time. This comparison is consistency, not independent
+absolute accuracy.
+
 ## Build
 
 Packages are built with catkin against the XGC2 foundation (XRPC 0.2.0,

@@ -153,7 +153,7 @@ target_include_directories(xgc2_robot_server_ros1
 target_include_directories(xgc2_robot_server_ros1 SYSTEM PUBLIC "${proto_dir}")
 target_link_libraries(xgc2_robot_server_ros1
   PUBLIC xgc2_robot_server ${catkin_LIBRARIES}
-  PRIVATE "${CARES_LIBRARY}")
+  PRIVATE "${CARES_LIBRARY}" nlohmann_json::nlohmann_json)
 
 install(TARGETS xgc2_robot_server xgc2_robot_server_ros1
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
@@ -163,6 +163,9 @@ install(PROGRAMS scripts/project_robot_assets.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
   RENAME xgc2-project-robot-assets)
 install(DIRECTORY "${proto_dir}/"
+  DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/xgc_ros1_adapter_common/proto
+  FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY "${vrpn_zenoh_proto_dir}/"
   DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/xgc_ros1_adapter_common/proto
   FILES_MATCHING PATTERN "*.h")
 

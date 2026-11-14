@@ -1,3 +1,4 @@
+#include <cmath>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -13,6 +14,43 @@
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
+
+TEST(LocalizationProjection, ComposesMarkerBodyBeforeWorldOffsetAndKeepsTime) {
+  LocalizationProjectionConfig config;
+  config.has_extrinsic = true;
+  config.marker_from_body_translation = {{1, 0, 0}};
+  const double h = std::sqrt(0.5);
+  config.marker_from_body_rotation = {{h, 0, 0, h}};
+  config.offset_x = 10;
+  geometry_msgs::PoseStamped source;
+  source.header.stamp = ros::Time(123, 456);
+  source.header.frame_id = "world";
+  source.pose.position.x = 2;
+  source.pose.orientation.z = h;
+  source.pose.orientation.w = h;
+  geometry_msgs::PoseStamped result;
+  ASSERT_TRUE(projectLocalizationPose(source, config, &result));
+  EXPECT_NEAR(result.pose.position.x, 12, 1e-12);
+  EXPECT_NEAR(result.pose.position.y, 1, 1e-12);
+  EXPECT_NEAR(result.pose.orientation.x, .5, 1e-12);
+  EXPECT_NEAR(result.pose.orientation.y, .5, 1e-12);
+  EXPECT_NEAR(result.pose.orientation.z, .5, 1e-12);
+  EXPECT_NEAR(result.pose.orientation.w, .5, 1e-12);
+  EXPECT_EQ(result.header, source.header);
+}
+
+TEST(LocalizationProjection, RejectsMalformedCalibrationBeforeAnyPose) {
+  LocalizationProjectionConfig config;
+  std::string error;
+  for (const std::string json : {"{}", "{\"translation\":[0,0,0],\"rotation\":[0,0,0,0]}",
+                                 "{\"translation\":[0,0],\"rotation\":[0,0,0,1]}"}) {
+    EXPECT_FALSE(parseLocalizationExtrinsic({{"mocap_marker_from_body", json}}, &config, &error));
+    EXPECT_FALSE(config.has_extrinsic);
+  }
+  EXPECT_TRUE(parseLocalizationExtrinsic({{"mocap_marker_from_body",
+    "{\"translation\":[0.1,0.2,0.3],\"rotation\":[0,0,0,1]}"}}, &config, &error));
+  EXPECT_TRUE(config.has_extrinsic);
+}
 
 TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig config;
@@ -93,26 +131,6 @@ TEST(LocalizationProjection, ParsesStrictRunScopedParameters) {
   parameters["localization_offset_x"] = "nan";
   EXPECT_FALSE(xgc2_ros1_robot_adapter::parseLocalizationProjectionConfig(
       parameters, &config, &error));
-}
-
-TEST(LocalizationProjection, VisionCadenceUsesActualCallbackEmits) {
-  xgc2_ros1_robot_adapter::VisionPublishCadence cadence(30.0, 5u);
-  int emits = 0;
-  for (int index = 0; index < 120; ++index) {
-    if (cadence.take(static_cast<double>(index) / 120.0))
-      ++emits;
-  }
-  EXPECT_EQ(emits, 30);
-  EXPECT_FALSE(cadence.take(119.5 / 120.0));
-}
-
-TEST(LocalizationProjection, VisionCadenceSurvivesLongRunsAndClockRewind) {
-  VisionPublishCadence cadence(30.0, 5u);
-  for (int frame = 0; frame < 2400; ++frame) cadence.take(frame / 120.0);
-  EXPECT_FALSE(cadence.take(std::numeric_limits<double>::quiet_NaN()));
-  EXPECT_TRUE(cadence.take(0.0));
-  EXPECT_FALSE(cadence.take(0.005));
-  EXPECT_TRUE(cadence.take(0.035));
 }
 
 TEST(PositioningLiveness, RepeatedFramesAgeOutAndClockRewindStartsANewWindow) {

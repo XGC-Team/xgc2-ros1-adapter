@@ -1,9 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include <map>
+#include <array>
 #include <string>
-#include <vector>
 
 #include <geometry_msgs/AccelStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -16,7 +15,15 @@ struct LocalizationProjectionConfig {
   double offset_x = 0.0;
   double offset_y = 0.0;
   double offset_z = 0.0;
+  // T_marker_body, ROS body FLU. Applied before the world translation.
+  bool has_extrinsic = false;
+  std::array<double, 3> marker_from_body_translation{{0.0, 0.0, 0.0}};
+  std::array<double, 4> marker_from_body_rotation{{0.0, 0.0, 0.0, 1.0}};
 };
+
+bool parseLocalizationExtrinsic(
+    const std::map<std::string, std::string> &parameters,
+    LocalizationProjectionConfig *output, std::string *error);
 
 bool parseLocalizationProjectionConfig(
     const std::map<std::string, std::string> &parameters,
@@ -36,17 +43,5 @@ bool validLocalizationLinear(const geometry_msgs::TwistStamped &source);
 geometry_msgs::AccelStamped
 projectVrpnAcceleration(const geometry_msgs::TwistStamped &source);
 bool validLocalizationAcceleration(const geometry_msgs::AccelStamped &source);
-
-class VisionPublishCadence {
-public:
-  explicit VisionPublishCadence(double target_rate_hz = 30.0,
-                                std::size_t window = 5u);
-  bool take(double now_seconds);
-
-private:
-  double target_rate_hz_;
-  std::vector<double> published_times_;
-  std::size_t first_ = 0u, retained_ = 0u;
-};
 
 } // namespace xgc2_ros1_robot_adapter

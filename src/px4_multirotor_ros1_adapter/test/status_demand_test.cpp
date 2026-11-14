@@ -66,16 +66,17 @@ public:
                                const std::string &canonical_pose = "/demand_sources/canonical_pose",
                                const std::string &vision_pose = "/demand_sources/vision",
                                const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {},
-                               const xgc2_ros1_robot_adapter::ZenohLocalizationConfig &zenoh = {}) {
+                               const xgc2_ros1_robot_adapter::ZenohLocalizationConfig &zenoh = {},
+                               double localization_delay_seconds = 0.0) {
     ros::NodeHandle node;
     std::set<std::string> channels{"state.pose", "state.mocap.pose", "state.vision.pose", "state.velocity",
         "state.mocap.velocity", "state.mocap.acceleration", "state.mocap.speed", "state.localization.error",
         "state.imu", "state.power", "state.health", "state.flight", "state.controller", "setpoint.local",
         "setpoint.attitude", "diagnostic.fcu-link", "diagnostic.offboard-input", "diagnostic.stream-health"};
     NativeProfileConfig native;
-    native.vision_publish_rate_hz = 30;
     native.publish_vision = true;
     native.localization = localization;
+    native.localization_delay_seconds = localization_delay_seconds;
     native.zenoh_localization = zenoh;
     if (live_sources) {
       const std::string prefix = "/demand_sources";
@@ -124,10 +125,10 @@ public:
     runtime_->Stop();
     runtime_.reset();
   }
-  void pose(double x) {
+  void pose(double x, const ros::Time &stamp = ros::Time(12, 3)) {
     geometry_msgs::PoseStamped::Ptr value(new geometry_msgs::PoseStamped);
     value->header.frame_id = "world";
-    value->header.stamp = ros::Time(12, 3);
+    value->header.stamp = stamp;
     value->pose.position.x = x;
     value->pose.orientation.w = 1;
     runtime_->px4PoseCallback(value);
@@ -145,9 +146,10 @@ public:
     mavros_msgs::ExtendedState::Ptr extended(new mavros_msgs::ExtendedState);
     runtime_->mavrosExtendedStateCallback(extended);
   }
-  void mocap(double x) {
+  void mocap(double x, const ros::Time &stamp = ros::Time(12, 3)) {
     geometry_msgs::PoseStamped::Ptr value(new geometry_msgs::PoseStamped);
     value->header.frame_id = "world";
+    value->header.stamp = stamp;
     value->pose.position.x = x;
     value->pose.orientation.w = 1;
     runtime_->mocapPoseCallback(value);
@@ -164,6 +166,7 @@ public:
     state();
     geometry_msgs::PoseStamped::Ptr mocap(new geometry_msgs::PoseStamped);
     mocap->header.frame_id = "world";
+    mocap->header.stamp = ros::Time(12, 3);
     mocap->pose.position.x = 8;
     mocap->pose.orientation.w = 1;
     runtime_->mocapPoseCallback(mocap);
@@ -386,6 +389,49 @@ TEST(StatusDemand, ZenohPosePublishesSlotPoseAndVisionWithSourceTime) {
   }
   EXPECT_TRUE(found_pose);
   EXPECT_TRUE(found_vision);
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, JitteredUpstreamPoseReachesVisionOnceWithWorldOffset) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  localization.offset_y = -2.0;
+  localization.offset_z = 0.5;
+  StatusDemandHarness source(true, "/jitter/pose", "/jitter/vision", localization);
+  std::mutex received_mutex;
+  std::vector<geometry_msgs::PoseStamped> received;
+  auto vision = node.subscribe<geometry_msgs::PoseStamped>("/jitter/vision", 100,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(received_mutex);
+        received.push_back(*message);
+      });
+  ASSERT_TRUE(waitFor([&] { return vision.getNumPublishers() > 0; }));
+  const auto start = std::chrono::steady_clock::now();
+  // Average 30.3 Hz, alternating 18/48 ms arrivals as seen after transport
+  // jitter. A second 30 Hz gate must not discard the shorter intervals.
+  for (int sample = 0; sample < 40; ++sample) {
+    const auto millis = (sample / 2) * 66 + (sample % 2) * 18;
+    std::this_thread::sleep_until(start + std::chrono::milliseconds(millis));
+    source.zenohPose(sample, 1000000000LL + millis * 1000000LL);
+  }
+  ASSERT_TRUE(waitFor([&] {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    return received.size() >= 40;
+  }));
+  {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    ASSERT_EQ(40u, received.size());
+    for (std::size_t index = 0; index < received.size(); ++index) {
+      EXPECT_DOUBLE_EQ(index + 1.25, received[index].pose.position.x);
+      EXPECT_DOUBLE_EQ(-2.0, received[index].pose.position.y);
+      EXPECT_DOUBLE_EQ(0.5, received[index].pose.position.z);
+      EXPECT_DOUBLE_EQ(1.0, received[index].pose.orientation.w);
+    }
+  }
   source.stop();
   spinner.stop();
 }
@@ -672,6 +718,31 @@ TEST(StatusDemand, EveryEnabledPx4ChannelSnapshotsOnlyItsOwnRawSource) {
   }
 }
 
+TEST(StatusDemand, LocalizationErrorLiveAndSnapshotUseTheSameTimedPair) {
+  StatusDemandHarness source(false, "/unused_pose", "/unused_vision", {}, {}, 0.05);
+  source.pose(0.0, ros::Time(10, 0));
+  source.pose(0.1, ros::Time(10, 100000000));
+  source.mocap(0.05, ros::Time(10, 100000000));
+  ASSERT_TRUE(source.messages().empty());
+  source.demand({"state.localization.error"});
+  auto frames = source.messages();
+  ASSERT_EQ(1u, frames.size());
+  xgc::semantic::common::v1::DistanceEstimate error;
+  ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_NEAR(0.0, error.meters(), 1e-12);
+  EXPECT_EQ(10050000000LL, frames.back().message().source_time().nanoseconds());
+  source.pose(0.2, ros::Time(10, 200000000));
+  EXPECT_EQ(1u, source.messages().size());
+  // A later reference callback must not recalculate the old mocap against now.
+  source.demand({});
+  source.demand({"state.localization.error"});
+  frames = source.messages();
+  ASSERT_EQ(2u, frames.size());
+  ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_NEAR(0.0, error.meters(), 1e-12);
+  EXPECT_EQ(10050000000LL, frames.back().message().source_time().nanoseconds());
+}
+
 TEST(StatusDemand, InvalidLatestMocapDoesNotReplayAnOlderValidSample) {
   StatusDemandHarness source;
   source.mocap(1);
@@ -687,6 +758,7 @@ TEST(StatusDemand, InvalidLatestPositionDoesNotProduceAnOldLocalizationError) {
   source.mocap(std::numeric_limits<double>::quiet_NaN());
   source.demand({"state.localization.error"});
   EXPECT_TRUE(source.messages().empty());
+  source.pose(11);
   source.mocap(3);
   ASSERT_EQ(1u, source.messages().size());
   source.demand({});
