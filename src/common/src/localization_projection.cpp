@@ -3,6 +3,7 @@
 #include <cmath>
 #include <regex>
 #include <sstream>
+#include <nlohmann/json.hpp>
 
 namespace xgc2_ros1_robot_adapter {
 namespace {
@@ -37,6 +38,37 @@ bool finiteVector(const geometry_msgs::Vector3 &value) {
 }
 
 } // namespace
+
+bool parseLocalizationExtrinsic(
+    const std::map<std::string, std::string> &parameters,
+    LocalizationProjectionConfig *output, std::string *error) {
+  const auto found = parameters.find("mocap_marker_from_body");
+  if (found == parameters.end())
+    return true;
+  try {
+    const auto value = nlohmann::json::parse(found->second);
+    if (!value.is_object() || value.size() != 2u ||
+        !value.at("translation").is_array() || value.at("translation").size() != 3u ||
+        !value.at("rotation").is_array() || value.at("rotation").size() != 4u)
+      throw std::invalid_argument("invalid SE3");
+    auto candidate = *output;
+    candidate.marker_from_body_translation = value.at("translation").get<std::array<double, 3>>();
+    candidate.marker_from_body_rotation = value.at("rotation").get<std::array<double, 4>>();
+    for (const auto v : candidate.marker_from_body_translation)
+      if (!finite(v)) throw std::invalid_argument("invalid translation");
+    double norm = 0.0;
+    for (const auto v : candidate.marker_from_body_rotation) norm += v * v;
+    if (!finite(norm) || std::abs(norm - 1.0) > 1e-6)
+      throw std::invalid_argument("invalid quaternion");
+    candidate.has_extrinsic = true;
+    *output = candidate;
+    return true;
+  } catch (const std::exception &) {
+    if (error != nullptr)
+      *error = "mocap_marker_from_body requires finite translation[3] and unit XYZW rotation[4]";
+    return false;
+  }
+}
 
 bool parseLocalizationProjectionConfig(
     const std::map<std::string, std::string> &parameters,
@@ -101,6 +133,25 @@ bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
   if (!finite(norm) || norm < 1.0e-6)
     return false;
   *output = source;
+  if (config.has_extrinsic) {
+    const double x = source.pose.orientation.x / norm;
+    const double y = source.pose.orientation.y / norm;
+    const double z = source.pose.orientation.z / norm;
+    const double w = source.pose.orientation.w / norm;
+    const auto &t = config.marker_from_body_translation;
+    // q * t * q^-1. Rotate the lever in the measured marker orientation.
+    const double ux = 2.0 * (y * t[2] - z * t[1]);
+    const double uy = 2.0 * (z * t[0] - x * t[2]);
+    const double uz = 2.0 * (x * t[1] - y * t[0]);
+    output->pose.position.x += t[0] + w * ux + y * uz - z * uy;
+    output->pose.position.y += t[1] + w * uy + z * ux - x * uz;
+    output->pose.position.z += t[2] + w * uz + x * uy - y * ux;
+    const auto &r = config.marker_from_body_rotation;
+    output->pose.orientation.x = w * r[0] + x * r[3] + y * r[2] - z * r[1];
+    output->pose.orientation.y = w * r[1] - x * r[2] + y * r[3] + z * r[0];
+    output->pose.orientation.z = w * r[2] + x * r[1] - y * r[0] + z * r[3];
+    output->pose.orientation.w = w * r[3] - x * r[0] - y * r[1] - z * r[2];
+  }
   output->pose.position.x += config.offset_x;
   output->pose.position.y += config.offset_y;
   output->pose.position.z += config.offset_z;
@@ -128,38 +179,6 @@ projectVrpnAcceleration(const geometry_msgs::TwistStamped &source) {
 
 bool validLocalizationAcceleration(const geometry_msgs::AccelStamped &source) {
   return finiteVector(source.accel.linear) && finiteVector(source.accel.angular);
-}
-
-VisionPublishCadence::VisionPublishCadence(double target_rate_hz,
-                                           std::size_t window)
-    : target_rate_hz_(target_rate_hz) {
-  if (!finite(target_rate_hz_) || target_rate_hz_ <= 0.0 || window == 0u)
-    throw std::invalid_argument("vision publish cadence is invalid");
-  published_times_.resize(window);
-}
-
-bool VisionPublishCadence::take(double now_seconds) {
-  if (!finite(now_seconds))
-    return false;
-  bool emit = retained_ == 0u;
-  if (!emit) {
-    const double since_last = now_seconds - published_times_[
-        (first_ + retained_ - 1u) % published_times_.size()];
-    if (since_last < 0.0 || since_last >= 1.0 / target_rate_hz_) {
-      emit = true;
-    } else {
-      const double span = now_seconds - published_times_[first_];
-      emit = span > 0.0 &&
-             static_cast<double>(retained_) / span <
-                 target_rate_hz_;
-    }
-  }
-  if (!emit)
-    return false;
-  published_times_[(first_ + retained_) % published_times_.size()] = now_seconds;
-  if (retained_ < published_times_.size()) ++retained_;
-  else if (++first_ == published_times_.size()) first_ = 0u;
-  return true;
 }
 
 } // namespace xgc2_ros1_robot_adapter

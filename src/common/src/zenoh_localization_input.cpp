@@ -2,8 +2,10 @@
 
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include <zenoh.h>
@@ -60,8 +62,55 @@ std::string jsonString(const std::string &value) {
 }
 
 struct PoseState {
+  explicit PoseState(ZenohLocalizationInput::PoseCallback cb)
+      : callback(std::move(cb)), worker([this]() { runWorker(); }) {}
+
+  ~PoseState() { stopWorker(); }
+
+  void stopWorker() {
+    stopping.store(true, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> lock(pending_mutex);
+      has_pending = false;
+      worker_stop = true;
+    }
+    pending_cv.notify_all();
+    if (worker.joinable() && std::this_thread::get_id() != worker.get_id()) {
+      worker.join();
+    }
+  }
+
+  void runWorker() {
+    while (true) {
+      ZenohPoseSample sample;
+      {
+        std::unique_lock<std::mutex> lock(pending_mutex);
+        pending_cv.wait(lock, [this]() {
+          return worker_stop || stopping.load(std::memory_order_acquire) ||
+                 has_pending;
+        });
+        if (worker_stop || stopping.load(std::memory_order_acquire)) {
+          has_pending = false;
+          return;
+        }
+        sample = latest_pending;
+        has_pending = false;
+      }
+      try {
+        callback(sample);
+      } catch (...) {
+      }
+    }
+  }
+
   ZenohLocalizationInput::PoseCallback callback;
   std::atomic<bool> stopping{false};
+  std::mutex pending_mutex;
+  std::condition_variable pending_cv;
+  bool worker_stop{false};
+  bool has_pending{false};
+  ZenohPoseSample latest_pending;
+  std::thread worker;
 };
 
 struct VelocityState {
@@ -114,10 +163,17 @@ void onPoseSample(z_loaned_sample_t *sample, void *context) noexcept {
   decoded.orientation[1] = message.orientation_xyzw().y();
   decoded.orientation[2] = message.orientation_xyzw().z();
   decoded.orientation[3] = message.orientation_xyzw().w();
-  try {
-    state->callback(decoded);
-  } catch (...) {
+  {
+    std::lock_guard<std::mutex> lock(state->pending_mutex);
+    if (state->stopping.load(std::memory_order_acquire) || state->worker_stop) {
+      state->has_pending = false;
+      return;
+    }
+    // Single-slot overwrite keeps only the newest pose while a slow callback runs.
+    state->latest_pending = decoded;
+    state->has_pending = true;
   }
+  state->pending_cv.notify_one();
 }
 
 void onVelocitySample(z_loaned_sample_t *sample, void *context) noexcept {
@@ -297,8 +353,9 @@ struct ZenohLocalizationInput::Impl {
     if (stopped)
       return;
     stopped = true;
-    if (pose_state != nullptr)
-      pose_state->stopping.store(true, std::memory_order_release);
+    if (pose_state != nullptr) {
+      pose_state->stopWorker();
+    }
     if (velocity_state != nullptr)
       velocity_state->stopping.store(true, std::memory_order_release);
     if (acceleration_state != nullptr)

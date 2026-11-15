@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <chrono>
+#include <cmath>
 #include <atomic>
 #include <condition_variable>
 #include <future>
@@ -66,39 +67,47 @@ public:
                                const std::string &canonical_pose = "/demand_sources/canonical_pose",
                                const std::string &vision_pose = "/demand_sources/vision",
                                const xgc2_ros1_robot_adapter::LocalizationProjectionConfig &localization = {},
-                               const xgc2_ros1_robot_adapter::ZenohLocalizationConfig &zenoh = {}) {
+                               const xgc2_ros1_robot_adapter::ZenohLocalizationConfig &zenoh = {},
+                               double localization_delay_seconds = 0.0,
+                               const VisionInjectionGateConfig &vision_injection_gate = {},
+                               const std::string &robot_id = "r1",
+                               const std::string &prefix = "/demand_sources") {
     ros::NodeHandle node;
     std::set<std::string> channels{"state.pose", "state.mocap.pose", "state.vision.pose", "state.velocity",
         "state.mocap.velocity", "state.mocap.acceleration", "state.mocap.speed", "state.localization.error",
         "state.imu", "state.power", "state.health", "state.flight", "state.controller", "setpoint.local",
         "setpoint.attitude", "diagnostic.fcu-link", "diagnostic.offboard-input", "diagnostic.stream-health"};
     NativeProfileConfig native;
-    native.vision_publish_rate_hz = 30;
     native.publish_vision = true;
     native.localization = localization;
+    native.localization_delay_seconds = localization_delay_seconds;
     native.zenoh_localization = zenoh;
+    native.vision_injection_gate = vision_injection_gate;
     if (live_sources) {
-      const std::string prefix = "/demand_sources";
-      native.pose_endpoint = prefix + "/pose";
-      native.mocap_endpoint = prefix + "/mocap";
-      native.mocap_velocity_endpoint = prefix + "/mocap_velocity";
-      native.mocap_acceleration_endpoint = prefix + "/mocap_acceleration";
+      const std::string base_prefix =
+          prefix.empty() ? std::string("/demand_sources") : prefix;
+      native.pose_endpoint = base_prefix + "/pose";
+      native.mocap_endpoint = base_prefix + "/mocap";
+      native.mocap_velocity_endpoint = base_prefix + "/mocap_velocity";
+      native.mocap_acceleration_endpoint = base_prefix + "/mocap_acceleration";
       native.canonical_pose_endpoint = canonical_pose;
-      native.canonical_velocity_endpoint = prefix + "/canonical_velocity";
-      native.canonical_acceleration_endpoint = prefix + "/canonical_acceleration";
+      native.canonical_velocity_endpoint = base_prefix + "/canonical_velocity";
+      native.canonical_acceleration_endpoint = base_prefix + "/canonical_acceleration";
       native.vision_pose_endpoint = vision_pose;
-      native.velocity_endpoint = prefix + "/velocity";
-      native.imu_endpoint = prefix + "/imu";
-      native.power_endpoint = prefix + "/power";
-      native.controller_status_endpoint = prefix + "/controller";
-      native.state_endpoint = prefix + "/state";
-      native.extended_state_endpoint = prefix + "/extended";
-      native.local_setpoint_endpoint = prefix + "/local_setpoint";
-      native.attitude_setpoint_endpoint = prefix + "/attitude_setpoint";
-      native.timesync_endpoint = prefix + "/timesync";
+      native.velocity_endpoint = base_prefix + "/velocity";
+      native.imu_endpoint = base_prefix + "/imu";
+      native.power_endpoint = base_prefix + "/power";
+      native.controller_status_endpoint = base_prefix + "/controller";
+      native.state_endpoint = base_prefix + "/state";
+      native.extended_state_endpoint = base_prefix + "/extended";
+      native.local_setpoint_endpoint = base_prefix + "/local_setpoint";
+      native.attitude_setpoint_endpoint = base_prefix + "/attitude_setpoint";
+      native.timesync_endpoint = base_prefix + "/timesync";
     }
-    runtime_.reset(new RobotRuntime(std::move(node), "r1", InstalledContract().primaryProfile().profile_id,
-        "/r1", channels, channels, std::move(native), {},
+    const std::string ns =
+        (!robot_id.empty() && robot_id.front() == '/') ? robot_id : ("/" + robot_id);
+    runtime_.reset(new RobotRuntime(std::move(node), robot_id, InstalledContract().primaryProfile().profile_id,
+        ns, channels, channels, std::move(native), {},
         [this](xgc::robot::v1::RobotMessage message) {
           std::unique_lock<std::mutex> lock(mutex_);
           messages_.push_back(std::move(message));
@@ -124,10 +133,10 @@ public:
     runtime_->Stop();
     runtime_.reset();
   }
-  void pose(double x) {
+  void pose(double x, const ros::Time &stamp = ros::Time(12, 3)) {
     geometry_msgs::PoseStamped::Ptr value(new geometry_msgs::PoseStamped);
     value->header.frame_id = "world";
-    value->header.stamp = ros::Time(12, 3);
+    value->header.stamp = stamp;
     value->pose.position.x = x;
     value->pose.orientation.w = 1;
     runtime_->px4PoseCallback(value);
@@ -145,12 +154,52 @@ public:
     mavros_msgs::ExtendedState::Ptr extended(new mavros_msgs::ExtendedState);
     runtime_->mavrosExtendedStateCallback(extended);
   }
-  void mocap(double x) {
+  void mocap(double x, const ros::Time &stamp = ros::Time(12, 3)) {
+    mocapPose(x, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, stamp);
+  }
+  void mocapPose(double x, double y, double z, double qx, double qy, double qz,
+                 double qw, const ros::Time &stamp = ros::Time(12, 3)) {
     geometry_msgs::PoseStamped::Ptr value(new geometry_msgs::PoseStamped);
     value->header.frame_id = "world";
+    value->header.stamp = stamp;
     value->pose.position.x = x;
-    value->pose.orientation.w = 1;
+    value->pose.position.y = y;
+    value->pose.position.z = z;
+    value->pose.orientation.x = qx;
+    value->pose.orientation.y = qy;
+    value->pose.orientation.z = qz;
+    value->pose.orientation.w = qw;
     runtime_->mocapPoseCallback(value);
+  }
+  void localPose(double x, double y, double z, double qx, double qy, double qz,
+                 double qw, const ros::Time &stamp = ros::Time(12, 3)) {
+    geometry_msgs::PoseStamped::Ptr value(new geometry_msgs::PoseStamped);
+    value->header.frame_id = "world";
+    value->header.stamp = stamp;
+    value->pose.position.x = x;
+    value->pose.position.y = y;
+    value->pose.position.z = z;
+    value->pose.orientation.x = qx;
+    value->pose.orientation.y = qy;
+    value->pose.orientation.z = qz;
+    value->pose.orientation.w = qw;
+    runtime_->px4PoseCallback(value);
+  }
+  void publishZenohSample(double x, double y, double z, double qx, double qy,
+                          double qz, double qw, std::int64_t report_time_nanos,
+                          xgc::v1::ClockDomain clock_domain =
+                              xgc::v1::CLOCK_DOMAIN_STEADY) {
+    xgc2_ros1_robot_adapter::ZenohPoseSample sample;
+    sample.position[0] = x;
+    sample.position[1] = y;
+    sample.position[2] = z;
+    sample.orientation[0] = qx;
+    sample.orientation[1] = qy;
+    sample.orientation[2] = qz;
+    sample.orientation[3] = qw;
+    sample.report_time_nanos = report_time_nanos;
+    sample.clock_domain = static_cast<std::uint8_t>(clock_domain);
+    runtime_->zenohPoseCallback(sample);
   }
   void localSetpoint(bool valid) {
     mavros_msgs::PositionTarget::Ptr value(new mavros_msgs::PositionTarget);
@@ -164,6 +213,7 @@ public:
     state();
     geometry_msgs::PoseStamped::Ptr mocap(new geometry_msgs::PoseStamped);
     mocap->header.frame_id = "world";
+    mocap->header.stamp = ros::Time(12, 3);
     mocap->pose.position.x = 8;
     mocap->pose.orientation.w = 1;
     runtime_->mocapPoseCallback(mocap);
@@ -386,6 +436,49 @@ TEST(StatusDemand, ZenohPosePublishesSlotPoseAndVisionWithSourceTime) {
   }
   EXPECT_TRUE(found_pose);
   EXPECT_TRUE(found_vision);
+  source.stop();
+  spinner.stop();
+}
+
+TEST(StatusDemand, JitteredUpstreamPoseReachesVisionOnceWithWorldOffset) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  localization.offset_y = -2.0;
+  localization.offset_z = 0.5;
+  StatusDemandHarness source(true, "/jitter/pose", "/jitter/vision", localization);
+  std::mutex received_mutex;
+  std::vector<geometry_msgs::PoseStamped> received;
+  auto vision = node.subscribe<geometry_msgs::PoseStamped>("/jitter/vision", 100,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(received_mutex);
+        received.push_back(*message);
+      });
+  ASSERT_TRUE(waitFor([&] { return vision.getNumPublishers() > 0; }));
+  const auto start = std::chrono::steady_clock::now();
+  // Average 30.3 Hz, alternating 18/48 ms arrivals as seen after transport
+  // jitter. A second 30 Hz gate must not discard the shorter intervals.
+  for (int sample = 0; sample < 40; ++sample) {
+    const auto millis = (sample / 2) * 66 + (sample % 2) * 18;
+    std::this_thread::sleep_until(start + std::chrono::milliseconds(millis));
+    source.zenohPose(sample, 1000000000LL + millis * 1000000LL);
+  }
+  ASSERT_TRUE(waitFor([&] {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    return received.size() >= 40;
+  }));
+  {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    ASSERT_EQ(40u, received.size());
+    for (std::size_t index = 0; index < received.size(); ++index) {
+      EXPECT_DOUBLE_EQ(index + 1.25, received[index].pose.position.x);
+      EXPECT_DOUBLE_EQ(-2.0, received[index].pose.position.y);
+      EXPECT_DOUBLE_EQ(0.5, received[index].pose.position.z);
+      EXPECT_DOUBLE_EQ(1.0, received[index].pose.orientation.w);
+    }
+  }
   source.stop();
   spinner.stop();
 }
@@ -672,6 +765,31 @@ TEST(StatusDemand, EveryEnabledPx4ChannelSnapshotsOnlyItsOwnRawSource) {
   }
 }
 
+TEST(StatusDemand, LocalizationErrorLiveAndSnapshotUseTheSameTimedPair) {
+  StatusDemandHarness source(false, "/unused_pose", "/unused_vision", {}, {}, 0.05);
+  source.pose(0.0, ros::Time(10, 0));
+  source.pose(0.1, ros::Time(10, 100000000));
+  source.mocap(0.05, ros::Time(10, 100000000));
+  ASSERT_TRUE(source.messages().empty());
+  source.demand({"state.localization.error"});
+  auto frames = source.messages();
+  ASSERT_EQ(1u, frames.size());
+  xgc::semantic::common::v1::DistanceEstimate error;
+  ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_NEAR(0.0, error.meters(), 1e-12);
+  EXPECT_EQ(10050000000LL, frames.back().message().source_time().nanoseconds());
+  source.pose(0.2, ros::Time(10, 200000000));
+  EXPECT_EQ(1u, source.messages().size());
+  // A later reference callback must not recalculate the old mocap against now.
+  source.demand({});
+  source.demand({"state.localization.error"});
+  frames = source.messages();
+  ASSERT_EQ(2u, frames.size());
+  ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_NEAR(0.0, error.meters(), 1e-12);
+  EXPECT_EQ(10050000000LL, frames.back().message().source_time().nanoseconds());
+}
+
 TEST(StatusDemand, InvalidLatestMocapDoesNotReplayAnOlderValidSample) {
   StatusDemandHarness source;
   source.mocap(1);
@@ -687,6 +805,7 @@ TEST(StatusDemand, InvalidLatestPositionDoesNotProduceAnOldLocalizationError) {
   source.mocap(std::numeric_limits<double>::quiet_NaN());
   source.demand({"state.localization.error"});
   EXPECT_TRUE(source.messages().empty());
+  source.pose(11);
   source.mocap(3);
   ASSERT_EQ(1u, source.messages().size());
   source.demand({});
@@ -720,6 +839,974 @@ TEST(StatusDemand, OffboardDiagnosticValidatesTheLatestRawSetpointOnDemand) {
     EXPECT_NE("offboard.setpoint.invalid", blocker.code());
   source.demand({});
 }
+
+TEST(StatusDemand, FrozenAdvancingStampAndRecoveryJumpReportHealthWithoutGatingVision) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.has_extrinsic = true;
+  localization.marker_from_body_translation = {{0.05, 0.0, 0.0}};
+  localization.marker_from_body_rotation = {{0.0, 0.0, 0.0, 1.0}};
+  localization.offset_x = 1.0;
+  localization.offset_y = -0.5;
+  localization.offset_z = 0.25;
+  StatusDemandHarness source(true, "/f10_recovery/pose", "/f10_recovery/vision",
+                             localization, {}, 0.05);
+  std::mutex received_mutex;
+  std::vector<geometry_msgs::PoseStamped> received;
+  auto vision = node.subscribe<geometry_msgs::PoseStamped>(
+      "/f10_recovery/vision", 32,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &message) {
+        std::lock_guard<std::mutex> lock(received_mutex);
+        received.push_back(*message);
+      });
+  ASSERT_TRUE(waitFor([&] { return vision.getNumPublishers() > 0; }));
+
+  auto has_fault = [](const xgc::semantic::common::v1::VehicleHealth &health,
+                      const std::string &code) {
+    for (const auto &fault : health.faults()) {
+      if (fault.code() == code)
+        return true;
+    }
+    return false;
+  };
+
+  const double expected_x = 3.05;
+  const double expected_y = 0.5;
+  const double expected_z = 1.75;
+
+  // Replay "advancing stamp with identical pose" (new stamp, frozen P+Q).
+  source.localPose(expected_x, expected_y, expected_z, 0.0, 0.0, 0.0, 1.0,
+                   ros::Time(20, 0));
+  for (int index = 0; index < 6; ++index) {
+    const ros::Time mocap_stamp = ros::Time(20.05 + static_cast<double>(index) * 0.033);
+    source.mocapPose(2.0, 1.0, 1.5, 0.0, 0.0, 0.0, 1.0, mocap_stamp);
+  }
+  ASSERT_TRUE(waitFor([&] {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    return received.size() >= 6u;
+  }));
+  {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    ASSERT_EQ(6u, received.size());
+    for (const auto &pose : received) {
+      EXPECT_DOUBLE_EQ(expected_x, pose.pose.position.x);
+      EXPECT_DOUBLE_EQ(expected_y, pose.pose.position.y);
+      EXPECT_DOUBLE_EQ(expected_z, pose.pose.position.z);
+      EXPECT_DOUBLE_EQ(1.0, pose.pose.orientation.w);
+    }
+  }
+
+  std::size_t before = source.messages().size();
+  source.demand({"state.health"});
+  auto frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  EXPECT_EQ("state.health", frames.back().channel_id());
+  xgc::semantic::common::v1::VehicleHealth health;
+  ASSERT_TRUE(health.ParseFromString(frames.back().message().payload().value()));
+  using Health = xgc::semantic::common::v1::PositioningHealth;
+  EXPECT_EQ(Health::POSITIONING_STATE_FROZEN, health.positioning().state());
+  EXPECT_EQ(Health::POSITIONING_REASON_REPEAT_FRAME_WINDOW_FROZEN,
+            health.positioning().reason());
+  EXPECT_DOUBLE_EQ(0.0, health.positioning().window_spread_m());
+  EXPECT_EQ(5u, health.positioning().sample_count());
+  EXPECT_TRUE(has_fault(health, "mocap.position.frozen"));
+
+  source.demand({});
+  before = source.messages().size();
+  source.demand({"state.vision.pose"});
+  frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  xgc::semantic::common::v1::PoseEstimate vision_pose;
+  ASSERT_TRUE(vision_pose.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_DOUBLE_EQ(expected_x, vision_pose.position().x());
+  EXPECT_DOUBLE_EQ(expected_y, vision_pose.position().y());
+  EXPECT_DOUBLE_EQ(expected_z, vision_pose.position().z());
+
+  // Replay onsite 4.443 m recovery jump: injection continues without fallback
+  // and health immediately switches to ACTIVE with exact spread and position error.
+  source.demand({});
+  source.localPose(expected_x, expected_y, expected_z, 0.0, 0.0, 0.0, 1.0,
+                   ros::Time(20.35));
+  source.mocapPose(2.0 + 4.443, 1.0, 1.5, 0.0, 0.0, 0.0, 1.0, ros::Time(20.40));
+  ASSERT_TRUE(waitFor([&] {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    return received.size() >= 7u;
+  }));
+  {
+    std::lock_guard<std::mutex> lock(received_mutex);
+    ASSERT_EQ(7u, received.size());
+    EXPECT_NEAR(expected_x + 4.443, received.back().pose.position.x, 1e-12);
+    EXPECT_DOUBLE_EQ(expected_y, received.back().pose.position.y);
+    EXPECT_DOUBLE_EQ(expected_z, received.back().pose.position.z);
+  }
+
+  before = source.messages().size();
+  source.demand({"state.health"});
+  frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  ASSERT_TRUE(health.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_EQ(Health::POSITIONING_STATE_ACTIVE, health.positioning().state());
+  EXPECT_EQ(Health::POSITIONING_REASON_WINDOW_VARIATION_OBSERVED,
+            health.positioning().reason());
+  EXPECT_NEAR(std::sqrt(5.0) * 4.443, health.positioning().window_spread_m(),
+              1e-12);
+  EXPECT_FALSE(has_fault(health, "mocap.position.frozen"));
+  EXPECT_FALSE(has_fault(health, "mocap.position.timeout"));
+
+  source.demand({});
+  before = source.messages().size();
+  source.demand({"state.localization.error"});
+  frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  xgc::semantic::common::v1::DistanceEstimate error;
+  ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_NEAR(4.443, error.meters(), 1e-9);
+
+  // Exceeding the 100 ms XGC1 freshness boundary transitions state.health to TIMED_OUT.
+  std::this_thread::sleep_for(std::chrono::milliseconds(115));
+  source.demand({});
+  before = source.messages().size();
+  source.demand({"state.health"});
+  frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  ASSERT_TRUE(health.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_EQ(Health::POSITIONING_STATE_TIMED_OUT, health.positioning().state());
+  EXPECT_EQ(Health::POSITIONING_REASON_VRPN_TIMEOUT, health.positioning().reason());
+  EXPECT_TRUE(has_fault(health, "mocap.position.timeout"));
+  source.stop();
+}
+
+TEST(StatusDemand, AttitudeFlipInMocapKeepsSmallPositionErrorAndForwardsFlippedQuaternion) {
+  constexpr double kPi = 3.14159265358979323846;
+  StatusDemandHarness source(false, "/unused_pose", "/unused_vision", {}, {}, 0.05);
+  source.localPose(1.0, -2.0, 0.5, 0.0, 0.0, 0.0, 1.0, ros::Time(30, 0));
+  source.mocapPose(1.0, -2.0, 0.5, 0.0, 0.0, 0.0, 1.0, ros::Time(30.05));
+
+  const double flip_angles[] = {179.0, 172.0, 178.0, 179.0, 172.0, 178.0};
+  for (std::size_t index = 0; index < 6; ++index) {
+    const double t = 30.1 + static_cast<double>(index) * 0.1;
+    const double half = (flip_angles[index] * kPi / 180.0) * 0.5;
+    source.localPose(1.0, -2.0, 0.5, 0.0, 0.0, 0.0, 1.0, ros::Time(t - 0.05));
+    source.mocapPose(1.0, -2.0, 0.5, 0.0, 0.0, std::sin(half), std::cos(half),
+                     ros::Time(t));
+
+    source.demand({});
+    std::size_t before = source.messages().size();
+    source.demand({"state.localization.error"});
+    auto frames = source.messages();
+    ASSERT_GT(frames.size(), before);
+    xgc::semantic::common::v1::DistanceEstimate error;
+    ASSERT_TRUE(error.ParseFromString(frames.back().message().payload().value()));
+    EXPECT_DOUBLE_EQ(0.0, error.meters());
+
+    source.demand({});
+    before = source.messages().size();
+    source.demand({"state.vision.pose"});
+    frames = source.messages();
+    ASSERT_GT(frames.size(), before);
+    xgc::semantic::common::v1::PoseEstimate vision;
+    ASSERT_TRUE(vision.ParseFromString(frames.back().message().payload().value()));
+    EXPECT_NEAR(std::sin(half), vision.orientation().z(), 1e-12);
+    EXPECT_NEAR(std::cos(half), vision.orientation().w(), 1e-12);
+  }
+
+  source.demand({});
+  const std::size_t before = source.messages().size();
+  source.demand({"state.health"});
+  const auto frames = source.messages();
+  ASSERT_GT(frames.size(), before);
+  xgc::semantic::common::v1::VehicleHealth health;
+  ASSERT_TRUE(health.ParseFromString(frames.back().message().payload().value()));
+  EXPECT_EQ(xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_FROZEN,
+            health.positioning().state());
+  EXPECT_DOUBLE_EQ(0.0, health.positioning().window_spread_m());
+}
+
+TEST(StatusDemand, VisionInjectionGateEnforcesSixFieldRegimesWithoutFabrication) {
+  constexpr double kPi = 3.14159265358979323846;
+  VisionInjectionGateConfig gate_config;
+  gate_config.enabled = true;
+  StatusDemandHarness source(true, "/demand_sources_gate/canonical",
+                             "/demand_sources_gate/vision", {}, {}, 0.05,
+                             gate_config);
+
+  ros::NodeHandle nh;
+  std::mutex ros_mutex;
+  std::vector<geometry_msgs::PoseStamped> canonical_poses;
+  std::vector<geometry_msgs::PoseStamped> vision_poses;
+  ros::Subscriber canonical_sub = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/demand_sources_gate/canonical", 256,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        canonical_poses.push_back(*msg);
+      });
+  ros::Subscriber vision_sub = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/demand_sources_gate/vision", 256,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        vision_poses.push_back(*msg);
+      });
+
+  const auto connect_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < connect_deadline) {
+    ros::spinOnce();
+    if (canonical_sub.getNumPublishers() > 0 &&
+        vision_sub.getNumPublishers() > 0) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(canonical_sub.getNumPublishers(), 0u);
+  ASSERT_GT(vision_sub.getNumPublishers(), 0u);
+
+  auto wait_ros = [&](std::size_t expected_canonical,
+                      std::size_t expected_vision) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+      ros::spinOnce();
+      {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        if (canonical_poses.size() >= expected_canonical &&
+            vision_poses.size() >= expected_vision) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    // Give any unexpected extra vision messages a chance to arrive if broken.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ros::spinOnce();
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    EXPECT_EQ(expected_canonical, canonical_poses.size());
+    EXPECT_EQ(expected_vision, vision_poses.size());
+  };
+
+  auto fetch_health = [&]() {
+    source.demand({});
+    const std::size_t before = source.messages().size();
+    source.demand({"state.health"});
+    const auto frames = source.messages();
+    xgc::semantic::common::v1::VehicleHealth health;
+    for (std::size_t i = frames.size(); i > before; --i) {
+      if (frames[i - 1].channel_id() == "state.health" &&
+          health.ParseFromString(frames[i - 1].message().payload().value())) {
+        return health;
+      }
+    }
+    ADD_FAILURE() << "missing state.health response";
+    return health;
+  };
+
+  auto has_fault = [](const xgc::semantic::common::v1::VehicleHealth &health,
+                      const std::string &code) {
+    for (const auto &fault : health.faults()) {
+      if (fault.code() == code)
+        return true;
+    }
+    return false;
+  };
+
+  auto fetch_latest_error = [&]() {
+    source.demand({});
+    const std::size_t before = source.messages().size();
+    source.demand({"state.localization.error"});
+    const auto frames = source.messages();
+    for (std::size_t i = frames.size(); i > before; --i) {
+      if (frames[i - 1].channel_id() == "state.localization.error") {
+        xgc::semantic::common::v1::DistanceEstimate dist;
+        if (dist.ParseFromString(frames[i - 1].message().payload().value())) {
+          return dist.meters();
+        }
+      }
+    }
+    ADD_FAILURE() << "missing state.localization.error response";
+    return -1.0;
+  };
+
+  double ros_t = 10.0;
+  std::size_t expected_canonical = 0;
+  std::size_t expected_vision = 0;
+
+  // Regime 1: 20 pure-static frames (no +/-0.0005 jitter workaround) emit
+  // mocap.position.frozen with zero injection_held and publish 20/20 vision.
+  source.state();
+  for (int i = 0; i < 20; ++i) {
+    ros_t += 0.02;
+    source.localPose(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t - 0.05));
+    source.mocapPose(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 20;
+  expected_vision += 20;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    const auto health = fetch_health();
+    EXPECT_EQ(xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_FROZEN,
+              health.positioning().state());
+    EXPECT_TRUE(has_fault(health, "mocap.position.frozen"));
+    EXPECT_FALSE(has_fault(health, "mocap.vision.injection_held"));
+    EXPECT_FALSE(has_fault(health, "mocap.attitude.divergence"));
+    EXPECT_EQ("VRPN positioning data is frozen", health.summary());
+  }
+
+  // Regime 2: normal continuous motion (> 1.5 m cumulative without jumps).
+  source.state();
+  double cur_x = 0.0;
+  for (int i = 1; i <= 10; ++i) {
+    ros_t += 0.02;
+    cur_x = 0.25 * static_cast<double>(i);
+    source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                     ros::Time(ros_t - 0.05));
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 10;
+  expected_vision += 10;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Regime 3a: advancing-stamp pure static frames remain frozen without holding
+  // vision output and keep canonical raw.
+  source.state();
+  for (int i = 0; i < 8; ++i) {
+    ros_t += 0.02;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 8;
+  expected_vision += 8;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    const auto health = fetch_health();
+    EXPECT_EQ(xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_FROZEN,
+              health.positioning().state());
+    EXPECT_TRUE(has_fault(health, "mocap.position.frozen"));
+    EXPECT_FALSE(has_fault(health, "mocap.vision.injection_held"));
+    EXPECT_EQ("VRPN positioning data is frozen", health.summary());
+  }
+
+  // Regime 3b: duplicate timestamp, single out-of-order rejection, and clean
+  // 5-frame clock rollback reset (no +0.01 m workaround).
+  source.state();
+  std::int64_t zenoh_t = 100000000000LL;
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+
+  for (int i = 0; i < 2; ++i) {
+    source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  }
+  expected_canonical += 2;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  for (int i = 1; i <= 4; ++i) {
+    zenoh_t += 20000000LL;
+    source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  }
+  expected_canonical += 4;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  zenoh_t += 20000000LL;
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Single out-of-order Zenoh packet is rejected without lowering 100.10 s,
+  // then 5 advancing frames at 100.12..100.20 s resume.
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                            zenoh_t - 20000000LL);
+  expected_canonical += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+  for (int i = 1; i <= 4; ++i) {
+    zenoh_t += 20000000LL;
+    source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  }
+  expected_canonical += 4;
+  wait_ros(expected_canonical, expected_vision);
+  zenoh_t += 20000000LL;
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, zenoh_t);
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Real same-domain clock rollback to 50.00 s resets on the 5th consistent frame.
+  std::int64_t rb_t = 50000000000LL;
+  for (int i = 0; i < 4; ++i) {
+    source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, rb_t);
+    rb_t += 20000000LL;
+  }
+  expected_canonical += 4;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, rb_t);
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  rb_t += 20000000LL;
+  source.publishZenohSample(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, rb_t);
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+
+  // Regime 4: 115 ms VRPN timeout emits timeout + injection_held, then
+  // immediately resumes publishing on the very first smooth stationary frame.
+  ros_t += 0.02;
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(115));
+  source.state();
+  source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  {
+    const auto health = fetch_health();
+    EXPECT_EQ(
+        xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_TIMED_OUT,
+        health.positioning().state());
+    EXPECT_TRUE(has_fault(health, "mocap.position.timeout"));
+    EXPECT_TRUE(has_fault(health, "mocap.vision.injection_held"));
+  }
+  ros_t += 0.2;
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Regime 5: 115 ms timeout + 4.443 m jump + 8 pure static frames:
+  // frames 0..4 hold (with FROZEN not masking injection_held in summary),
+  // frames 5..8 publish cleanly while POSITIONING_STATE_FROZEN.
+  std::this_thread::sleep_for(std::chrono::milliseconds(115));
+  source.state();
+  ros_t += 0.15;
+  source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                   ros::Time(ros_t - 0.05));
+  cur_x += 4.443;
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_NEAR(4.443, fetch_latest_error(), 1e-6);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  for (int i = 1; i <= 4; ++i) {
+    ros_t += 0.02;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 4;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_TRUE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Frames 5..8 at identical (cur_x, 0, 1) wash out the pre-jump window so
+  // positioning becomes FROZEN while frame 5 releases and 6..8 also publish.
+  for (int i = 5; i <= 8; ++i) {
+    ros_t += 0.02;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 4;
+  expected_vision += 4;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    EXPECT_NEAR(cur_x, vision_poses.back().pose.position.x, 1e-9);
+    EXPECT_NEAR(1.0, vision_poses.back().pose.position.z, 1e-9);
+  }
+  {
+    const auto health = fetch_health();
+    EXPECT_EQ(
+        xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_FROZEN,
+        health.positioning().state());
+    EXPECT_TRUE(has_fault(health, "mocap.position.frozen"));
+    EXPECT_FALSE(has_fault(health, "mocap.vision.injection_held"));
+    EXPECT_EQ("VRPN positioning data is frozen", health.summary());
+  }
+
+  // While FROZEN, triggering an active gate hold (repeated ROS stamp) must
+  // surface "MAVROS vision_pose injection is held" instead of being masked by FROZEN.
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 1;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    const auto health = fetch_health();
+    EXPECT_EQ(
+        xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_FROZEN,
+        health.positioning().state());
+    EXPECT_TRUE(has_fault(health, "mocap.position.frozen"));
+    EXPECT_TRUE(has_fault(health, "mocap.vision.injection_held"));
+    EXPECT_EQ("MAVROS vision_pose injection is held", health.summary());
+  }
+  for (int i = 1; i <= 4; ++i) {
+    ros_t += 0.02;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  ros_t += 0.02;
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 5;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Regime 6: 0.0 m XYZ error + 179/172/178 deg flips while FC is online,
+  // recovering cleanly on 5 stationary aligned frames.
+  source.state();
+  const double flip_angles[] = {179.0, 172.0, 178.0};
+  for (const double angle_deg : flip_angles) {
+    source.demand({});
+    source.demand({"state.vision.pose"});
+    ros_t += 0.02;
+    const double half = (angle_deg * kPi / 180.0) * 0.5;
+    source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                     ros::Time(ros_t - 0.05));
+    const std::size_t before_flip = source.messages().size();
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, std::sin(half), std::cos(half),
+                     ros::Time(ros_t));
+    expected_canonical += 1;
+    wait_ros(expected_canonical, expected_vision);
+    const auto frames = source.messages();
+    for (std::size_t idx = before_flip; idx < frames.size(); ++idx) {
+      EXPECT_NE("state.vision.pose", frames[idx].channel_id());
+    }
+    EXPECT_DOUBLE_EQ(0.0, fetch_latest_error());
+    const auto health = fetch_health();
+    EXPECT_TRUE(has_fault(health, "mocap.attitude.divergence"));
+    EXPECT_TRUE(has_fault(health, "mocap.vision.injection_held"));
+  }
+
+  for (int i = 0; i < 5; ++i) {
+    ros_t += 0.02;
+    source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                     ros::Time(ros_t - 0.05));
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  }
+  expected_canonical += 5;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    const auto health = fetch_health();
+    EXPECT_TRUE(has_fault(health, "mocap.attitude.divergence"));
+    EXPECT_TRUE(has_fault(health, "mocap.vision.injection_held"));
+  }
+
+  ros_t += 0.02;
+  source.localPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+                   ros::Time(ros_t - 0.05));
+  source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+  expected_canonical += 1;
+  expected_vision += 1;
+  wait_ros(expected_canonical, expected_vision);
+  {
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    EXPECT_NEAR(0.0, vision_poses.back().pose.orientation.z, 1e-12);
+    EXPECT_NEAR(1.0, vision_poses.back().pose.orientation.w, 1e-12);
+    EXPECT_NEAR(cur_x, vision_poses.back().pose.position.x, 1e-9);
+  }
+  {
+    const auto health = fetch_health();
+    EXPECT_FALSE(has_fault(health, "mocap.attitude.divergence"));
+    EXPECT_FALSE(has_fault(health, "mocap.vision.injection_held"));
+  }
+
+  // Regime 7: 20 repeated cycles of timeout resume + jump/static recovery
+  // complete without deadlock accumulation.
+  for (int round = 0; round < 20; ++round) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(115));
+    source.state();
+    ros_t += 0.15;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+    expected_canonical += 1;
+    expected_vision += 1;
+
+    ros_t += 0.02;
+    cur_x += 3.0;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+    expected_canonical += 1;
+    for (int f = 1; f <= 4; ++f) {
+      ros_t += 0.02;
+      source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+      expected_canonical += 1;
+    }
+    ros_t += 0.02;
+    source.mocapPose(cur_x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(ros_t));
+    expected_canonical += 1;
+    expected_vision += 1;
+    wait_ros(expected_canonical, expected_vision);
+  }
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  source.stop();
+}
+
+TEST(StatusDemand, DefaultOffProductionSafetyPublishesVisionWhileEmittingHonestDiagnostics) {
+  constexpr double kPi = 3.14159265358979323846;
+  auto build_vrpn = [](const std::string &profile_id) {
+    xgc2_ros1_robot_adapter::RobotConfig cfg;
+    cfg.robot_id = "prod_safe";
+    cfg.profile_id = profile_id;
+    cfg.parameters["namespace"] = "/prod_safe";
+    cfg.parameters["mocap_rigid_body"] = "uav1";
+    cfg.parameters["mocap_source_root"] = "/vrpn_client_node";
+    cfg.parameters["localization_offset_x"] = "0.0";
+    cfg.parameters["localization_offset_y"] = "0.0";
+    cfg.parameters["localization_offset_z"] = "0.0";
+    cfg.parameters["positioning_frame_number"] = "5";
+    cfg.parameters["positioning_comparison_threshold_m"] = "0.05";
+    NativeProfileConfig native;
+    std::string error;
+    EXPECT_TRUE(BuildNativeProfileConfig(cfg, &native, &error)) << error;
+    return native;
+  };
+  const auto physical_native = build_vrpn("px4-multirotor.physical.vrpn");
+  const auto gazebo_native = build_vrpn("px4-multirotor.gazebo.vrpn");
+  ASSERT_FALSE(physical_native.vision_injection_gate.enabled);
+  ASSERT_FALSE(gazebo_native.vision_injection_gate.enabled);
+
+  StatusDemandHarness source(true, "/default_off/canonical",
+                             "/default_off/vision", {}, {}, 0.05,
+                             physical_native.vision_injection_gate,
+                             "prod_safe", "/default_off");
+  ros::NodeHandle nh;
+  std::mutex ros_mutex;
+  std::vector<geometry_msgs::PoseStamped> vision_poses;
+  ros::Subscriber vision_sub = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/default_off/vision", 50,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        vision_poses.push_back(*msg);
+      });
+  const auto connect_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < connect_deadline) {
+    ros::spinOnce();
+    if (vision_sub.getNumPublishers() > 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(vision_sub.getNumPublishers(), 0u);
+
+  auto wait_vision = [&](std::size_t expected) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+      ros::spinOnce();
+      {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        if (vision_poses.size() >= expected)
+          break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    EXPECT_EQ(expected, vision_poses.size());
+  };
+  auto has_fault = [](const xgc::semantic::common::v1::VehicleHealth &health,
+                      const std::string &code) {
+    for (const auto &fault : health.faults()) {
+      if (fault.code() == code)
+        return true;
+    }
+    return false;
+  };
+  auto fetch_health = [&]() {
+    source.demand({});
+    const std::size_t before = source.messages().size();
+    source.demand({"state.health"});
+    const auto frames = source.messages();
+    xgc::semantic::common::v1::VehicleHealth health;
+    for (std::size_t i = frames.size(); i > before; --i) {
+      if (frames[i - 1].channel_id() == "state.health" &&
+          health.ParseFromString(frames[i - 1].message().payload().value())) {
+        return health;
+      }
+    }
+    ADD_FAILURE() << "missing state.health";
+    return health;
+  };
+  auto fetch_error = [&]() {
+    source.demand({});
+    const std::size_t before = source.messages().size();
+    source.demand({"state.localization.error"});
+    const auto frames = source.messages();
+    for (std::size_t i = frames.size(); i > before; --i) {
+      if (frames[i - 1].channel_id() == "state.localization.error") {
+        xgc::semantic::common::v1::DistanceEstimate dist;
+        if (dist.ParseFromString(frames[i - 1].message().payload().value()))
+          return dist.meters();
+      }
+    }
+    ADD_FAILURE() << "missing state.localization.error";
+    return -1.0;
+  };
+
+  source.state();
+  double t = 20.0;
+  for (int i = 0; i < 6; ++i) {
+    t += 0.02;
+    source.localPose(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t - 0.05));
+    source.mocapPose(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t));
+  }
+  wait_vision(6);
+
+  // Default-off gate NEVER holds 4.443 m jump, still reports truthful error.
+  t += 0.02;
+  source.localPose(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t - 0.05));
+  source.mocapPose(4.443, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t));
+  wait_vision(7);
+  EXPECT_NEAR(4.443, fetch_error(), 1e-6);
+  EXPECT_FALSE(has_fault(fetch_health(), "mocap.vision.injection_held"));
+
+  // Default-off gate NEVER holds 179 deg flip, still emits non-intrusive
+  // mocap.attitude.divergence and keeps online == true.
+  t += 0.02;
+  const double half = (179.0 * kPi / 180.0) * 0.5;
+  source.localPose(4.443, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t - 0.05));
+  source.mocapPose(4.443, 0.0, 1.0, 0.0, 0.0, std::sin(half), std::cos(half),
+                   ros::Time(t));
+  wait_vision(8);
+  {
+    const auto health = fetch_health();
+    EXPECT_TRUE(health.online());
+    EXPECT_TRUE(has_fault(health, "mocap.attitude.divergence"));
+    EXPECT_FALSE(has_fault(health, "mocap.vision.injection_held"));
+    EXPECT_EQ("Mocap attitude diverges from flight controller", health.summary());
+  }
+  source.stop();
+}
+
+TEST(StatusDemand, LiveRosMocapSubscriberQueueOneDropsIntermediateBursts) {
+  VisionInjectionGateConfig gate_cfg;
+  gate_cfg.enabled = false;
+  StatusDemandHarness source(true, "/queue1/canonical", "/queue1/vision", {}, {},
+                             0.05, gate_cfg, "queue1", "/queue1");
+
+  ros::NodeHandle nh;
+  ros::Publisher mocap_pub =
+      nh.advertise<geometry_msgs::PoseStamped>("/queue1/mocap", 50);
+  std::mutex ros_mutex;
+  std::vector<geometry_msgs::PoseStamped> vision_poses;
+  ros::Subscriber vision_sub = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/queue1/vision", 50,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        vision_poses.push_back(*msg);
+      });
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    ros::spinOnce();
+    if (mocap_pub.getNumSubscribers() > 0 && vision_sub.getNumPublishers() > 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(mocap_pub.getNumSubscribers(), 0u);
+  ASSERT_GT(vision_sub.getNumPublishers(), 0u);
+
+  // Publish 20 frames rapidly without spinning callbacks so roscpp's
+  // queue_size=1 subscription drops stale backlog and delivers the newest pose.
+  for (int i = 1; i <= 20; ++i) {
+    geometry_msgs::PoseStamped msg;
+    msg.header.frame_id = "world";
+    msg.header.stamp = ros::Time(30.0 + 0.02 * i);
+    msg.pose.position.x = static_cast<double>(i);
+    msg.pose.position.z = 1.0;
+    msg.pose.orientation.w = 1.0;
+    mocap_pub.publish(msg);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+
+  const auto pump_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < pump_deadline) {
+    ros::spinOnce();
+    {
+      std::lock_guard<std::mutex> lock(ros_mutex);
+      if (!vision_poses.empty() && vision_poses.back().pose.position.x >= 20.0)
+        break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ros::spinOnce();
+  {
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    ASSERT_FALSE(vision_poses.empty());
+    EXPECT_LT(vision_poses.size(), 5u);
+    EXPECT_NEAR(20.0, vision_poses.back().pose.position.x, 1e-9);
+  }
+  source.stop();
+}
+
+TEST(StatusDemand, MultiUavSingleProcessIsolatesVisionGatingAndHealth) {
+  VisionInjectionGateConfig gate_cfg;
+  gate_cfg.enabled = true;
+  StatusDemandHarness uav1(true, "/uav1_src/canonical", "/uav1_src/vision", {},
+                           {}, 0.05, gate_cfg, "uav1", "/uav1_src");
+  StatusDemandHarness uav2(true, "/uav2_src/canonical", "/uav2_src/vision", {},
+                           {}, 0.05, gate_cfg, "uav2", "/uav2_src");
+  StatusDemandHarness uav3(true, "/uav3_src/canonical", "/uav3_src/vision", {},
+                           {}, 0.05, gate_cfg, "uav3", "/uav3_src");
+
+  ros::NodeHandle nh;
+  std::mutex ros_mutex;
+  std::vector<geometry_msgs::PoseStamped> v1, v2, v3;
+  ros::Subscriber s1 = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/uav1_src/vision", 50,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        v1.push_back(*msg);
+      });
+  ros::Subscriber s2 = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/uav2_src/vision", 50,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        v2.push_back(*msg);
+      });
+  ros::Subscriber s3 = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/uav3_src/vision", 50,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        v3.push_back(*msg);
+      });
+
+  const auto connect_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < connect_deadline) {
+    ros::spinOnce();
+    if (s1.getNumPublishers() > 0 && s2.getNumPublishers() > 0 &&
+        s3.getNumPublishers() > 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(s1.getNumPublishers(), 0u);
+  ASSERT_GT(s2.getNumPublishers(), 0u);
+  ASSERT_GT(s3.getNumPublishers(), 0u);
+
+  auto wait_counts = [&](std::size_t e1, std::size_t e2, std::size_t e3) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+      ros::spinOnce();
+      {
+        std::lock_guard<std::mutex> lock(ros_mutex);
+        if (v1.size() >= e1 && v2.size() >= e2 && v3.size() >= e3)
+          break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ros::spinOnce();
+    std::lock_guard<std::mutex> lock(ros_mutex);
+    EXPECT_EQ(e1, v1.size());
+    EXPECT_EQ(e2, v2.size());
+    EXPECT_EQ(e3, v3.size());
+  };
+  auto fetch_health = [](StatusDemandHarness &h) {
+    h.demand({});
+    const std::size_t before = h.messages().size();
+    h.demand({"state.health"});
+    const auto frames = h.messages();
+    xgc::semantic::common::v1::VehicleHealth out;
+    for (std::size_t i = frames.size(); i > before; --i) {
+      if (frames[i - 1].channel_id() == "state.health" &&
+          out.ParseFromString(frames[i - 1].message().payload().value()))
+        return out;
+    }
+    ADD_FAILURE() << "missing state.health";
+    return out;
+  };
+  auto has_fault = [](const xgc::semantic::common::v1::VehicleHealth &health,
+                      const std::string &code) {
+    for (const auto &fault : health.faults()) {
+      if (fault.code() == code)
+        return true;
+    }
+    return false;
+  };
+
+  uav1.state();
+  uav2.state();
+  uav3.state();
+  double t1 = 40.0, t2 = 40.0, t3 = 40.0;
+  for (int i = 0; i < 6; ++i) {
+    t1 += 0.02; t2 += 0.02; t3 += 0.02;
+    uav1.mocapPose(1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t1));
+    uav2.mocapPose(2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t2));
+    uav3.mocapPose(3.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t3));
+  }
+  std::size_t e1 = 6, e2 = 6, e3 = 6;
+  wait_counts(e1, e2, e3);
+
+  // Silence uav1 for 120 ms while keeping uav2 and uav3 alive every 40 ms.
+  for (int k = 0; k < 3; ++k) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    t2 += 0.04; t3 += 0.04;
+    uav2.mocapPose(2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t2));
+    uav3.mocapPose(3.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t3));
+    ++e2; ++e3;
+  }
+  wait_counts(e1, e2, e3);
+
+  // Inject 4.443 m jump into uav2 while uav3 hovers cleanly and uav1 resumes.
+  {
+    const auto h1 = fetch_health(uav1);
+    EXPECT_TRUE(h1.online());
+    EXPECT_EQ(
+        xgc::semantic::common::v1::PositioningHealth::POSITIONING_STATE_TIMED_OUT,
+        h1.positioning().state());
+    EXPECT_TRUE(has_fault(h1, "mocap.vision.injection_held"));
+  }
+  t1 += 0.15;
+  uav1.mocapPose(1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t1));
+  ++e1; // Immediate reversible timeout resume on uav1!
+
+  t2 += 0.02;
+  uav2.mocapPose(2.0 + 4.443, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t2));
+  // uav2 holds while uav3 keeps publishing!
+  t3 += 0.02;
+  uav3.mocapPose(3.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t3));
+  ++e3;
+  wait_counts(e1, e2, e3);
+
+  const auto h1_resumed = fetch_health(uav1);
+  const auto h2_held = fetch_health(uav2);
+  const auto h3_ok = fetch_health(uav3);
+  EXPECT_TRUE(h1_resumed.online());
+  EXPECT_TRUE(h2_held.online());
+  EXPECT_TRUE(h3_ok.online());
+  EXPECT_FALSE(has_fault(h1_resumed, "mocap.vision.injection_held"));
+  EXPECT_TRUE(has_fault(h2_held, "mocap.vision.injection_held"));
+  EXPECT_FALSE(has_fault(h3_ok, "mocap.vision.injection_held"));
+
+  for (int f = 1; f <= 4; ++f) {
+    t2 += 0.02; t3 += 0.02;
+    uav2.mocapPose(2.0 + 4.443, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t2));
+    uav3.mocapPose(3.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t3));
+    ++e3;
+  }
+  wait_counts(e1, e2, e3);
+
+  t2 += 0.02; t3 += 0.02;
+  uav2.mocapPose(2.0 + 4.443, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t2));
+  uav3.mocapPose(3.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, ros::Time(t3));
+  ++e2; ++e3;
+  wait_counts(e1, e2, e3);
+  EXPECT_FALSE(has_fault(fetch_health(uav2), "mocap.vision.injection_held"));
+
+  uav1.stop();
+  uav2.stop();
+  uav3.stop();
+}
+
 TEST(StatusDemand, StopJoinsAnOpeningSnapshotEmitter) {
   StatusDemandHarness source;
   source.pose(7);

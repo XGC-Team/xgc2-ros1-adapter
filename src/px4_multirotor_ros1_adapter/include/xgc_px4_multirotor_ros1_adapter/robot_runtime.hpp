@@ -33,6 +33,7 @@
 #include "xgc2_ros1_robot_adapter/localization_projection.hpp"
 #include "xgc2_ros1_robot_adapter/zenoh_localization_input.hpp"
 #include "xgc2_ros1_robot_adapter/robot_domain.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/position_error_window.hpp"
 
 namespace xgc_px4_multirotor_ros1_adapter {
 namespace contract = xgc2_ros1_robot_adapter::contract;
@@ -69,10 +70,73 @@ struct NativeProfileConfig {
   // Core silence after which an active motion intent is released; 0 = never.
   std::int64_t remote_control_core_silence_ms = 0;
   bool publish_vision = true;
-  double vision_publish_rate_hz = 30.0;
+  double localization_delay_seconds = 0.0;
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
   std::vector<std::string> allowed_modes;
+  struct VisionInjectionGateConfig {
+    bool enabled = false;
+    double max_vision_position_jump_m = 1.5;
+    double max_vision_attitude_jump_rad = 1.0471975511965976;
+    std::size_t recovery_consistent_frames = 5u;
+  } vision_injection_gate;
+};
+
+using VisionInjectionGateConfig = NativeProfileConfig::VisionInjectionGateConfig;
+
+bool validVisionInjectionGateConfig(const VisionInjectionGateConfig &config,
+                                    std::string *error);
+double quaternionAngularDistanceRad(const geometry_msgs::Quaternion &left,
+                                    const geometry_msgs::Quaternion &right);
+
+struct VisionInjectionDecision {
+  bool allow_publish = true;
+  bool held = false;
+  bool attitude_divergent = false;
+  bool non_advancing_source_time = false;
+  bool position_jump_detected = false;
+  bool attitude_flip_detected = false;
+  std::size_t consistent_frames = 0u;
+};
+
+// Stateful MAVROS vision_pose injection protection gate. Keeps raw observation
+// streams unaltered while blocking stale, non-advancing, jumping, or attitude-
+// flipped poses from entering PX4 EKF2 until recovery hysteresis completes.
+class VisionInjectionGate {
+public:
+  explicit VisionInjectionGate(VisionInjectionGateConfig config = {});
+
+  bool enabled() const { return config_.enabled; }
+  const VisionInjectionGateConfig &config() const { return config_; }
+
+  VisionInjectionDecision evaluate(
+      const geometry_msgs::PoseStamped &projected_pose,
+      xgc2_ros1_robot_adapter::PositioningHealthState positioning_state,
+      bool prior_timed_out,
+      bool has_source_time,
+      std::int64_t source_time_nanos,
+      xgc::v1::ClockDomain source_clock_domain,
+      bool fc_online,
+      const geometry_msgs::Quaternion *fc_orientation);
+
+  void noteInvalidPose();
+  bool isHeld() const { return held_; }
+  bool heldByAttitude() const { return held_ && attitude_hold_active_; }
+
+private:
+  VisionInjectionGateConfig config_;
+  bool has_previous_pose_ = false;
+  geometry_msgs::PoseStamped previous_pose_;
+  bool has_previous_time_ = false;
+  std::int64_t previous_time_nanos_ = 0;
+  xgc::v1::ClockDomain previous_clock_domain_ = xgc::v1::CLOCK_DOMAIN_UNSPECIFIED;
+  bool held_ = false;
+  bool attitude_hold_active_ = false;
+  std::size_t consistent_frames_ = 0u;
+  bool rollback_candidate_active_ = false;
+  std::int64_t rollback_last_time_nanos_ = 0;
+  geometry_msgs::PoseStamped rollback_last_pose_;
+  std::size_t rollback_consistent_frames_ = 0u;
 };
 
 bool BuildNativeProfileConfig(
@@ -204,6 +268,8 @@ private:
       xgc::semantic::common::v1::VehicleHealth *payload) const;
   std::uint64_t sourceAgeMillisLocked(const std::string &channel_id,
                                       const ros::WallTime &now) const;
+  const geometry_msgs::Quaternion *
+  onlineFcOrientationLocked(const ros::WallTime &now, bool fc_online) const;
 
   void px4PoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message);
   void mocapPoseCallback(const geometry_msgs::PoseStamped::ConstPtr &message,
@@ -258,6 +324,8 @@ private:
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
+  VisionInjectionGate vision_injection_gate_;
+  PositionErrorWindow position_error_;
 
   const std::string pose_endpoint_;
   const std::string velocity_endpoint_;
@@ -307,16 +375,12 @@ private:
   bool has_attitude_setpoint_ = false;
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
-  geometry_msgs::Point local_position_;
-  geometry_msgs::Point mocap_position_;
-  std::string local_position_frame_id_;
-  ros::Time localization_error_stamp_;
-  bool has_local_position_ = false;
-  bool has_mocap_position_ = false;
-  bool local_position_frame_valid_ = false;
   geometry_msgs::PoseStamped::ConstPtr latest_pose_, latest_mocap_pose_;
   xgc::v1::TimePoint latest_mocap_pose_source_time_;
   bool has_mocap_pose_source_time_ = false;
+  geometry_msgs::PoseStamped latest_projected_mocap_pose_;
+  bool has_projected_mocap_pose_ = false;
+  bool has_mocap_pose_observation_ = false;
   geometry_msgs::PoseStamped latest_vision_pose_;
   xgc::v1::TimePoint latest_vision_source_time_;
   bool has_vision_pose_ = false;
@@ -348,7 +412,6 @@ private:
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization_;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization_;
   std::unique_ptr<xgc2_ros1_robot_adapter::ZenohLocalizationInput> zenoh_input_;
-  xgc2_ros1_robot_adapter::VisionPublishCadence vision_publish_cadence_;
 
   ros::Subscriber pose_subscriber_;
   ros::Subscriber mocap_subscriber_;

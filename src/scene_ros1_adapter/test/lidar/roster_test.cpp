@@ -90,35 +90,35 @@ const GoldenCase
             {"bridge preset refuses penetrating beams",
              R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"bridge_equivalent","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json(penetrating sampled clouds have no beams)json", true},
-            {"CPU crop preset",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"zju_cpu_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading cone crop preset",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"heading_cone_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"penetrating","rateHz":10,"rangeMeters":5,"hFovDeg":360,"vFovDeg":180,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0.5,"verticalSlabTan":0.5773502691896258,"publishBeams":false,"backend":"cpu"}]})json"},
-            {"CPU crop preset with explicit depth",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu","preset":"zju_cpu_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading cone crop preset with explicit depth",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu","preset":"heading_cone_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"depth_frustum","rateHz":10,"rangeMeters":5,"hFovDeg":90,"vFovDeg":60,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0.5,"verticalSlabTan":0.5773502691896258,"publishBeams":false,"backend":"cpu"}]})json"},
-            {"CPU crop preset with raycast beams",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"zju_cpu_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading cone crop preset with raycast beams",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"heading_cone_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"raycast","rateHz":10,"rangeMeters":5,"hFovDeg":360,"vFovDeg":180,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0.5,"verticalSlabTan":0.5773502691896258,"publishBeams":true,"backend":"cpu"}]})json"},
-            {"CPU crop preset with native raycast",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"zju_cpu_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading cone crop preset with native raycast",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"heading_cone_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
-            {"CPU crop preset refuses penetrating beams",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"zju_cpu_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading cone crop preset refuses penetrating beams",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"heading_cone_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json(penetrating sampled clouds have no beams)json", true},
-            {"ego crop preset",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"zju_cpu_crop_ego_v2"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading halfspace crop preset",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"heading_halfspace_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"penetrating","rateHz":10,"rangeMeters":5,"hFovDeg":360,"vFovDeg":180,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0,"verticalSlabTan":0.5773502691896258,"publishBeams":false,"backend":"cpu"}]})json"},
-            {"ego crop preset with explicit depth",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu","preset":"zju_cpu_crop_ego_v2"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading halfspace crop preset with explicit depth",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum","acceleration":"cpu","preset":"heading_halfspace_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"depth_frustum","rateHz":10,"rangeMeters":5,"hFovDeg":90,"vFovDeg":60,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0,"verticalSlabTan":0.5773502691896258,"publishBeams":false,"backend":"cpu"}]})json"},
-            {"ego crop preset with raycast beams",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"zju_cpu_crop_ego_v2","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading halfspace crop preset with raycast beams",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"heading_halfspace_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[{"namespace":"/robot","mode":"raycast","rateHz":10,"rangeMeters":5,"hFovDeg":360,"vFovDeg":180,"hRes":360,"vRes":32,"surfaceSpacing":0.1,"keepBuried":true,"headingCrop":true,"headingCosMin":0,"verticalSlabTan":0.5773502691896258,"publishBeams":true,"backend":"cpu"}]})json"},
-            {"ego crop preset with native raycast",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"zju_cpu_crop_ego_v2"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading halfspace crop preset with native raycast",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","acceleration":"cpu","preset":"heading_halfspace_crop"}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json({"schemaVersion":1,"robots":[]})json"},
-            {"ego crop preset refuses penetrating beams",
-             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"zju_cpu_crop_ego_v2","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
+            {"heading halfspace crop preset refuses penetrating beams",
+             R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"","acceleration":"cpu","preset":"heading_halfspace_crop","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
              R"json(penetrating sampled clouds have no beams)json", true},
             {"penetrating refuses beams",
              R"json({"runMode":"simulation","robots":[{"slotId":"slot","assetId":"asset","assetCommitId":"frozen","name":"Robot","kind":"scout_mini","namespace":"/robot","profile":{},"binding":{"hybridSource":"simulation","simulationSensors":{"simpleLidar":{"enabled":true,"mode":"penetrating","acceleration":"cpu","publishBeams":true}}},"asset":{},"source":"simulation"}],"visualizationTopics":[]})json",
@@ -453,7 +453,7 @@ TEST(Roster, SavedXsimCloudInheritsSceneBackendWithoutChangingObservations) {
   const auto original = parseSessionInput(R"json({"runMode":"simulation","scene":{"simulator":"xsim"},
     "robots":[
       {"source":"simulation","namespace":"/rays","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"raycast","rateHz":25,"rangeMeters":12,"hRes":24,"vRes":8}}}},
-      {"source":"simulation","namespace":"/samples","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"","preset":"zju_cpu_crop"}}}},
+      {"source":"simulation","namespace":"/samples","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"acceleration":"","preset":"heading_cone_crop"}}}},
       {"source":"simulation","namespace":"/camera","binding":{"simulationSensors":{"simpleLidar":{"enabled":true,"mode":"depth_frustum"}}}}
     ],"visualizationTopics":[]})json");
   const auto baseline = buildFleetJson(original, true);
@@ -549,7 +549,7 @@ TEST(Roster, SceneBackendDoesNotChangeGeometryOrGazeboFleet) {
 TEST(Roster, CropFloatRoundTripsExactlyLikePython) {
   const auto input = parseSessionInput(R"json({"runMode":"simulation","robots":[
     {"source":"simulation","namespace":"/crop","binding":{"simulationSensors":{"simpleLidar":{
-      "enabled":true,"preset":"zju_cpu_crop","acceleration":"cpu"}}}}
+      "enabled":true,"preset":"heading_cone_crop","acceleration":"cpu"}}}}
     ],"visualizationTopics":[]})json");
   const auto manifest = buildFleetJson(input);
   // Python's 1 / math.sqrt(3), not the one-ULP-lower Math default tan(pi/6).

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <unistd.h>
 #include <zenoh.h>
@@ -256,6 +257,109 @@ TEST(ZenohLocalizationInput, StopJoinsAnInFlightCallbackBeforeDrop) {
   ASSERT_EQ(std::future_status::ready,
             stopping.wait_for(std::chrono::seconds(3)));
   stopping.get();
+  input.reset();
+  z_drop(z_move(publisher));
+  z_drop(z_move(publisher_session));
+}
+
+TEST(ZenohLocalizationInput, PoseCallbacksCoalesceBurstsToLatestSampleWhenBusy) {
+  const std::uint16_t port =
+      static_cast<std::uint16_t>(20000u + (getpid() % 20000) + 2u);
+  const std::string endpoint = "tcp/127.0.0.1:" + std::to_string(port);
+  const std::string listen_config =
+      "{\"mode\":\"peer\",\"listen\":{\"endpoints\":[\"" + endpoint +
+      "\"]},\"scouting\":{\"multicast\":{\"enabled\":false},"
+      "\"gossip\":{\"enabled\":false}}}";
+  z_owned_config_t config;
+  ASSERT_GE(zc_config_from_str(&config, listen_config.c_str()), 0);
+  z_owned_session_t publisher_session;
+  ASSERT_GE(z_open(&publisher_session, z_move(config), nullptr), 0);
+
+  ZenohLocalizationBinding binding;
+  binding.endpoint = endpoint;
+  binding.source = "gazebo";
+  binding.tracker = "uav1";
+  const std::string key = ZenohLocalizationKey(binding, "pose");
+  z_view_keyexpr_t key_expression;
+  ASSERT_GE(z_view_keyexpr_from_str(&key_expression, key.c_str()), 0);
+  z_owned_publisher_t publisher;
+  ASSERT_GE(z_declare_publisher(z_loan(publisher_session), &publisher,
+                                z_loan(key_expression), nullptr),
+            0);
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<std::int64_t> observed_nanos;
+  bool block_first = true;
+  std::string error;
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [&](const ZenohPoseSample &sample) {
+    std::unique_lock<std::mutex> lock(mutex);
+    observed_nanos.push_back(sample.report_time_nanos);
+    const bool should_block = (observed_nanos.size() == 1u) && block_first;
+    changed.notify_all();
+    if (should_block) {
+      changed.wait(lock, [&] { return !block_first; });
+    }
+  };
+  auto input = ZenohLocalizationInput::Open(binding, std::move(callbacks),
+                                            &error);
+  ASSERT_NE(nullptr, input) << error;
+
+  auto publish_t = [&](std::int64_t t_ns) {
+    xgc2::vrpn_zenoh::v1::Pose sample;
+    sample.mutable_report_time()->set_nanoseconds(t_ns);
+    sample.mutable_report_time()->set_clock_domain(xgc::v1::CLOCK_DOMAIN_STEADY);
+    sample.mutable_orientation_xyzw()->set_w(1.0);
+    std::string payload;
+    ASSERT_TRUE(sample.SerializeToString(&payload));
+    z_owned_bytes_t bytes;
+    ASSERT_GE(z_bytes_copy_from_buf(
+                  &bytes,
+                  reinterpret_cast<const std::uint8_t *>(payload.data()),
+                  payload.size()),
+              0);
+    ASSERT_GE(z_publisher_put(z_loan(publisher), z_move(bytes), nullptr), 0);
+  };
+
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (observed_nanos.empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      publish_t(100);
+      changed.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    ASSERT_FALSE(observed_nanos.empty());
+  }
+
+  // Send a rapid burst while callback #1 is stalled; intermediate frames
+  // must overwrite the single pending slot without queuing a replay backlog.
+  for (std::int64_t t = 200; t <= 2000; t += 100) {
+    publish_t(t);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    block_first = false;
+  }
+  changed.notify_all();
+
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    changed.wait_until(lock, deadline, [&] {
+      return !observed_nanos.empty() && observed_nanos.back() == 2000;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_LT(observed_nanos.size(), 5u);
+    EXPECT_EQ(100, observed_nanos.front());
+    EXPECT_EQ(2000, observed_nanos.back());
+  }
+
+  input->Stop();
   input.reset();
   z_drop(z_move(publisher));
   z_drop(z_move(publisher_session));

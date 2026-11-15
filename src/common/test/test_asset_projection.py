@@ -65,6 +65,54 @@ def mecanum_asset():
 
 
 class AssetProjectionTest(unittest.TestCase):
+    def test_extrinsic_is_only_for_real_plant_not_physical_carrier(self):
+        import json
+        asset = px4_asset()
+        calibration = dict(rigidBodyName="tracked_body", translation=[.04, -.03, .02],
+                           rotation=[0, 0, 0, 1], identifiedDelayMs=47.25,
+                           calibrationRunId="calibration-run", capturedAt="2026-11-15T00:00:00Z")
+        asset["px4"]["mocapCalibration"] = calibration
+        for mode, source, simulator in (("physical", "physical", "none"),
+                                        ("hybrid", "physical", "xsim"),
+                                        ("hybrid", "simulation", "xsim"),
+                                        ("simulation", "simulation", "gazebo"),
+                                        ("simulation", "simulation", "xsim")):
+            with self.subTest(mode=mode, source=source, simulator=simulator):
+                row = dict(source=source, model=model("px4_multirotor", 0),
+                           binding=binding("slot", "/uav1", source=source),
+                           physicalBinding=dict(assetId="real-airframe", assetCommitId="pin", asset=asset))
+                result = projection.project(row, context(mode=mode, simulator=simulator))
+                params = result["parameters"]
+                self.assertEqual("mocap_marker_from_body" in params, source == "physical")
+                if source == "physical":
+                    self.assertEqual(json.loads(params["mocap_marker_from_body"]),
+                                     dict(translation=calibration["translation"], rotation=calibration["rotation"]))
+                self.assertNotIn("localization_delay_ms", params)
+                self.assertNotIn("identifiedDelayMs", params)
+
+        # V6 Carrier x Plant: a physical onboard carrier (asset-agent) running XSim
+        # (plant="simulation", source="simulation", e.g. FS150-17) never receives
+        # mocap_marker_from_body; only plant="physical" (REAL, source="physical") does.
+        for plant, expect_extrinsic in (("simulation", False), ("physical", True)):
+            with self.subTest(carrier="asset-agent", plant=plant):
+                slot_binding = binding("slot-17", "/uav4")
+                del slot_binding["hybridSource"]
+                slot_binding["slotDeployment"] = {"resource": {"kind": "asset-agent"}, "plant": plant}
+                row = dict(source=plant, model=model("px4_multirotor", 0),
+                           binding=slot_binding,
+                           physicalBinding=dict(assetId="real-airframe", assetCommitId="pin", asset=asset))
+                result = projection.project(row, context(mode="hybrid", simulator="xsim"))
+                params = result["parameters"]
+                self.assertEqual("mocap_marker_from_body" in params, expect_extrinsic)
+                self.assertEqual("mocapCalibration" in result["derived"], expect_extrinsic)
+                self.assertNotIn("localization_delay_ms", params)
+                self.assertNotIn("identifiedDelayMs", params)
+                if expect_extrinsic:
+                    self.assertEqual(json.loads(params["mocap_marker_from_body"]),
+                                     dict(translation=calibration["translation"], rotation=calibration["rotation"]))
+                    self.assertEqual(result["derived"]["mocapCalibration"],
+                                     dict(calibrationRunId="calibration-run", capturedAt="2026-11-15T00:00:00Z"))
+
     def test_v18_uses_effective_source_without_legacy_binding_field(self):
         authored = binding("slot", "/uav1")
         del authored["hybridSource"]
@@ -374,6 +422,40 @@ class AssetProjectionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             project(missing, context(simulator="gazebo"))
         self.assertNotIn("applyModelDynamics", missing["binding"])
+
+    def test_custom_px4_model_id_projection(self):
+        for model_id, ros_slug in (("x500", "x500"), ("px4-custom", "px4_custom")):
+            with self.subTest(model_id=model_id):
+                row = project(
+                    dict(model=dict(robotKind="px4_multirotor", modelId=model_id, ordinal=2),
+                         binding=binding("slot", "/uav2")),
+                    context(simulator="gazebo"),
+                )
+                self.assertEqual(row["derived"]["modelId"], model_id)
+                self.assertEqual(row["derived"]["sitlInstanceId"], 2)
+                vis = row["derived"]["visualization"]
+                self.assertEqual(vis["sceneClass"], ros_slug)
+                self.assertEqual(vis["descriptionPackage"], ros_slug + "_description")
+                self.assertEqual(vis["descriptionFile"], "urdf/" + ros_slug + "_visual.urdf")
+
+                asset = px4_asset()
+                asset["px4"]["modelId"] = model_id
+                dev = project(
+                    dict(model=dict(robotKind="px4_multirotor", modelId=model_id, ordinal=2),
+                         binding=binding("slot", "/uav2"),
+                         physicalBinding=dict(assetId="a", assetCommitId="c", asset=asset)),
+                    context(simulator="gazebo"),
+                )
+                self.assertEqual(dev["derived"]["modelId"], model_id)
+                self.assertEqual(dev["derived"]["visualization"]["sceneClass"], ros_slug)
+
+        for bad in ("", "X500", "9x500", "px4 custom"):
+            with self.assertRaises(ValueError):
+                project(
+                    dict(model=dict(robotKind="px4_multirotor", modelId=bad, ordinal=0),
+                         binding=binding("slot", "/uav0")),
+                    context(simulator="gazebo"),
+                )
 
 
 if __name__ == "__main__":

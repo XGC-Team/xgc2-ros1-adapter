@@ -9,7 +9,10 @@ object stays input-only. physicalBinding is inventory and is not read from row a
 """
 import copy
 import json
+import re
 import sys
+
+CANONICAL_PX4_MODEL_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 MODELS = {
@@ -149,6 +152,14 @@ def finish(binding, kind, model_id, ordinal, arm, profile, params, derived, cont
     return result
 
 
+def model_spec(kind, model_id):
+    arm, prefix, scene, package, description, visuals = MODELS[kind]
+    if kind == "px4_multirotor":
+        ros_slug = model_id.replace("-", "_")
+        return arm, prefix, ros_slug, ros_slug + "_description", ros_slug + "_visual.urdf", visuals
+    return arm, prefix, scene, package, description, visuals
+
+
 def require_model(row):
     if "asset" in row:
         raise ValueError("projection reads physicalBinding.asset, not row asset")
@@ -156,7 +167,10 @@ def require_model(row):
     if not isinstance(model, dict):
         raise ValueError("model is required")
     kind, model_id = model["robotKind"], model["modelId"]
-    if INSTALLED_MODEL_IDS.get(kind) != model_id:
+    if kind == "px4_multirotor":
+        if not isinstance(model_id, str) or not CANONICAL_PX4_MODEL_PATTERN.match(model_id):
+            raise ValueError("unsupported installed model %s/%s" % (kind, model_id))
+    elif INSTALLED_MODEL_IDS.get(kind) != model_id:
         raise ValueError("unsupported installed model %s/%s" % (kind, model_id))
     ordinal = whole_number(model["ordinal"], "ordinal", 0, 255)
     return kind, model_id, ordinal
@@ -165,7 +179,7 @@ def require_model(row):
 def project_model(row, binding, context, kind, model_id, ordinal):
     if row.get("physicalBinding") is not None:
         raise ValueError("model projection cannot carry an asset")
-    arm, prefix, scene, package, description, visuals = MODELS[kind]
+    arm, prefix, scene, package, description, visuals = model_spec(kind, model_id)
     simulator = context["simulator"]
     simulated = simulated_source(row)
     if not simulated or simulator not in ("gazebo", "xsim", "none"):
@@ -192,7 +206,7 @@ def project_device(row, binding, context, kind, model_id, ordinal):
     asset = physical["asset"]
     if asset["kind"] != kind:
         raise ValueError("physicalBinding kind does not match model.robotKind")
-    arm, prefix, scene, package, description, visuals = MODELS[kind]
+    arm, prefix, scene, package, description, visuals = model_spec(kind, model_id)
     spec = asset[arm]
     if arm == "px4" and spec["modelId"] != model_id:
         raise ValueError("Unsupported PX4 model: " + spec["modelId"])
@@ -202,6 +216,15 @@ def project_device(row, binding, context, kind, model_id, ordinal):
     # physicalBinding stays inventory. It does not become FCU URLs or management addresses.
     derived = {}
     simulated = simulated_source(row)
+    calibration = spec.get("mocapCalibration") if arm == "px4" and not simulated else None
+    if calibration is not None:
+        # Only the SE3 is a forwarding parameter. Identified delay remains
+        # provenance and cannot overwrite localization_delay_ms / EKF2_EV_DELAY.
+        params["mocap_marker_from_body"] = json.dumps(
+            {"translation": calibration["translation"], "rotation": calibration["rotation"]},
+            separators=(",", ":"), allow_nan=False)
+        derived["mocapCalibration"] = dict(
+            calibrationRunId=calibration["calibrationRunId"], capturedAt=calibration["capturedAt"])
     if gazebo_sitl(kind, binding, context, simulated):
         endpoint = sitl_endpoint(ordinal)
         derived["sitlInstanceId"] = endpoint["sitlInstanceId"]

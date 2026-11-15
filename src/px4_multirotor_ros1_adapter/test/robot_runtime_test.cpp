@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -26,6 +28,36 @@ xgc2_ros1_robot_adapter::RobotConfig makeProfileConfig() {
   config.parameters["positioning_frame_number"] = "5";
   config.parameters["positioning_comparison_threshold_m"] = "1e-10";
   return config;
+}
+
+TEST(LocalizationError, DelayComesFromProfileAndAcceptsExplicitOverride) {
+  auto config = makeProfileConfig();
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.05, native.localization_delay_seconds);
+  config.parameters["localization_delay_ms"] = "25";
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.025, native.localization_delay_seconds);
+  for (const std::string invalid : {"-1", "nan", "inf", "1001", "50ms"}) {
+    config.parameters["localization_delay_ms"] = invalid;
+    EXPECT_FALSE(BuildNativeProfileConfig(config, &native, &error)) << invalid;
+  }
+}
+
+TEST(LocalizationProjection, AssetExtrinsicIsOnlyAcceptedByPhysicalProfile) {
+  auto config = makeProfileConfig();
+  config.profile_id = "px4-multirotor.physical.vrpn";
+  config.parameters["mocap_marker_from_body"] =
+      "{\"translation\":[0.01,0.02,-0.03],\"rotation\":[0,0,0,1]}";
+  NativeProfileConfig native;
+  std::string error;
+  ASSERT_TRUE(BuildNativeProfileConfig(config, &native, &error)) << error;
+  EXPECT_DOUBLE_EQ(0.05, native.localization_delay_seconds);
+  for (const std::string profile : {"px4-multirotor.xsim.ros", "px4-multirotor.gazebo.vrpn"}) {
+    config.profile_id = profile;
+    EXPECT_FALSE(BuildNativeProfileConfig(config, &native, &error)) << profile;
+  }
 }
 
 TEST(RosNames, BuildsNamespacedMavrosTopics) {
@@ -84,6 +116,22 @@ TEST(VisionRelay, RejectsNonFiniteOrDegeneratePoses) {
   ASSERT_TRUE(normalizeVisionPose(&pose));
   EXPECT_DOUBLE_EQ(1.0, pose.pose.orientation.x);
   EXPECT_DOUBLE_EQ(0.0, pose.pose.orientation.w);
+
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig no_extrinsic;
+  geometry_msgs::PoseStamped boundary_pose;
+  boundary_pose.pose.orientation.w = 1.0e-6;
+  geometry_msgs::PoseStamped projected_boundary;
+  EXPECT_TRUE(xgc2_ros1_robot_adapter::projectLocalizationPose(
+      boundary_pose, no_extrinsic, &projected_boundary));
+  EXPECT_TRUE(validVisionPose(projected_boundary));
+  ASSERT_TRUE(normalizeVisionPose(&projected_boundary));
+  EXPECT_DOUBLE_EQ(1.0, projected_boundary.pose.orientation.w);
+
+  geometry_msgs::PoseStamped below_boundary;
+  below_boundary.pose.orientation.w = std::nextafter(1.0e-6, 0.0);
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::projectLocalizationPose(
+      below_boundary, no_extrinsic, &projected_boundary));
+  EXPECT_FALSE(validVisionPose(below_boundary));
 }
 
 TEST(LocalizationError, ComputesEuclideanPositionDistance) {
@@ -134,6 +182,213 @@ TEST(PositioningLiveness, ValidatesTheXgc1AssetParameterBounds) {
       {5u, 0.0, 0.1}, &error));
   EXPECT_FALSE(xgc2_ros1_robot_adapter::validPositioningHealthConfig(
       {5u, 1.0e-10, 0.0}, &error));
+}
+
+TEST(PositioningLiveness, ReplaysHeldPoseAdvancingStampAndRecoveryJumpWithoutZeroFallback) {
+  using xgc2_ros1_robot_adapter::LocalizationProjectionConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthReason;
+  using xgc2_ros1_robot_adapter::PositioningHealthState;
+  using xgc2_ros1_robot_adapter::PositioningHealthWindow;
+  using xgc2_ros1_robot_adapter::projectLocalizationPose;
+
+  const PositioningHealthConfig health_config{5u, 1.0e-10, 0.1};
+  LocalizationProjectionConfig projection;
+  projection.has_extrinsic = true;
+  projection.marker_from_body_translation = {{0.08, -0.03, 0.04}};
+  projection.marker_from_body_rotation = {{0.0, 0.0, 0.0, 1.0}};
+  projection.offset_x = 1.25;
+  projection.offset_y = -2.0;
+  projection.offset_z = 0.1;
+
+  auto make_pose = [](double stamp_seconds, double x, double y, double z,
+                      double qx, double qy, double qz, double qw) {
+    geometry_msgs::PoseStamped pose;
+    pose.header.frame_id = "world";
+    pose.header.stamp = ros::Time(stamp_seconds);
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.position.z = z;
+    pose.pose.orientation.x = qx;
+    pose.pose.orientation.y = qy;
+    pose.pose.orientation.z = qz;
+    pose.pose.orientation.w = qw;
+    return pose;
+  };
+
+  const double base_qz = std::sin(0.2);
+  const double base_qw = std::cos(0.2);
+  const double expected_x =
+      2.0 + 0.08 * std::cos(0.4) - (-0.03) * std::sin(0.4) + 1.25;
+  const double expected_y =
+      1.0 + 0.08 * std::sin(0.4) + (-0.03) * std::cos(0.4) - 2.0;
+  const double expected_z = 1.5 + 0.04 + 0.1;
+
+  // 1. Held P+Q (unchanged stamp & pose) freezes within 100 ms and times out
+  //    beyond 100 ms without ever fabricating a zero/origin pose.
+  PositioningHealthWindow held_window(health_config);
+  for (std::size_t index = 0u; index < 6u; ++index) {
+    const auto raw =
+        make_pose(100.0, 2.0, 1.0, 1.5, 0.0, 0.0, base_qz, base_qw);
+    geometry_msgs::PoseStamped projected;
+    ASSERT_TRUE(projectLocalizationPose(raw, projection, &projected));
+    EXPECT_NEAR(expected_x, projected.pose.position.x, 1e-12);
+    EXPECT_NEAR(expected_y, projected.pose.position.y, 1e-12);
+    EXPECT_DOUBLE_EQ(expected_z, projected.pose.position.z);
+    held_window.recordPose(10.0 + static_cast<double>(index) * 0.033,
+                           projected.pose.position.x,
+                           projected.pose.position.y,
+                           projected.pose.position.z);
+  }
+  const auto held_frozen = held_window.evaluate(10.166);
+  EXPECT_EQ(PositioningHealthState::kFrozen, held_frozen.state);
+  EXPECT_EQ(PositioningHealthReason::kRepeatFrameWindowFrozen, held_frozen.reason);
+  EXPECT_DOUBLE_EQ(0.0, held_frozen.comparison_metric_m);
+  EXPECT_EQ(5u, held_frozen.sample_count);
+
+  const auto held_timed_out = held_window.evaluate(10.165 + 0.105);
+  EXPECT_EQ(PositioningHealthState::kTimedOut, held_timed_out.state);
+  EXPECT_EQ(PositioningHealthReason::kVrpnTimeout, held_timed_out.reason);
+
+  // 2. Advancing stamp (30 Hz) with identical P+Q still detects repeat-frame
+  //    freeze while PositionErrorWindow measures divergence against moving EKF2.
+  PositioningHealthWindow window(health_config);
+  PositionErrorWindow error_window(0.05);
+  geometry_msgs::PoseStamped last_projected;
+  for (std::size_t index = 0u; index < 6u; ++index) {
+    const double dt = static_cast<double>(index) / 30.0;
+    const auto local = make_pose(200.0 + dt - 0.05, expected_x + 0.5 * dt,
+                                 expected_y, expected_z, 0.0, 0.0, base_qz,
+                                 base_qw);
+    error_window.local(local);
+
+    const auto raw =
+        make_pose(200.0 + dt, 2.0, 1.0, 1.5, 0.0, 0.0, base_qz, base_qw);
+    ASSERT_TRUE(projectLocalizationPose(raw, projection, &last_projected));
+    EXPECT_NEAR(200.0 + dt, last_projected.header.stamp.toSec(), 1e-9);
+    EXPECT_NEAR(expected_x, last_projected.pose.position.x, 1e-12);
+    EXPECT_TRUE(error_window.mocap(last_projected));
+    window.recordPose(20.0 + dt, last_projected.pose.position.x,
+                      last_projected.pose.position.y,
+                      last_projected.pose.position.z);
+  }
+  const auto frozen_advancing = window.evaluate(20.0 + 5.0 / 30.0 + 0.001);
+  EXPECT_EQ(PositioningHealthState::kFrozen, frozen_advancing.state);
+  EXPECT_EQ(PositioningHealthReason::kRepeatFrameWindowFrozen,
+            frozen_advancing.reason);
+  EXPECT_DOUBLE_EQ(0.0, frozen_advancing.comparison_metric_m);
+  ASSERT_TRUE(error_window.latest().has_value());
+  EXPECT_NEAR(0.5 * (5.0 / 30.0), error_window.latest()->meters, 1e-8);
+
+  // 3. Onsite 4.443 m recovery jump flips Frozen -> Active immediately with
+  //    exact jump magnitude, updates PositionErrorWindow without clamping, then
+  //    re-freezes once the 5-frame ring turns over with stationary samples.
+  const double jump_dt = 6.0 / 30.0;
+  error_window.local(make_pose(200.0 + jump_dt - 0.05, expected_x, expected_y,
+                               expected_z, 0.0, 0.0, base_qz, base_qw));
+  const auto raw_jump = make_pose(200.0 + jump_dt, 2.0 + 4.443, 1.0, 1.5, 0.0,
+                                  0.0, base_qz, base_qw);
+  geometry_msgs::PoseStamped projected_jump;
+  ASSERT_TRUE(projectLocalizationPose(raw_jump, projection, &projected_jump));
+  EXPECT_NEAR(4.443, projected_jump.pose.position.x - last_projected.pose.position.x,
+              1e-12);
+  EXPECT_NEAR(expected_y, projected_jump.pose.position.y, 1e-12);
+  EXPECT_DOUBLE_EQ(expected_z, projected_jump.pose.position.z);
+  EXPECT_NEAR(base_qz, projected_jump.pose.orientation.z, 1e-12);
+  EXPECT_NEAR(base_qw, projected_jump.pose.orientation.w, 1e-12);
+
+  ASSERT_TRUE(error_window.mocap(projected_jump));
+  ASSERT_TRUE(error_window.latest().has_value());
+  EXPECT_NEAR(4.443, error_window.latest()->meters, 1e-8);
+
+  window.recordPose(20.0 + jump_dt, projected_jump.pose.position.x,
+                    projected_jump.pose.position.y,
+                    projected_jump.pose.position.z);
+  const auto active_jump = window.evaluate(20.0 + jump_dt + 0.001);
+  EXPECT_EQ(PositioningHealthState::kActive, active_jump.state);
+  EXPECT_EQ(PositioningHealthReason::kWindowVariationObserved, active_jump.reason);
+  EXPECT_NEAR(std::sqrt(5.0) * 4.443, active_jump.comparison_metric_m, 1e-12);
+
+  for (std::size_t extra = 1u; extra <= 5u; ++extra) {
+    window.recordPose(20.0 + (6.0 + static_cast<double>(extra)) / 30.0,
+                      projected_jump.pose.position.x,
+                      projected_jump.pose.position.y,
+                      projected_jump.pose.position.z);
+  }
+  const auto settled_frozen =
+      window.evaluate(20.0 + 11.0 / 30.0 + 0.001);
+  EXPECT_EQ(PositioningHealthState::kFrozen, settled_frozen.state);
+  EXPECT_DOUBLE_EQ(0.0, settled_frozen.comparison_metric_m);
+}
+
+TEST(PositioningLiveness, AttitudeFlipPreservesSmallPositionErrorWithoutValidatingAttitude) {
+  using xgc2_ros1_robot_adapter::LocalizationProjectionConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthConfig;
+  using xgc2_ros1_robot_adapter::PositioningHealthState;
+  using xgc2_ros1_robot_adapter::PositioningHealthWindow;
+  using xgc2_ros1_robot_adapter::projectLocalizationPose;
+
+  constexpr double kPi = 3.14159265358979323846;
+  LocalizationProjectionConfig projection;
+  projection.offset_x = 1.0;
+  projection.offset_y = -0.5;
+  projection.offset_z = 0.25;
+
+  PositioningHealthWindow xyz_window(PositioningHealthConfig{5u, 1.0e-10, 0.1});
+  PositionErrorWindow error_window(0.05);
+
+  auto feed_pair = [&](std::size_t idx, double raw_x, double angle_deg,
+                       geometry_msgs::PoseStamped *projected_out) {
+    const double t = static_cast<double>(idx) * 0.033;
+    geometry_msgs::PoseStamped local;
+    local.header.frame_id = "world";
+    local.header.stamp = ros::Time(300.0 + t - 0.05);
+    local.pose.position.x = 1.5;
+    local.pose.position.y = -0.3;
+    local.pose.position.z = 1.35;
+    local.pose.orientation.w = 1.0;
+    error_window.local(local);
+
+    const double half = (angle_deg * kPi / 180.0) * 0.5;
+    geometry_msgs::PoseStamped raw;
+    raw.header.frame_id = "world";
+    raw.header.stamp = ros::Time(300.0 + t);
+    raw.pose.position.x = raw_x;
+    raw.pose.position.y = 0.2;
+    raw.pose.position.z = 1.1;
+    raw.pose.orientation.z = std::sin(half);
+    raw.pose.orientation.w = std::cos(half);
+    ASSERT_TRUE(projectLocalizationPose(raw, projection, projected_out));
+    ASSERT_TRUE(error_window.mocap(*projected_out));
+    xyz_window.recordPose(t, projected_out->pose.position.x,
+                          projected_out->pose.position.y,
+                          projected_out->pose.position.z);
+  };
+
+  // Baseline orientation (0 deg) followed by the ~180 deg rebuild flip
+  // magnitudes observed onsite (179, 172, 178 deg) with zero XYZ shift.
+  geometry_msgs::PoseStamped baseline;
+  feed_pair(0u, 0.5, 0.0, &baseline);
+  for (std::size_t idx = 1u; idx <= 6u; ++idx) {
+    const double flip_deg =
+        (idx % 3u == 1u) ? 179.0 : ((idx % 3u == 2u) ? 172.0 : 178.0);
+    geometry_msgs::PoseStamped flipped;
+    feed_pair(idx, 0.5, flip_deg, &flipped);
+
+    const double dot = std::min(
+        1.0,
+        std::fabs(baseline.pose.orientation.x * flipped.pose.orientation.x +
+                  baseline.pose.orientation.y * flipped.pose.orientation.y +
+                  baseline.pose.orientation.z * flipped.pose.orientation.z +
+                  baseline.pose.orientation.w * flipped.pose.orientation.w));
+    const double separation_deg = 2.0 * std::acos(dot) * 180.0 / kPi;
+    EXPECT_GT(separation_deg, 171.5);
+    ASSERT_TRUE(error_window.latest().has_value());
+    EXPECT_DOUBLE_EQ(0.0, error_window.latest()->meters);
+  }
+  const auto xyz_only = xyz_window.evaluate(6u * 0.033 + 0.001);
+  EXPECT_EQ(PositioningHealthState::kFrozen, xyz_only.state);
+  EXPECT_DOUBLE_EQ(0.0, xyz_only.comparison_metric_m);
 }
 
 TEST(InstalledProfile, RawVrpnAccelerationUsesTwistAndCanonicalUsesAccel) {
@@ -215,7 +470,6 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
   EXPECT_DOUBLE_EQ(1.0, native.reboot_state_timeout_seconds);
   EXPECT_DOUBLE_EQ(5.0, native.maximum_operation_timeout_seconds);
   EXPECT_TRUE(native.publish_vision);
-  EXPECT_DOUBLE_EQ(30.0, native.vision_publish_rate_hz);
   EXPECT_EQ(
       (std::vector<std::string>{"OFFBOARD", "POSCTL", "ALTCTL", "STABILIZED"}),
       native.allowed_modes);
@@ -232,11 +486,7 @@ TEST(InstalledProfile, BuildsEveryNativeEndpointAndPolicyFromTheDescriptor) {
                                         &vision_pose));
   EXPECT_STREQ("px4.vision-pose", vision_pose.processor);
   EXPECT_EQ(1u, vision_pose.endpoint_count);
-  EXPECT_EQ(1u, vision_pose.policy_count);
-  std::int64_t vision_publish_rate = 0;
-  ASSERT_TRUE(contract::channelPolicyInteger(vision_pose, "publish_rate_hz",
-                                            &vision_publish_rate));
-  EXPECT_EQ(30, vision_publish_rate);
+  EXPECT_EQ(4u, vision_pose.policy_count);
 }
 
 TEST(SetpointDiagnostics, HonorsEveryMavrosTypeMaskBit) {
@@ -368,6 +618,525 @@ TEST(InstalledContract, PinsTheRegistryItWasGeneratedFrom) {
   EXPECT_EQ(13142820175755956498ULL, InstalledContract().registryFingerprint());
   EXPECT_EQ(std::string("xgc2-px4-multirotor-ros1-adapter"),
             InstalledContract().providerDefinitionId());
+}
+
+TEST(InstalledProfile, LoadsVisionInjectionGatePolicyForVrpnProfiles) {
+  auto make_vrpn_config = [](const std::string &profile_id) {
+    xgc2_ros1_robot_adapter::RobotConfig config;
+    config.robot_id = "drone-test";
+    config.profile_id = profile_id;
+    config.parameters["namespace"] = "/uav1";
+    config.parameters["mocap_rigid_body"] = "uav1";
+    config.parameters["mocap_source_root"] = "/vrpn_client_node";
+    config.parameters["localization_offset_x"] = "0.0";
+    config.parameters["localization_offset_y"] = "0.0";
+    config.parameters["localization_offset_z"] = "0.0";
+    config.parameters["positioning_frame_number"] = "5";
+    config.parameters["positioning_comparison_threshold_m"] = "0.05";
+    return config;
+  };
+  for (const std::string &profile_id :
+       {std::string("px4-multirotor.physical.vrpn"),
+        std::string("px4-multirotor.gazebo.vrpn")}) {
+    NativeProfileConfig native;
+    std::string error;
+    ASSERT_TRUE(BuildNativeProfileConfig(make_vrpn_config(profile_id), &native,
+                                         &error))
+        << error;
+    EXPECT_FALSE(native.vision_injection_gate.enabled);
+    EXPECT_DOUBLE_EQ(1.5, native.vision_injection_gate.max_vision_position_jump_m);
+    EXPECT_NEAR(1.0471975511965976,
+                native.vision_injection_gate.max_vision_attitude_jump_rad, 1e-12);
+    EXPECT_EQ(5u, native.vision_injection_gate.recovery_consistent_frames);
+
+    auto opt_in = make_vrpn_config(profile_id);
+    opt_in.parameters["vision_injection_gate_enabled"] = "true";
+    NativeProfileConfig opt_in_native;
+    ASSERT_TRUE(BuildNativeProfileConfig(opt_in, &opt_in_native, &error)) << error;
+    EXPECT_TRUE(opt_in_native.vision_injection_gate.enabled);
+
+    opt_in.parameters["vision_injection_gate_enabled"] = "false";
+    ASSERT_TRUE(BuildNativeProfileConfig(opt_in, &opt_in_native, &error)) << error;
+    EXPECT_FALSE(opt_in_native.vision_injection_gate.enabled);
+
+    opt_in.parameters["vision_injection_gate_enabled"] = "invalid";
+    EXPECT_FALSE(BuildNativeProfileConfig(opt_in, &opt_in_native, &error));
+  }
+
+  auto zenoh_opt_in = make_vrpn_config("px4-multirotor.physical.vrpn");
+  zenoh_opt_in.parameters.erase("mocap_source_root");
+  zenoh_opt_in.parameters["zenoh_endpoint"] = "tcp/127.0.0.1:7447";
+  zenoh_opt_in.parameters["localization_source"] = "vrpn";
+  zenoh_opt_in.parameters["vision_injection_gate_enabled"] = "true";
+  NativeProfileConfig zenoh_native;
+  std::string zenoh_error;
+  ASSERT_TRUE(BuildNativeProfileConfig(zenoh_opt_in, &zenoh_native, &zenoh_error))
+      << zenoh_error;
+  EXPECT_TRUE(zenoh_native.zenoh_localization.enabled);
+  EXPECT_TRUE(zenoh_native.vision_injection_gate.enabled);
+
+  xgc2_ros1_robot_adapter::RobotConfig xsim_config;
+  xsim_config.robot_id = "drone-xsim";
+  xsim_config.profile_id = "px4-multirotor.xsim.ros";
+  xsim_config.parameters["namespace"] = "/uav1";
+  xsim_config.parameters["localization_pose_topic"] = "/uav1/mocap/pose";
+  xsim_config.parameters["localization_twist_topic"] = "/uav1/mocap/twist";
+  xsim_config.parameters["positioning_frame_number"] = "5";
+  xsim_config.parameters["positioning_comparison_threshold_m"] = "0.05";
+  NativeProfileConfig xsim_native;
+  std::string xsim_error;
+  ASSERT_TRUE(BuildNativeProfileConfig(xsim_config, &xsim_native, &xsim_error))
+      << xsim_error;
+  EXPECT_FALSE(xsim_native.publish_vision);
+  EXPECT_FALSE(xsim_native.vision_injection_gate.enabled);
+}
+
+TEST(VisionInjectionGateTest, ValidatesConfigBoundsAndQuaternionDistance) {
+  VisionInjectionGateConfig config;
+  std::string error;
+  EXPECT_TRUE(validVisionInjectionGateConfig(config, &error)) << error;
+
+  auto bad_jump = config;
+  bad_jump.max_vision_position_jump_m = 0.0;
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_jump, &error));
+  bad_jump.max_vision_position_jump_m =
+      std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_jump, &error));
+
+  auto bad_attitude = config;
+  bad_attitude.max_vision_attitude_jump_rad = 0.0;
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_attitude, &error));
+  bad_attitude.max_vision_attitude_jump_rad = 3.5;
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_attitude, &error));
+
+  auto bad_recovery = config;
+  bad_recovery.recovery_consistent_frames = 0u;
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_recovery, &error));
+  bad_recovery.recovery_consistent_frames = 1001u;
+  EXPECT_FALSE(validVisionInjectionGateConfig(bad_recovery, &error));
+
+  auto make_quat = [](double axis_x, double axis_y, double axis_z,
+                      double angle_deg) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double half = (angle_deg * kPi / 180.0) * 0.5;
+    const double s = std::sin(half);
+    geometry_msgs::Quaternion q;
+    q.x = axis_x * s;
+    q.y = axis_y * s;
+    q.z = axis_z * s;
+    q.w = std::cos(half);
+    return q;
+  };
+  const auto identity = make_quat(0.0, 0.0, 1.0, 0.0);
+  geometry_msgs::Quaternion negated = identity;
+  negated.x = -identity.x;
+  negated.y = -identity.y;
+  negated.z = -identity.z;
+  negated.w = -identity.w;
+  EXPECT_NEAR(0.0, quaternionAngularDistanceRad(identity, negated), 1e-12);
+  EXPECT_NEAR(179.0 * 3.14159265358979323846 / 180.0,
+              quaternionAngularDistanceRad(identity,
+                                           make_quat(1.0, 0.0, 0.0, 179.0)),
+              1e-9);
+  EXPECT_NEAR(172.0 * 3.14159265358979323846 / 180.0,
+              quaternionAngularDistanceRad(identity,
+                                           make_quat(0.0, 1.0, 0.0, 172.0)),
+              1e-9);
+  EXPECT_NEAR(178.0 * 3.14159265358979323846 / 180.0,
+              quaternionAngularDistanceRad(identity,
+                                           make_quat(1.0, 0.0, 0.0, 178.0)),
+              1e-9);
+
+  geometry_msgs::Quaternion zero_q;
+  zero_q.w = 0.0;
+  EXPECT_TRUE(std::isinf(quaternionAngularDistanceRad(identity, zero_q)));
+}
+
+TEST(VisionInjectionGateTest, EnforcesLivenessTimestampJumpAttitudeAndRecovery) {
+  auto make_pose = [](double x, double y, double z, double roll_deg) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double half = (roll_deg * kPi / 180.0) * 0.5;
+    geometry_msgs::PoseStamped pose;
+    pose.header.frame_id = "world";
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.position.z = z;
+    pose.pose.orientation.x = std::sin(half);
+    pose.pose.orientation.w = std::cos(half);
+    return pose;
+  };
+
+  const auto fc_identity = make_pose(0.0, 0.0, 1.0, 0.0).pose.orientation;
+
+  // Disabled gate observes diagnostics accurately without holding valid poses,
+  // and blocks invalid (NaN) poses cleanly with held == false.
+  VisionInjectionGate disabled_gate(VisionInjectionGateConfig{});
+  const auto disabled_decision = disabled_gate.evaluate(
+      make_pose(10.0, 0.0, 1.0, 179.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, true, true, 0,
+      xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(disabled_decision.allow_publish);
+  EXPECT_FALSE(disabled_decision.held);
+  EXPECT_TRUE(disabled_decision.attitude_divergent);
+  EXPECT_TRUE(disabled_decision.attitude_flip_detected);
+  EXPECT_TRUE(disabled_decision.non_advancing_source_time);
+  EXPECT_FALSE(disabled_gate.isHeld());
+
+  auto invalid_pose = make_pose(0.0, 0.0, 1.0, 0.0);
+  invalid_pose.pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  const auto invalid_disabled = disabled_gate.evaluate(
+      invalid_pose, xgc2_ros1_robot_adapter::PositioningHealthState::kActive,
+      false, true, 1000000000LL, xgc::v1::CLOCK_DOMAIN_STEADY, true,
+      &fc_identity);
+  EXPECT_FALSE(invalid_disabled.allow_publish);
+  EXPECT_FALSE(invalid_disabled.held);
+  EXPECT_FALSE(disabled_gate.isHeld());
+
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig no_extrinsic;
+  auto boundary_pose = make_pose(0.0, 0.0, 1.0, 0.0);
+  boundary_pose.pose.orientation.x = 0.0;
+  boundary_pose.pose.orientation.y = 0.0;
+  boundary_pose.pose.orientation.z = 0.0;
+  boundary_pose.pose.orientation.w = 1.0e-6;
+  geometry_msgs::PoseStamped projected_boundary;
+  ASSERT_TRUE(xgc2_ros1_robot_adapter::projectLocalizationPose(
+      boundary_pose, no_extrinsic, &projected_boundary));
+  const auto boundary_disabled = disabled_gate.evaluate(
+      projected_boundary,
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      1000000001LL, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(boundary_disabled.allow_publish);
+  EXPECT_FALSE(boundary_disabled.held);
+
+  auto below_boundary = boundary_pose;
+  below_boundary.pose.orientation.w = std::nextafter(1.0e-6, 0.0);
+  EXPECT_FALSE(xgc2_ros1_robot_adapter::projectLocalizationPose(
+      below_boundary, no_extrinsic, &projected_boundary));
+  const auto below_disabled = disabled_gate.evaluate(
+      below_boundary,
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      1000000002LL, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_FALSE(below_disabled.allow_publish);
+  EXPECT_FALSE(below_disabled.held);
+
+  VisionInjectionGateConfig cfg;
+  cfg.enabled = true;
+  VisionInjectionGate gate(cfg);
+  std::int64_t t_ns = 1000000000LL;
+
+  // Normal continuous motion > 1.5 m cumulative without single-step jump.
+  for (int i = 0; i < 6; ++i) {
+    t_ns += 20000000LL;
+    auto p = make_pose(0.5 * i, 0.0, 1.0, 0.0);
+    if (i % 2 == 1) {
+      p.pose.orientation.x = -p.pose.orientation.x;
+      p.pose.orientation.y = -p.pose.orientation.y;
+      p.pose.orientation.z = -p.pose.orientation.z;
+      p.pose.orientation.w = -p.pose.orientation.w;
+    }
+    const auto d = gate.evaluate(
+        p, xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false,
+        true, t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true,
+        &fc_identity);
+    EXPECT_TRUE(d.allow_publish);
+    EXPECT_FALSE(d.held);
+  }
+
+  // Non-advancing report_time_nanos in same clock domain holds and requires 5
+  // advancing consistent frames to recover.
+  const auto same_t = gate.evaluate(
+      make_pose(2.51, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_FALSE(same_t.allow_publish);
+  EXPECT_TRUE(same_t.non_advancing_source_time);
+  EXPECT_EQ(0u, same_t.consistent_frames);
+
+  for (int i = 1; i <= 4; ++i) {
+    t_ns += 20000000LL;
+    const auto d = gate.evaluate(
+        make_pose(2.5 + 0.01 * i, 0.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+    EXPECT_EQ(static_cast<std::size_t>(i), d.consistent_frames);
+  }
+  t_ns += 20000000LL;
+  const auto recovered_t = gate.evaluate(
+      make_pose(2.55, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(recovered_t.allow_publish);
+  EXPECT_FALSE(recovered_t.held);
+
+  // 4.443 m jump holds jump + 4 frames, publishes on 5th.
+  t_ns += 20000000LL;
+  const auto jump = gate.evaluate(
+      make_pose(2.55 + 4.443, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_FALSE(jump.allow_publish);
+  EXPECT_TRUE(jump.position_jump_detected);
+  EXPECT_EQ(0u, jump.consistent_frames);
+  for (int i = 1; i <= 4; ++i) {
+    t_ns += 20000000LL;
+    const auto d = gate.evaluate(
+        make_pose(2.55 + 4.443 + 0.01 * i, 0.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+  }
+  t_ns += 20000000LL;
+  const auto jump_recovered = gate.evaluate(
+      make_pose(2.55 + 4.443 + 0.05, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(jump_recovered.allow_publish);
+
+  // 0.0 m XYZ + 179/172/178 deg flips while FC is online.
+  for (const double angle_deg : {179.0, 172.0, 178.0}) {
+    t_ns += 20000000LL;
+    const auto flip = gate.evaluate(
+        make_pose(7.043, 0.0, 1.0, angle_deg),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(flip.allow_publish);
+    EXPECT_TRUE(flip.attitude_divergent);
+    EXPECT_TRUE(flip.attitude_flip_detected);
+    EXPECT_TRUE(gate.heldByAttitude());
+    EXPECT_EQ(0u, flip.consistent_frames);
+  }
+  // Returning to 0 deg resets on the transition step, then needs 5 clean
+  // consistent frames before clearing attitude hold and publishing.
+  t_ns += 20000000LL;
+  const auto align_step = gate.evaluate(
+      make_pose(7.043, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_FALSE(align_step.allow_publish);
+  EXPECT_TRUE(gate.heldByAttitude());
+  EXPECT_EQ(0u, align_step.consistent_frames);
+  for (int i = 1; i <= 4; ++i) {
+    t_ns += 20000000LL;
+    const auto d = gate.evaluate(
+        make_pose(7.043 + 0.005 * i, 0.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+    EXPECT_TRUE(gate.heldByAttitude());
+  }
+  t_ns += 20000000LL;
+  const auto att_recovered = gate.evaluate(
+      make_pose(7.068, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(att_recovered.allow_publish);
+  EXPECT_FALSE(gate.heldByAttitude());
+}
+
+TEST(VisionInjectionGateTest, AllowsStaticFrozenHoverAndStaticRecoveryAndReversibleTimeout) {
+  auto make_pose = [](double x, double y, double z, double roll_deg) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double half = (roll_deg * kPi / 180.0) * 0.5;
+    geometry_msgs::PoseStamped pose;
+    pose.header.frame_id = "world";
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.position.z = z;
+    pose.pose.orientation.x = std::sin(half);
+    pose.pose.orientation.w = std::cos(half);
+    return pose;
+  };
+  const auto fc_identity = make_pose(0.0, 0.0, 1.0, 0.0).pose.orientation;
+
+  VisionInjectionGateConfig cfg;
+  cfg.enabled = true;
+  VisionInjectionGate gate(cfg);
+  std::int64_t t_ns = 2000000000LL;
+
+  // 20 identical pure-static frames marked kFrozen must all publish cleanly.
+  for (int i = 0; i < 20; ++i) {
+    t_ns += 20000000LL;
+    const auto d = gate.evaluate(
+        make_pose(1.0, -2.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_TRUE(d.allow_publish);
+    EXPECT_FALSE(d.held);
+  }
+
+  // Reversible short timeout: smooth sample resumes immediately on frame 1.
+  t_ns += 120000000LL;
+  const auto timeout_resume = gate.evaluate(
+      make_pose(1.02, -2.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, true, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(timeout_resume.allow_publish);
+  EXPECT_FALSE(timeout_resume.held);
+
+  // Jump after timeout holds and recovers using 5 pure-static kFrozen frames.
+  t_ns += 120000000LL;
+  const auto timeout_jump = gate.evaluate(
+      make_pose(1.02 + 4.443, -2.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, true, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_FALSE(timeout_jump.allow_publish);
+  EXPECT_TRUE(timeout_jump.held);
+  EXPECT_EQ(0u, timeout_jump.consistent_frames);
+
+  for (int i = 1; i <= 4; ++i) {
+    t_ns += 20000000LL;
+    const auto d = gate.evaluate(
+        make_pose(1.02 + 4.443, -2.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+    EXPECT_EQ(static_cast<std::size_t>(i), d.consistent_frames);
+  }
+  t_ns += 20000000LL;
+  const auto static_recovered = gate.evaluate(
+      make_pose(1.02 + 4.443, -2.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+      t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+  EXPECT_TRUE(static_recovered.allow_publish);
+  EXPECT_FALSE(static_recovered.held);
+
+  // 20 rounds of brief dropouts and jump/recovery never accumulate stuck state.
+  double base_x = 1.02 + 4.443;
+  for (int round = 0; round < 20; ++round) {
+    t_ns += 120000000LL;
+    const auto fast = gate.evaluate(
+        make_pose(base_x, -2.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, true, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_TRUE(fast.allow_publish);
+    EXPECT_FALSE(fast.held);
+
+    t_ns += 20000000LL;
+    base_x += 3.0;
+    const auto j = gate.evaluate(
+        make_pose(base_x, -2.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_FALSE(j.allow_publish);
+    for (int f = 1; f <= 4; ++f) {
+      t_ns += 20000000LL;
+      const auto h = gate.evaluate(
+          make_pose(base_x, -2.0, 1.0, 0.0),
+          xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false,
+          true, t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+      EXPECT_FALSE(h.allow_publish);
+    }
+    t_ns += 20000000LL;
+    const auto rel = gate.evaluate(
+        make_pose(base_x, -2.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+        t_ns, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity);
+    EXPECT_TRUE(rel.allow_publish);
+    EXPECT_FALSE(rel.held);
+    EXPECT_EQ(0u, rel.consistent_frames);
+  }
+}
+
+TEST(VisionInjectionGateTest, HandlesOutOfOrderPacketsAndCleanClockRollbackEpochReset) {
+  auto make_pose = [](double x, double y, double z, double roll_deg) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double half = (roll_deg * kPi / 180.0) * 0.5;
+    geometry_msgs::PoseStamped pose;
+    pose.header.frame_id = "world";
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.position.z = z;
+    pose.pose.orientation.x = std::sin(half);
+    pose.pose.orientation.w = std::cos(half);
+    return pose;
+  };
+  const auto fc_identity = make_pose(0.0, 0.0, 1.0, 0.0).pose.orientation;
+
+  VisionInjectionGateConfig cfg;
+  cfg.enabled = true;
+  VisionInjectionGate gate(cfg);
+
+  // Establish high watermark at 100.00 s in CLOCK_DOMAIN_UNIX.
+  EXPECT_TRUE(gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      100000000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity)
+                  .allow_publish);
+
+  // Single out-of-order packet 99.98 s is rejected without lowering 100.00 s;
+  // continuing at 100.02 s recovers on the original epoch in 5 frames.
+  const auto ooo = gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      99980000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity);
+  EXPECT_FALSE(ooo.allow_publish);
+  EXPECT_TRUE(ooo.non_advancing_source_time);
+
+  // Duplicate 100.00 s is rejected cleanly too and clears any rollback candidate.
+  const auto dup = gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      100000000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity);
+  EXPECT_FALSE(dup.allow_publish);
+  EXPECT_TRUE(dup.non_advancing_source_time);
+  EXPECT_EQ(0u, dup.consistent_frames);
+
+  for (int i = 1; i <= 4; ++i) {
+    const auto d = gate.evaluate(
+        make_pose(1.0, 0.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+        100000000000LL + i * 20000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true,
+        &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+    EXPECT_FALSE(d.non_advancing_source_time);
+  }
+  const auto resumed = gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+      100100000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity);
+  EXPECT_TRUE(resumed.allow_publish);
+  EXPECT_FALSE(resumed.held);
+
+  // True clock rollback to 50.00 s must reset cleanly on the 5th consecutive
+  // consistent frame (50.08 s) without permanent deadlock.
+  // First verify interruption by FC attitude divergence aborts candidate count.
+  const auto div_rb = gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 179.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      50000000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity);
+  EXPECT_FALSE(div_rb.allow_publish);
+  EXPECT_TRUE(div_rb.attitude_divergent);
+  EXPECT_EQ(0u, div_rb.consistent_frames);
+
+  for (int f = 1; f <= 4; ++f) {
+    const auto d = gate.evaluate(
+        make_pose(1.0, 0.0, 1.0, 0.0),
+        xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+        50000000000LL + f * 20000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true,
+        &fc_identity);
+    EXPECT_FALSE(d.allow_publish);
+    EXPECT_EQ(static_cast<std::size_t>(f), d.consistent_frames);
+  }
+  const auto committed = gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+      50100000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity);
+  EXPECT_TRUE(committed.allow_publish);
+  EXPECT_FALSE(committed.held);
+
+  EXPECT_TRUE(gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kFrozen, false, true,
+      50120000000LL, xgc::v1::CLOCK_DOMAIN_UNIX, true, &fc_identity)
+                  .allow_publish);
+
+  // Cross-ClockDomain transition switches epochs cleanly without rollback hold.
+  EXPECT_TRUE(gate.evaluate(
+      make_pose(1.0, 0.0, 1.0, 0.0),
+      xgc2_ros1_robot_adapter::PositioningHealthState::kActive, false, true,
+      1000000000LL, xgc::v1::CLOCK_DOMAIN_STEADY, true, &fc_identity)
+                  .allow_publish);
 }
 
 } // namespace

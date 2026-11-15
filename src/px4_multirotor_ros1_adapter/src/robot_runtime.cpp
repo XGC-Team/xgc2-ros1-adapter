@@ -219,7 +219,7 @@ const std::array<NativeChannelBinding, 24u> kNativeBindings{{
      2u, 1u, false},
     {"state.vision.pose", "px4.vision-pose",
      contract::ChannelKind::kStreamOut, "xgc.semantic.common.v1.PoseEstimate",
-     1u, 1u, true},
+     1u, 4u, true},
     {"state.velocity", "px4.velocity-estimate",
      contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.VelocityEstimate", 1u, 0u, false},
@@ -234,7 +234,7 @@ const std::array<NativeChannelBinding, 24u> kNativeBindings{{
      "xgc.semantic.common.v1.SpeedEstimate", 1u, 0u, false},
     {"state.localization.error", "px4.localization-position-error",
      contract::ChannelKind::kStreamOut,
-     "xgc.semantic.common.v1.DistanceEstimate", 0u, 0u, true},
+     "xgc.semantic.common.v1.DistanceEstimate", 0u, 1u, true},
     {"state.imu", "px4.imu-estimate", contract::ChannelKind::kStreamOut,
      "xgc.semantic.common.v1.ImuEstimate", 1u, 0u, false},
     {"state.power", "px4.power-status", contract::ChannelKind::kStreamOut,
@@ -425,7 +425,7 @@ bool validVisionPose(const geometry_msgs::PoseStamped &message) {
   }
   const double norm = std::hypot(std::hypot(orientation.x, orientation.y),
                                  std::hypot(orientation.z, orientation.w));
-  return std::isfinite(norm) && norm > 1e-6;
+  return std::isfinite(norm) && norm >= 1.0e-6;
 }
 
 bool normalizeVisionPose(geometry_msgs::PoseStamped *message) {
@@ -454,6 +454,254 @@ bool px4IsOnline(bool state_known, bool state_fresh, bool connected) {
   return state_known && state_fresh && connected;
 }
 
+bool validVisionInjectionGateConfig(const VisionInjectionGateConfig &config,
+                                    std::string *error) {
+  if (!std::isfinite(config.max_vision_position_jump_m) ||
+      config.max_vision_position_jump_m <= 0.0) {
+    return fail(error, "max_vision_position_jump_m must be finite and positive");
+  }
+  constexpr double kPi = 3.14159265358979323846;
+  if (!std::isfinite(config.max_vision_attitude_jump_rad) ||
+      config.max_vision_attitude_jump_rad <= 0.0 ||
+      config.max_vision_attitude_jump_rad > kPi + 1e-9) {
+    return fail(error, "max_vision_attitude_jump_rad must be in (0, pi]");
+  }
+  if (config.recovery_consistent_frames == 0u ||
+      config.recovery_consistent_frames > 1000u) {
+    return fail(error,
+                "recovery_consistent_frames must be between 1 and 1000");
+  }
+  return true;
+}
+
+double quaternionAngularDistanceRad(const geometry_msgs::Quaternion &left,
+                                    const geometry_msgs::Quaternion &right) {
+  const double left_norm =
+      std::hypot(std::hypot(left.x, left.y), std::hypot(left.z, left.w));
+  const double right_norm =
+      std::hypot(std::hypot(right.x, right.y), std::hypot(right.z, right.w));
+  if (!std::isfinite(left_norm) || !std::isfinite(right_norm) ||
+      left_norm <= 1e-9 || right_norm <= 1e-9) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double dot =
+      (left.x * right.x + left.y * right.y + left.z * right.z +
+       left.w * right.w) /
+      (left_norm * right_norm);
+  if (!std::isfinite(dot)) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double clamped = std::min(1.0, std::abs(dot));
+  return 2.0 * std::acos(clamped);
+}
+
+VisionInjectionGate::VisionInjectionGate(VisionInjectionGateConfig config)
+    : config_(config) {}
+
+void VisionInjectionGate::noteInvalidPose() {
+  rollback_candidate_active_ = false;
+  rollback_consistent_frames_ = 0u;
+  if (!config_.enabled) {
+    held_ = false;
+    attitude_hold_active_ = false;
+    consistent_frames_ = 0u;
+    return;
+  }
+  held_ = true;
+  consistent_frames_ = 0u;
+}
+
+VisionInjectionDecision VisionInjectionGate::evaluate(
+    const geometry_msgs::PoseStamped &projected_pose,
+    xgc2_ros1_robot_adapter::PositioningHealthState positioning_state,
+    bool prior_timed_out, bool has_source_time, std::int64_t source_time_nanos,
+    xgc::v1::ClockDomain source_clock_domain, bool fc_online,
+    const geometry_msgs::Quaternion *fc_orientation) {
+  (void)prior_timed_out;
+  VisionInjectionDecision decision;
+  if (!validVisionPose(projected_pose)) {
+    noteInvalidPose();
+    decision.allow_publish = false;
+    decision.held = held_;
+    decision.consistent_frames = consistent_frames_;
+    return decision;
+  }
+
+  const bool positioning_timed_out =
+      positioning_state ==
+      xgc2_ros1_robot_adapter::PositioningHealthState::kTimedOut;
+  const bool fc_attitude_divergent =
+      fc_online && fc_orientation != nullptr &&
+      quaternionAngularDistanceRad(projected_pose.pose.orientation,
+                                   *fc_orientation) >
+          config_.max_vision_attitude_jump_rad;
+  decision.attitude_divergent = fc_attitude_divergent;
+
+  bool non_advancing_time = false;
+  bool rollback_sample = false;
+  if (has_source_time) {
+    if (source_time_nanos <= 0) {
+      non_advancing_time = true;
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    } else if (has_previous_time_ &&
+               source_clock_domain == previous_clock_domain_ &&
+               source_time_nanos == previous_time_nanos_) {
+      non_advancing_time = true;
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    } else if (has_previous_time_ &&
+               source_clock_domain == previous_clock_domain_ &&
+               source_time_nanos < previous_time_nanos_) {
+      non_advancing_time = true;
+      rollback_sample = true;
+    } else {
+      has_previous_time_ = true;
+      previous_time_nanos_ = source_time_nanos;
+      previous_clock_domain_ = source_clock_domain;
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    }
+  } else {
+    rollback_candidate_active_ = false;
+    rollback_consistent_frames_ = 0u;
+  }
+  decision.non_advancing_source_time = non_advancing_time;
+
+  if (rollback_sample) {
+    bool position_jump = false;
+    bool attitude_step_jump = false;
+    bool rollback_step_advancing = true;
+    if (rollback_candidate_active_) {
+      rollback_step_advancing = source_time_nanos > rollback_last_time_nanos_;
+      position_jump = positionDistanceMeters(projected_pose.pose.position,
+                                             rollback_last_pose_.pose.position) >
+                      config_.max_vision_position_jump_m;
+      attitude_step_jump =
+          quaternionAngularDistanceRad(projected_pose.pose.orientation,
+                                       rollback_last_pose_.pose.orientation) >
+          config_.max_vision_attitude_jump_rad;
+    } else if (has_previous_pose_) {
+      position_jump = positionDistanceMeters(projected_pose.pose.position,
+                                             previous_pose_.pose.position) >
+                      config_.max_vision_position_jump_m;
+      attitude_step_jump =
+          quaternionAngularDistanceRad(projected_pose.pose.orientation,
+                                       previous_pose_.pose.orientation) >
+          config_.max_vision_attitude_jump_rad;
+    }
+    decision.position_jump_detected = position_jump;
+    decision.attitude_flip_detected = attitude_step_jump || fc_attitude_divergent;
+
+    if (positioning_timed_out || fc_attitude_divergent) {
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    } else if (!rollback_candidate_active_) {
+      rollback_candidate_active_ = true;
+      rollback_last_time_nanos_ = source_time_nanos;
+      rollback_last_pose_ = projected_pose;
+      rollback_consistent_frames_ = 1u;
+    } else if (rollback_step_advancing && !position_jump &&
+               !attitude_step_jump) {
+      ++rollback_consistent_frames_;
+      rollback_last_time_nanos_ = source_time_nanos;
+      rollback_last_pose_ = projected_pose;
+    } else {
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    }
+
+    const bool rollback_committed =
+        rollback_candidate_active_ &&
+        rollback_consistent_frames_ >= config_.recovery_consistent_frames;
+    if (rollback_committed) {
+      has_previous_time_ = true;
+      previous_time_nanos_ = source_time_nanos;
+      previous_clock_domain_ = source_clock_domain;
+      previous_pose_ = projected_pose;
+      has_previous_pose_ = true;
+      rollback_candidate_active_ = false;
+      rollback_consistent_frames_ = 0u;
+    }
+
+    if (!config_.enabled) {
+      held_ = false;
+      attitude_hold_active_ = false;
+      consistent_frames_ = 0u;
+      decision.held = false;
+      decision.allow_publish = true;
+      decision.consistent_frames = 0u;
+      return decision;
+    }
+
+    if (rollback_committed) {
+      held_ = false;
+      attitude_hold_active_ = false;
+      consistent_frames_ = 0u;
+    } else {
+      held_ = true;
+      consistent_frames_ = 0u;
+      if (decision.attitude_flip_detected)
+        attitude_hold_active_ = true;
+    }
+    decision.held = held_;
+    decision.allow_publish = !held_;
+    decision.consistent_frames = held_ ? rollback_consistent_frames_ : 0u;
+    return decision;
+  }
+
+  bool position_jump = false;
+  bool attitude_step_jump = false;
+  if (has_previous_pose_) {
+    position_jump = positionDistanceMeters(projected_pose.pose.position,
+                                           previous_pose_.pose.position) >
+                    config_.max_vision_position_jump_m;
+    attitude_step_jump =
+        quaternionAngularDistanceRad(projected_pose.pose.orientation,
+                                     previous_pose_.pose.orientation) >
+        config_.max_vision_attitude_jump_rad;
+  }
+  decision.position_jump_detected = position_jump;
+  decision.attitude_flip_detected = attitude_step_jump || fc_attitude_divergent;
+
+  if (!non_advancing_time) {
+    previous_pose_ = projected_pose;
+    has_previous_pose_ = true;
+  }
+
+  if (!config_.enabled) {
+    held_ = false;
+    attitude_hold_active_ = false;
+    consistent_frames_ = 0u;
+    decision.held = false;
+    decision.allow_publish = true;
+    decision.consistent_frames = 0u;
+    return decision;
+  }
+
+  const bool frame_fault = positioning_timed_out || non_advancing_time ||
+                           position_jump || decision.attitude_flip_detected;
+  if (frame_fault) {
+    held_ = true;
+    consistent_frames_ = 0u;
+    if (decision.attitude_flip_detected)
+      attitude_hold_active_ = true;
+  } else if (held_) {
+    ++consistent_frames_;
+  }
+
+  if (held_ && consistent_frames_ >= config_.recovery_consistent_frames) {
+    held_ = false;
+    attitude_hold_active_ = false;
+    consistent_frames_ = 0u;
+  }
+
+  decision.held = held_;
+  decision.allow_publish = !held_;
+  decision.consistent_frames = consistent_frames_;
+  return decision;
+}
+
 bool BuildNativeProfileConfig(
     const xgc2_ros1_robot_adapter::RobotConfig &config,
     NativeProfileConfig *output, std::string *error) {
@@ -471,12 +719,15 @@ bool BuildNativeProfileConfig(
         config.parameters.size() - config.parameters.count("ros_master_uri") -
         config.parameters.count("ros_ip") -
         config.parameters.count("publish_vision") -
+        config.parameters.count("localization_delay_ms") -
         config.parameters.count("localization_pose_topic") -
         config.parameters.count("localization_twist_topic") -
         config.parameters.count("zenoh_endpoint") -
         config.parameters.count("localization_source") -
         config.parameters.count("mocap_sensor") -
-        config.parameters.count("mocap_frame_id");
+        config.parameters.count("mocap_frame_id") -
+        config.parameters.count("mocap_marker_from_body") -
+        config.parameters.count("vision_injection_gate_enabled");
     if (binding_count != 8u && !(zenoh_requested && binding_count == 7u))
       return fail(error, "PX4 native parameter binding is not exhaustive");
     contract::ParameterMetadata publish_vision_parameter{};
@@ -575,6 +826,12 @@ bool BuildNativeProfileConfig(
   }
 
   contract::ChannelMetadata pose_channel{};
+  if (config.parameters.count("mocap_marker_from_body") != 0u &&
+      config.profile_id != "px4-multirotor.physical.vrpn")
+    return fail(error, "physical asset extrinsic cannot be applied to a simulation profile");
+  if (!xgc2_ros1_robot_adapter::parseLocalizationExtrinsic(
+          config.parameters, &localization, &parameter_error))
+    return fail(error, "PX4 localization extrinsic is invalid: " + parameter_error);
   bool apply_world_offset = false;
   if (!InstalledContract().channelMetadata(config.profile_id, "state.mocap.pose", &pose_channel) ||
       !contract::channelPolicyBoolean(pose_channel, "apply_world_offset", &apply_world_offset))
@@ -752,6 +1009,27 @@ bool BuildNativeProfileConfig(
     return fail(error,
                 "PX4 force-disarm and reboot must share mavros/cmd/command");
   }
+  if (!canonical_input) {
+    contract::ChannelMetadata error_channel{};
+    double delay_ms = 0.0;
+    if (!InstalledContract().channelMetadata(config.profile_id, "state.localization.error", &error_channel) ||
+        !contract::channelPolicyNumber(error_channel, "measurement_delay_ms", &delay_ms))
+      return fail(error, "PX4 localization delay policy is missing");
+    const auto override_delay = config.parameters.find("localization_delay_ms");
+    if (override_delay != config.parameters.end()) {
+      std::size_t parsed = 0;
+      try {
+        delay_ms = std::stod(override_delay->second, &parsed);
+        if (parsed != override_delay->second.size())
+          return fail(error, "PX4 localization_delay_ms must be numeric");
+      } catch (const std::exception &) {
+        return fail(error, "PX4 localization_delay_ms must be numeric");
+      }
+    }
+    if (!std::isfinite(delay_ms) || delay_ms < 0.0 || delay_ms > 1000.0)
+      return fail(error, "PX4 localization_delay_ms must be between 0 and 1000");
+    candidate.localization_delay_seconds = delay_ms / 1000.0;
+  }
   candidate.localization = localization;
   candidate.zenoh_localization = zenoh_localization;
   if (!canonical_input) {
@@ -772,7 +1050,6 @@ bool BuildNativeProfileConfig(
   contract::ChannelMetadata mode{};
   contract::ChannelMetadata reboot{};
   contract::ChannelMetadata remote{};
-  contract::ChannelMetadata vision{};
   InstalledContract().channelMetadata(config.profile_id, "diagnostic.offboard-input",
                             &offboard);
   InstalledContract().channelMetadata(config.profile_id, "operation.arm", &arm);
@@ -781,7 +1058,6 @@ bool BuildNativeProfileConfig(
                             &reboot);
   InstalledContract().channelMetadata(config.profile_id, "operation.motion-intent",
                             &remote);
-  InstalledContract().channelMetadata(config.profile_id, "state.vision.pose", &vision);
   double offboard_rate = 0.0;
   std::int64_t offboard_timeout = 0;
   const char *const *allowed_modes = nullptr;
@@ -802,7 +1078,6 @@ bool BuildNativeProfileConfig(
   std::int64_t remote_publish_rate = 0;
   std::int64_t remote_timeout = 0;
   std::int64_t remote_core_silence = 0;
-  std::int64_t vision_publish_rate = 30;
   if (!contract::channelPolicyNumber(offboard, "minimum_rate_hz",
                                      &offboard_rate) ||
       !contract::channelPolicyInteger(offboard, "source_timeout_ms",
@@ -838,14 +1113,11 @@ bool BuildNativeProfileConfig(
       !contract::channelPolicyInteger(remote, "timeout_ms", &remote_timeout) ||
       !contract::channelPolicyInteger(remote, "core_silence_ms",
                                       &remote_core_silence) ||
-      (!canonical_input && !contract::channelPolicyInteger(vision, "publish_rate_hz",
-                                      &vision_publish_rate)) ||
       mav_command != 246 || reboot_param != 1 || !require_known ||
       !require_fresh || !require_connected || !require_disarmed ||
       remote_altitude != 1.0 || remote_linear <= 0.0 || remote_yaw <= 0.0 ||
       remote_publish_rate != 10 || remote_timeout != 1000 ||
-      remote_core_silence < 0 || remote_core_silence > 60000 ||
-      vision_publish_rate != 30) {
+      remote_core_silence < 0 || remote_core_silence > 60000) {
     return fail(error, "PX4 native policy binding is incomplete or unsafe");
   }
   candidate.offboard_source_timeout_seconds =
@@ -864,8 +1136,6 @@ bool BuildNativeProfileConfig(
   candidate.remote_control_maximum_linear_velocity_mps = remote_linear;
   candidate.remote_control_maximum_yaw_rate_rps = remote_yaw;
   candidate.remote_control_core_silence_ms = remote_core_silence;
-  candidate.vision_publish_rate_hz =
-      static_cast<double>(vision_publish_rate);
   candidate.allowed_modes.reserve(allowed_mode_count);
   std::set<std::string> unique_modes;
   for (std::size_t index = 0u; index < allowed_mode_count; ++index) {
@@ -874,6 +1144,55 @@ bool BuildNativeProfileConfig(
       return fail(error, "PX4 allowed-mode policy is empty or duplicated");
     }
     candidate.allowed_modes.emplace_back(allowed_modes[index]);
+  }
+  if (!canonical_input) {
+    contract::ChannelMetadata vision_pose{};
+    InstalledContract().channelMetadata(config.profile_id, "state.vision.pose",
+                                        &vision_pose);
+    bool injection_gate_enabled = false;
+    double max_vision_position_jump_m = 0.0;
+    double max_vision_attitude_jump_rad = 0.0;
+    std::int64_t recovery_consistent_frames = 0;
+    if (!contract::channelPolicyBoolean(vision_pose, "injection_gate_enabled",
+                                        &injection_gate_enabled) ||
+        !contract::channelPolicyNumber(vision_pose,
+                                       "max_vision_position_jump_m",
+                                       &max_vision_position_jump_m) ||
+        !contract::channelPolicyNumber(vision_pose,
+                                       "max_vision_attitude_jump_rad",
+                                       &max_vision_attitude_jump_rad) ||
+        !contract::channelPolicyInteger(vision_pose,
+                                        "recovery_consistent_frames",
+                                        &recovery_consistent_frames) ||
+        recovery_consistent_frames <= 0 ||
+        recovery_consistent_frames > 1000) {
+      return fail(error, "PX4 vision injection gate policy binding is invalid");
+    }
+    const auto gate_override =
+        config.parameters.find("vision_injection_gate_enabled");
+    if (gate_override != config.parameters.end()) {
+      if (gate_override->second == "true") {
+        injection_gate_enabled = true;
+      } else if (gate_override->second == "false") {
+        injection_gate_enabled = false;
+      } else {
+        return fail(error,
+                    "PX4 vision_injection_gate_enabled must be true or false");
+      }
+    }
+    candidate.vision_injection_gate.enabled = injection_gate_enabled;
+    candidate.vision_injection_gate.max_vision_position_jump_m =
+        max_vision_position_jump_m;
+    candidate.vision_injection_gate.max_vision_attitude_jump_rad =
+        max_vision_attitude_jump_rad;
+    candidate.vision_injection_gate.recovery_consistent_frames =
+        static_cast<std::size_t>(recovery_consistent_frames);
+    std::string gate_error;
+    if (!validVisionInjectionGateConfig(candidate.vision_injection_gate,
+                                        &gate_error)) {
+      return fail(error, "PX4 vision injection gate policy is invalid: " +
+                             gate_error);
+    }
   }
 
   *output = std::move(candidate);
@@ -974,6 +1293,8 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
           native_profile.offboard_source_timeout_seconds),
       offboard_minimum_rate_hz_(native_profile.offboard_minimum_rate_hz),
       positioning_health_(positioning_health_config),
+      vision_injection_gate_(native_profile.vision_injection_gate),
+      position_error_(native_profile.localization_delay_seconds),
       pose_endpoint_(std::move(native_profile.pose_endpoint)),
       velocity_endpoint_(std::move(native_profile.velocity_endpoint)),
       imu_endpoint_(std::move(native_profile.imu_endpoint)),
@@ -1002,8 +1323,7 @@ RobotRuntime::RobotRuntime(ros::NodeHandle node_handle, std::string robot_id,
           std::move(native_profile.attitude_setpoint_endpoint)),
       timesync_endpoint_(std::move(native_profile.timesync_endpoint)),
       localization_(native_profile.localization),
-      zenoh_localization_(native_profile.zenoh_localization),
-      vision_publish_cadence_(native_profile.vision_publish_rate_hz, 5u) {}
+      zenoh_localization_(native_profile.zenoh_localization) {}
 
 RobotRuntime::~RobotRuntime() { Stop(); }
 
@@ -1194,7 +1514,7 @@ bool RobotRuntime::installPx4(std::string *error) {
   }
   if (publish_vision_) {
     vision_pose_publisher_ =
-        node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 20, false);
+        node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 1, false);
     if (!requireRosRegistration(vision_pose_publisher_, vision_pose_endpoint_, error))
       return false;
   }
@@ -1221,7 +1541,7 @@ bool RobotRuntime::installPx4(std::string *error) {
         channelStaleAfterSeconds(profile_id_, "state.mocap.pose"));
     if (!zenoh_localization_.enabled) {
       mocap_subscriber_ = node_handle_.subscribe<geometry_msgs::PoseStamped>(
-          mocap_endpoint_, 50,
+          mocap_endpoint_, 1,
           [weak_self](const geometry_msgs::PoseStamped::ConstPtr &message) {
             if (const auto self = weak_self.lock())
               self->mocapPoseCallback(message);
@@ -1501,28 +1821,25 @@ void RobotRuntime::recordOutputLocked(const std::string &channel_id) {
 }
 
 void RobotRuntime::emitPositionErrorLocked(
-    const ros::Time &source_stamp, const ros::WallTime &now,
+    const ros::Time &, const ros::WallTime &now,
     std::vector<xgc::robot::v1::RobotMessage> *messages) {
   static const std::string localization_error_channel = "state.localization.error";
-  if (!has_local_position_ || !has_mocap_position_ || messages == nullptr)
+  const auto &result = position_error_.latest();
+  if (!result || messages == nullptr)
     return;
-  localization_error_stamp_ = source_stamp;
   if (channelRequired(localization_error_channel))
     recordSourceLocked(localization_error_channel, now);
   if (!channelEnabled(localization_error_channel) ||
-      !status_demand_.count(localization_error_channel) || !local_position_frame_valid_)
+      !status_demand_.count(localization_error_channel))
     return;
-  const double distance =
-      positionDistanceMeters(local_position_, mocap_position_);
-  if (channelEnabled(localization_error_channel) && std::isfinite(distance) &&
-      shouldEmitLocked(localization_error_channel, now)) {
+  if (shouldEmitLocked(localization_error_channel, now)) {
     xgc::semantic::common::v1::DistanceEstimate payload;
-    payload.set_frame_id(local_position_frame_id_);
-    payload.set_meters(distance);
+    payload.set_frame_id(result->frame);
+    payload.set_meters(result->meters);
     messages->push_back(makeEnvelopeLocked(localization_error_channel,
-                                           source_stamp, payload));
+                                           result->stamp, payload));
     recordOutputLocked(localization_error_channel);
-  } else if (channelEnabled(localization_error_channel)) {
+  } else {
     ++sources_[localization_error_channel].dropped_samples;
   }
 }
@@ -1589,6 +1906,29 @@ RobotRuntime::sourceAgeMillisLocked(const std::string &channel_id,
   return static_cast<std::uint64_t>(std::max(0.0, milliseconds));
 }
 
+const geometry_msgs::Quaternion *
+RobotRuntime::onlineFcOrientationLocked(const ros::WallTime &now,
+                                        bool fc_online) const {
+  if (!fc_online || !latest_pose_) {
+    return nullptr;
+  }
+  const auto source_it = sources_.find("state.pose");
+  if (source_it == sources_.end() ||
+      !sourceIsFresh(source_it->second.last_seen, now,
+                     source_it->second.stale_after_seconds)) {
+    return nullptr;
+  }
+  const auto &orientation = latest_pose_->pose.orientation;
+  const double norm = std::hypot(std::hypot(orientation.x, orientation.y),
+                                 std::hypot(orientation.z, orientation.w));
+  if (!std::isfinite(orientation.x) || !std::isfinite(orientation.y) ||
+      !std::isfinite(orientation.z) || !std::isfinite(orientation.w) ||
+      !std::isfinite(norm) || norm <= 1e-6) {
+    return nullptr;
+  }
+  return &orientation;
+}
+
 void RobotRuntime::px4PoseCallback(
     const geometry_msgs::PoseStamped::ConstPtr &message) {
   CallbackGuard callback(this);
@@ -1605,18 +1945,6 @@ void RobotRuntime::px4PoseCallback(
       latest_pose_ = message;
     else
       latest_pose_.reset();
-    if (std::isfinite(message->pose.position.x) &&
-        std::isfinite(message->pose.position.y) &&
-        std::isfinite(message->pose.position.z)) {
-      local_position_ = message->pose.position;
-      local_position_frame_valid_ = bounded_frame;
-      local_position_frame_id_ = bounded_frame ? message->header.frame_id : std::string();
-      has_local_position_ = true;
-    } else {
-      has_local_position_ = false;
-      local_position_frame_valid_ = false;
-      local_position_frame_id_.clear();
-    }
     if (latest_pose_ && channelEnabled("state.pose") && shouldEmitLocked("state.pose", now)) {
       xgc::semantic::common::v1::PoseEstimate payload;
       payload.set_frame_id(message->header.frame_id);
@@ -1628,7 +1956,9 @@ void RobotRuntime::px4PoseCallback(
     } else if (status_demand_.count("state.pose") && channelEnabled("state.pose")) {
       ++sources_["state.pose"].dropped_samples;
     }
-    emitPositionErrorLocked(message->header.stamp, now, &output);
+    if (!bounded_frame) position_error_.clear();
+    else if (position_error_.local(*message))
+      emitPositionErrorLocked(message->header.stamp, now, &output);
   }
   emit(std::move(output));
 }
@@ -1714,10 +2044,23 @@ void RobotRuntime::mocapPoseCallback(
             *message, localization_, &projected)) {
       latest_mocap_pose_.reset();
       has_mocap_pose_source_time_ = false;
-      has_mocap_position_ = false;
+      has_projected_mocap_pose_ = false;
+      has_mocap_pose_observation_ = true;
+      has_vision_pose_ = false;
+      has_vision_source_time_ = false;
+      vision_injection_gate_.noteInvalidPose();
+      position_error_.clear();
       ++sources_[state_mocap_pose_channel].dropped_samples;
       return;
     }
+    const auto prior_health = positioning_health_.evaluate(now.toSec());
+    const bool prior_timed_out =
+        has_mocap_pose_observation_ &&
+        prior_health.state ==
+            xgc2_ros1_robot_adapter::PositioningHealthState::kTimedOut;
+    latest_projected_mocap_pose_ = projected;
+    has_projected_mocap_pose_ = true;
+    has_mocap_pose_observation_ = true;
     const bool bounded_frame = projected.header.frame_id.size() <=
                                xgc2_ros1_robot_adapter::kMaximumTelemetryItemBytes;
     if (channelEnabled(state_mocap_pose_channel) && bounded_frame) {
@@ -1729,8 +2072,7 @@ void RobotRuntime::mocapPoseCallback(
       latest_mocap_pose_.reset();
       has_mocap_pose_source_time_ = false;
     }
-    mocap_position_ = projected.pose.position;
-    has_mocap_position_ = true;
+
     positioning_health_.recordPose(
         now.toSec(), projected.pose.position.x,
         projected.pose.position.y, projected.pose.position.z);
@@ -1749,32 +2091,71 @@ void RobotRuntime::mocapPoseCallback(
     } else if (status_demand_.count(state_mocap_pose_channel) && channelEnabled(state_mocap_pose_channel)) {
       ++sources_[state_mocap_pose_channel].dropped_samples;
     }
-    if (publish_vision_ && vision_publish_cadence_.take(now.toSec())) {
-      publish_vision = true;
-      recordSourceLocked(state_vision_pose_channel, now);
-      if (channelEnabled(state_vision_pose_channel) && bounded_frame) {
-        latest_vision_pose_ = projected;
-        has_vision_pose_ = true;
-        has_vision_source_time_ = source_time != nullptr;
-        if (source_time != nullptr)
-          latest_vision_source_time_ = *source_time;
+    if (publish_vision_) {
+      const auto current_health = positioning_health_.evaluate(now.toSec());
+      const double health_stale_after =
+          channelStaleAfterSeconds(profile_id_, "state.health");
+      const bool health_state_fresh =
+          has_mavros_state_ &&
+          sourceIsFresh(mavros_state_last_seen_, now, health_stale_after);
+      const bool fc_online =
+          px4IsOnline(has_mavros_state_, health_state_fresh,
+                      mavros_state_.connected);
+      const geometry_msgs::Quaternion *fc_orientation =
+          onlineFcOrientationLocked(now, fc_online);
+      bool has_effective_source_time = false;
+      std::int64_t effective_source_time_nanos = 0;
+      xgc::v1::ClockDomain effective_clock_domain =
+          xgc::v1::CLOCK_DOMAIN_UNSPECIFIED;
+      if (source_time != nullptr) {
+        has_effective_source_time = true;
+        effective_source_time_nanos = source_time->nanoseconds();
+        effective_clock_domain = source_time->clock_domain();
+      } else if (!projected.header.stamp.isZero()) {
+        has_effective_source_time = true;
+        effective_source_time_nanos =
+            static_cast<std::int64_t>(projected.header.stamp.sec) *
+                1000000000LL +
+            static_cast<std::int64_t>(projected.header.stamp.nsec);
+        effective_clock_domain = xgc::v1::CLOCK_DOMAIN_UNIX;
+      }
+      const auto decision = vision_injection_gate_.evaluate(
+          projected, current_health.state, prior_timed_out,
+          has_effective_source_time, effective_source_time_nanos,
+          effective_clock_domain, fc_online, fc_orientation);
+      if (decision.allow_publish) {
+        publish_vision = true;
+        recordSourceLocked(state_vision_pose_channel, now);
+        if (channelEnabled(state_vision_pose_channel) && bounded_frame) {
+          latest_vision_pose_ = projected;
+          has_vision_pose_ = true;
+          has_vision_source_time_ = source_time != nullptr;
+          if (source_time != nullptr)
+            latest_vision_source_time_ = *source_time;
+        } else {
+          has_vision_pose_ = false;
+          has_vision_source_time_ = false;
+        }
+        if (has_vision_pose_ && channelEnabled(state_vision_pose_channel) &&
+            shouldEmitLocked(state_vision_pose_channel, now)) {
+          xgc::semantic::common::v1::PoseEstimate payload;
+          payload.set_frame_id(projected.header.frame_id);
+          copyVector(projected.pose.position, payload.mutable_position());
+          copyQuaternion(projected.pose.orientation,
+                         payload.mutable_orientation());
+          output.push_back(makeEnvelopeLocked(
+              state_vision_pose_channel, projected.header.stamp, payload,
+              source_time));
+          recordOutputLocked(state_vision_pose_channel);
+        }
       } else {
         has_vision_pose_ = false;
         has_vision_source_time_ = false;
       }
-      if (has_vision_pose_ && channelEnabled(state_vision_pose_channel) &&
-          shouldEmitLocked(state_vision_pose_channel, now)) {
-        xgc::semantic::common::v1::PoseEstimate payload;
-        payload.set_frame_id(projected.header.frame_id);
-        copyVector(projected.pose.position, payload.mutable_position());
-        copyQuaternion(projected.pose.orientation, payload.mutable_orientation());
-        output.push_back(makeEnvelopeLocked(
-            state_vision_pose_channel, projected.header.stamp, payload,
-            source_time));
-        recordOutputLocked(state_vision_pose_channel);
-      }
     }
-    emitPositionErrorLocked(projected.header.stamp, now, &output);
+    if (!bounded_frame) position_error_.clear();
+    else if (position_error_.mocap(projected))
+      emitPositionErrorLocked(projected.header.stamp, now, &output);
   }
   if (canonical_pose_publisher_) canonical_pose_publisher_.publish(projected);
   if (publish_vision)
@@ -2455,14 +2836,13 @@ void RobotRuntime::emitSnapshotLocked(
         has_mocap_acceleration_source_time_
             ? &latest_mocap_acceleration_source_time_
             : nullptr));
-  } else if (channel == "state.localization.error" && has_local_position_ &&
-             has_mocap_position_ && local_position_frame_valid_) {
-    const double distance = positionDistanceMeters(local_position_, mocap_position_);
-    if (!std::isfinite(distance) || !shouldEmitLocked(channel, now)) return;
+  } else if (channel == "state.localization.error" && position_error_.latest()) {
+    const auto &result = *position_error_.latest();
+    if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::DistanceEstimate payload;
-    payload.set_frame_id(local_position_frame_id_);
-    payload.set_meters(distance);
-    messages->push_back(makeEnvelopeLocked(channel, localization_error_stamp_, payload));
+    payload.set_frame_id(result.frame);
+    payload.set_meters(result.meters);
+    messages->push_back(makeEnvelopeLocked(channel, result.stamp, payload));
   } else if (channel == "state.imu" && latest_imu_) {
     if (!shouldEmitLocked(channel, now)) return;
     xgc::semantic::common::v1::ImuEstimate payload;
@@ -2564,14 +2944,65 @@ RobotRuntime::healthLocked(const ros::WallTime &now) const {
     addFault(&payload, "mavros.extended-state.stale",
              "MAVROS extended state exceeded its freshness limit", 1);
   }
-  if (online && payload.positioning().state() ==
-                    xgc::semantic::common::v1::PositioningHealth::
-                        POSITIONING_STATE_FROZEN) {
-    payload.set_summary("VRPN positioning data is frozen");
-  } else if (online && payload.positioning().state() ==
-                           xgc::semantic::common::v1::PositioningHealth::
-                               POSITIONING_STATE_TIMED_OUT) {
-    payload.set_summary("VRPN positioning is unavailable");
+  const geometry_msgs::Quaternion *fc_orientation =
+      onlineFcOrientationLocked(now, online);
+  if (publish_vision_) {
+    const auto pos_state = payload.positioning().state();
+    const bool fc_attitude_divergent =
+        online && fc_orientation != nullptr && has_projected_mocap_pose_ &&
+        pos_state !=
+            xgc::semantic::common::v1::PositioningHealth::
+                POSITIONING_STATE_TIMED_OUT &&
+        quaternionAngularDistanceRad(
+            latest_projected_mocap_pose_.pose.orientation, *fc_orientation) >
+            vision_injection_gate_.config().max_vision_attitude_jump_rad;
+    const bool attitude_divergence =
+        online &&
+        (fc_attitude_divergent ||
+         (vision_injection_gate_.enabled() &&
+          vision_injection_gate_.heldByAttitude() &&
+          pos_state !=
+              xgc::semantic::common::v1::PositioningHealth::
+                  POSITIONING_STATE_TIMED_OUT));
+    const bool injection_held =
+        vision_injection_gate_.enabled() &&
+        (vision_injection_gate_.isHeld() ||
+         pos_state ==
+             xgc::semantic::common::v1::PositioningHealth::
+                 POSITIONING_STATE_TIMED_OUT ||
+         fc_attitude_divergent);
+    if (attitude_divergence) {
+      addFault(&payload, "mocap.attitude.divergence",
+               "Mocap attitude diverges from the flight controller orientation",
+               2);
+    }
+    if (injection_held) {
+      addFault(&payload, "mocap.vision.injection_held",
+               "MAVROS vision_pose injection is held by the safety gate", 2);
+    }
+    if (online &&
+        pos_state == xgc::semantic::common::v1::PositioningHealth::
+                         POSITIONING_STATE_TIMED_OUT) {
+      payload.set_summary("VRPN positioning is unavailable");
+    } else if (online && injection_held) {
+      payload.set_summary("MAVROS vision_pose injection is held");
+    } else if (online &&
+               pos_state == xgc::semantic::common::v1::PositioningHealth::
+                                POSITIONING_STATE_FROZEN) {
+      payload.set_summary("VRPN positioning data is frozen");
+    } else if (online && attitude_divergence) {
+      payload.set_summary("Mocap attitude diverges from flight controller");
+    }
+  } else {
+    if (online && payload.positioning().state() ==
+                      xgc::semantic::common::v1::PositioningHealth::
+                          POSITIONING_STATE_FROZEN) {
+      payload.set_summary("VRPN positioning data is frozen");
+    } else if (online && payload.positioning().state() ==
+                             xgc::semantic::common::v1::PositioningHealth::
+                                 POSITIONING_STATE_TIMED_OUT) {
+      payload.set_summary("VRPN positioning is unavailable");
+    }
   }
   return payload;
 }

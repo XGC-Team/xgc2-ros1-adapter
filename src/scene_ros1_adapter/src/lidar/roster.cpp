@@ -33,7 +33,7 @@ Json authoredLidar(const Json &robot) {
     return std::string{};
   };
   const auto mode = text("mode", {"", "raycast", "penetrating", "depth_frustum"});
-  text("preset", {"", "bridge_equivalent", "zju_cpu_crop", "zju_cpu_crop_ego_v2"});
+  text("preset", {"", "bridge_equivalent", "heading_cone_crop", "heading_halfspace_crop"});
   text("acceleration", {"", "auto", "cpu", "gpu"});
   for (const auto &bound : {std::pair<const char *, double>{"rateHz", 100},
                            {"rangeMeters", 200}, {"hFovDeg", 360}, {"vFovDeg", 180}}) {
@@ -193,7 +193,7 @@ Json buildFleetJson(const SessionInput &input, bool point_cloud) {
         } else {
           sensor["headingCrop"] = true;
           sensor["verticalSlabTan"] = 1 / std::sqrt(3.0);
-          if (preset == "zju_cpu_crop")
+          if (preset == "heading_cone_crop")
             sensor["headingCosMin"] = 0.5;
         }
       }
