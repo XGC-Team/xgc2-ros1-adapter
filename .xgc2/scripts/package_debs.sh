@@ -270,9 +270,6 @@ package_type_server() {
     "${summary}" "${detail}"
   build_deb "${pkg_root}" "${package}"
   chmod 0755 "${pkg_root}${executable}"
-  if [[ "$ros_package" == "$PX4_ROS_PACKAGE" ]]; then
-    chmod 0755 "${pkg_root}${PREFIX}/lib/${ros_package}/mocap-calibration-worker"
-  fi
   fakeroot dpkg-deb --build "${pkg_root}" \
     "${OUTPUT_DIR}/${package}_${VERSION}_${ARCH}.deb" >/dev/null
 }
@@ -352,7 +349,7 @@ if [[ "$selection" == all || "$selection" == px4 ]]; then
 package_type_server \
   "${PX4_PACKAGE}" \
   "${PX4_ROS_PACKAGE}" \
-  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, python3-numpy, python3-scipy, xgc2-zenoh (>= 1.10.2-1~), xgc2-zenoh (<< 1.10.3~)" \
+  "ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-mavros-msgs, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-sensor-msgs, xgc2-zenoh (>= 1.10.2-1~), xgc2-zenoh (<< 1.10.3~)" \
   "XGC2 PX4 multirotor ROS1 type server" \
   "Run-owned type server for PX4 multirotors: telemetry, diagnostics, and native command capabilities." \
   "xgc2-px4-multirotor-ros1-adapter"

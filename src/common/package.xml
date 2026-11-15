@@ -34,6 +34,6 @@
   <exec_depend>roscpp</exec_depend>
 
   <build_depend version_eq="1.10.2-1~focal">xgc2-zenoh</build_depend>
-  <build_depend version_eq="0.1.0-5~focal">xgc2-vrpn-zenoh-dev</build_depend>
+  <build_depend version_eq="0.1.0-6~focal">xgc2-vrpn-zenoh-dev</build_depend>
   <test_depend>rostest</test_depend>
 </package>

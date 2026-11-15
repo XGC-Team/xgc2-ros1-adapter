@@ -51,6 +51,7 @@ target_link_libraries(${PROJECT_NAME}_operations ${catkin_LIBRARIES})
 
 add_executable(${PROJECT_NAME}_node
   src/px4_multirotor_ros1_adapter_node.cpp
+  src/native_robot.cpp
   src/robot_runtime.cpp
   "${CONTRACT_HEADER}"
 )
@@ -77,13 +78,19 @@ if(CATKIN_ENABLE_TESTING)
     target_link_libraries(${PROJECT_NAME}_position_error_test ${catkin_LIBRARIES})
   endif()
   find_package(rostest REQUIRED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(GRPC REQUIRED grpc++>=1.16 grpc)
+  find_package(XgcXrpc 0.2.0 REQUIRED CONFIG COMPONENTS grpc)
+  find_package(nlohmann_json 3.7 REQUIRED)
   find_package(zenohc 1.10.2 EXACT CONFIG REQUIRED)
   add_rostest_gtest(${PROJECT_NAME}_status_demand_test
-    test/status_demand.test test/status_demand_test.cpp src/robot_runtime.cpp)
+    test/status_demand.test test/status_demand_test.cpp src/native_robot.cpp src/robot_runtime.cpp)
   if(TARGET ${PROJECT_NAME}_status_demand_test)
     add_dependencies(${PROJECT_NAME}_status_demand_test ${PROJECT_NAME}_profiles ${catkin_EXPORTED_TARGETS})
+    target_include_directories(${PROJECT_NAME}_status_demand_test PRIVATE ${GRPC_INCLUDE_DIRS})
     target_link_libraries(${PROJECT_NAME}_status_demand_test
-      ${catkin_LIBRARIES} protobuf::libprotobuf zenohc::static)
+      ${PROJECT_NAME}_operations ${catkin_LIBRARIES} protobuf::libprotobuf zenohc::static
+      XgcXrpc::grpc nlohmann_json::nlohmann_json ${GRPC_LDFLAGS})
   endif()
   catkin_add_gtest(${PROJECT_NAME}_test
     test/robot_runtime_test.cpp
@@ -111,8 +118,3 @@ if(CATKIN_ENABLE_TESTING)
     )
   endif()
 endif()
-
-# The calibration worker has the same lifecycle as its invoking Agent Run.
-install(DIRECTORY python/xgc_mocap_calibration DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-  FILES_MATCHING PATTERN "*.py")
-install(PROGRAMS python/mocap-calibration-worker DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

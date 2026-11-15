@@ -1022,5 +1022,68 @@ TEST(Prepare, GazeboSceneParametersAreTheContractList) {
   EXPECT_GE(checked, 8u);
 }
 
+TEST(Prepare, RebasesCapturedSceneAndExtrinsicOnceWithoutMutatingSealedAsset) {
+  Fixture fixture("document-and-media", true);
+  const std::string extrinsic_yaml =
+      "schema: xgc2.camera-extrinsic.v1\nframe_convention: optical\n"
+      "parent_frame: world\nchild_frame: camera_optical\n"
+      "translation:\n  x: 1.5\n  y: -0.5\n  z: 2.0\n"
+      "quaternion_xyzw:\n  x: 0.0\n  y: 0.0\n  z: 0.0\n  w: 1.0\n";
+  write(fixture.asset() / "extrinsic.yaml", extrinsic_yaml);
+  const auto original_scene = bytes(fixture.asset() / "scene.yaml");
+  auto manifest = parseJson(bytes(fixture.asset() / "manifest.json"));
+  manifest["extrinsic"] = Json{{"file", "extrinsic.yaml"}, {"sha256", digest(extrinsic_yaml)}};
+  manifest["localizationOffset"] = Json{{"x", 1.0}, {"y", 2.0}, {"z", -0.5}};
+  write(fixture.asset() / "manifest.json", dumpJson(manifest));
+
+  const Json target_d{{"x", 4.0}, {"y", 1.0}, {"z", 0.5}};  // delta = (+3.0, -1.0, +1.0)
+  const Json context{
+      {"scene", {{"asset", "Fixture"}, {"simulator", "gazebo"}, {"parameters", {{"frozen", true}}}}},
+      {"experimentResourceId", "experiment1"},
+      {"sessionId", "session1"},
+      {"targetLocalizationOffset", target_d},
+  };
+  const auto selected = inputs(context, fixture.work, fixture.workspace());
+
+  // Sealed files on disk are completely untouched.
+  EXPECT_EQ(bytes(fixture.asset() / "extrinsic.yaml"), extrinsic_yaml);
+  EXPECT_EQ(bytes(fixture.asset() / "scene.yaml"), original_scene);
+
+  // Compiled scene obstacles and ground reflect d1 - d0 exactly once.
+  const auto original_doc = parseYaml(original_scene);
+  const auto compiled = parseJson(bytes(selected.at("compiledSceneFile").get<std::string>()));
+  ASSERT_EQ(compiled.at("obstacles").size(), original_doc.at("obstacles").size());
+  for (std::size_t i = 0; i < compiled.at("obstacles").size(); ++i) {
+    const auto& before = original_doc.at("obstacles").at(i).at("pose").at("position");
+    const auto& after = compiled.at("obstacles").at(i).at("pose").at("position");
+    EXPECT_NEAR(after.at(0).get<double>(), before.at(0).get<double>() + 3.0, 1e-9);
+    EXPECT_NEAR(after.at(1).get<double>(), before.at(1).get<double>() - 1.0, 1e-9);
+    EXPECT_NEAR(after.at(2).get<double>(), before.at(2).get<double>() + 1.0, 1e-9);
+  }
+  EXPECT_NEAR(compiled.at("ground").at("z").get<double>(), 1.0, 1e-9);
+
+  // Rebased extrinsic.yaml adds d1 - d0 once and leaves orientation intact.
+  const auto rebased_ext = parseYaml(bytes(selected.at("extrinsicFile").get<std::string>()));
+  EXPECT_NE(selected.at("extrinsicFile").get<std::string>(), (fixture.asset() / "extrinsic.yaml").string());
+  EXPECT_NEAR(rebased_ext.at("translation").at("x").get<double>(), 4.5, 1e-9);
+  EXPECT_NEAR(rebased_ext.at("translation").at("y").get<double>(), -1.5, 1e-9);
+  EXPECT_NEAR(rebased_ext.at("translation").at("z").get<double>(), 3.0, 1e-9);
+  EXPECT_NEAR(rebased_ext.at("quaternion_xyzw").at("w").get<double>(), 1.0, 1e-9);
+
+  // Authored scenes without manifest.localizationOffset keep original G coordinates untouched.
+  manifest.erase("localizationOffset");
+  write(fixture.asset() / "manifest.json", dumpJson(manifest));
+  const auto authored_selected = inputs(context, fixture.work, fixture.workspace());
+  EXPECT_EQ(authored_selected.at("extrinsicFile"), (fixture.asset() / "extrinsic.yaml").string());
+
+  // Cross-origin recordingWindow bag replay refuses d0 -> d1 rebase.
+  const std::string window_yaml = "schema: xgc2.recording-window.v1\nstart_ns: 100\nend_ns: 200\n";
+  write(fixture.asset() / "recording-window.yaml", window_yaml);
+  manifest["localizationOffset"] = Json{{"x", 1.0}, {"y", 2.0}, {"z", -0.5}};
+  manifest["recordingWindow"] = Json{{"file", "recording-window.yaml"}, {"sha256", digest(window_yaml)}};
+  write(fixture.asset() / "manifest.json", dumpJson(manifest));
+  EXPECT_THROW((void)inputs(context, fixture.work, fixture.workspace()), SceneError);
+}
+
 }  // namespace
 }  // namespace xgc_scene

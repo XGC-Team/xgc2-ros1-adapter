@@ -565,9 +565,121 @@ void atomic(const fs::path& path, const std::string& data) {
   }
 }
 
+void atomic(const fs::path& path, const std::string& data);
+
+std::optional<std::array<double, 3>> parseOffsetVector(const Json& value, const std::string& label) {
+  if (value.is_null() || (value.is_object() && value.empty())) return std::nullopt;
+  fields(value, {"x", "y", "z"}, {"x", "y", "z"});
+  std::array<double, 3> result{};
+  const char* keys[] = {"x", "y", "z"};
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto& v = value.at(keys[i]);
+    if (!finite(v)) throw SceneError(label + " must contain finite coordinates");
+    result[i] = v.get<double>();
+  }
+  return result;
+}
+
+std::optional<std::array<double, 3>> computeOriginDelta(const Json& manifest, const Json& target_offset) {
+  const auto d0 = parseOffsetVector(manifest.value("localizationOffset", Json()), "manifest localizationOffset");
+  const auto d1 = parseOffsetVector(target_offset, "target localizationOffset");
+  if (!d0 || !d1) return std::nullopt;
+  std::array<double, 3> delta{
+      d1->at(0) - d0->at(0),
+      d1->at(1) - d0->at(1),
+      d1->at(2) - d0->at(2),
+  };
+  const double max_delta = std::max({std::abs(delta[0]), std::abs(delta[1]), std::abs(delta[2])});
+  if (max_delta <= 1e-9) return std::nullopt;
+  if (truth(manifest.value("recordingWindow", Json())))
+    throw SceneError("Scene recordingWindow replay cannot rebase across localizationOffset changes");
+  return delta;
+}
+
+void shiftPointArray(Json& point, const std::array<double, 3>& delta, const std::string& label) {
+  if (!point.is_array() || point.size() != 3) throw SceneError(label + " must have 3 coordinates");
+  for (std::size_t i = 0; i < 3; ++i) {
+    if (!finite(point.at(i))) throw SceneError(label + " coordinates must be finite");
+    point[i] = point.at(i).get<double>() + delta[i];
+  }
+}
+
+void shiftPoseTranslation(Json& container, const std::array<double, 3>& delta) {
+  if (!container.contains("pose") || container["pose"].is_null()) {
+    container["pose"] = Json{{"position", Json::array({delta[0], delta[1], delta[2]})}};
+    return;
+  }
+  if (!container["pose"].is_object()) throw SceneError("Scene pose must be an object");
+  auto& p = container["pose"];
+  if (!p.contains("position") || p["position"].is_null()) {
+    p["position"] = Json::array({delta[0], delta[1], delta[2]});
+    return;
+  }
+  shiftPointArray(p["position"], delta, "pose position");
+}
+
+Json rebaseSceneDocument(Json doc, const std::array<double, 3>& delta) {
+  if (doc.contains("obstacles") && doc["obstacles"].is_array()) {
+    for (auto& obstacle : doc["obstacles"]) {
+      shiftPoseTranslation(obstacle, delta);
+      if (obstacle.contains("motion") && obstacle["motion"].is_object()) {
+        auto& motion = obstacle["motion"];
+        const auto kind = motion.value("type", Json("hold"));
+        if (kind == "ping_pong") {
+          if (motion.contains("point_a")) shiftPointArray(motion["point_a"], delta, "motion point_a");
+          if (motion.contains("point_b")) shiftPointArray(motion["point_b"], delta, "motion point_b");
+        } else if (kind == "circle") {
+          if (motion.contains("center")) shiftPointArray(motion["center"], delta, "motion center");
+        } else if (kind == "waypoints" && motion.contains("waypoints") && motion["waypoints"].is_array()) {
+          for (auto& wp : motion["waypoints"]) shiftPointArray(wp, delta, "motion waypoint");
+        }
+      }
+    }
+  }
+  if (doc.contains("ground") && doc["ground"].is_object()) {
+    auto& g = doc["ground"];
+    const auto mode = g.value("mode", Json("default_plane"));
+    if (mode == "default_plane") {
+      if (std::abs(delta[2]) > 1e-9) {
+        const auto z_val = g.value("z", Json(0.0));
+        if (!finite(z_val)) throw SceneError("ground z must be finite");
+        g["z"] = z_val.get<double>() + delta[2];
+      }
+    } else if (mode == "model") {
+      shiftPoseTranslation(g, delta);
+    }
+  } else if (std::abs(delta[2]) > 1e-9) {
+    doc["ground"] = Json{{"mode", "default_plane"}, {"z", delta[2]}};
+  }
+  return doc;
+}
+
+std::string rebaseExtrinsicYaml(const fs::path& sealed_extrinsic, const std::array<double, 3>& delta) {
+  auto doc = parseYaml(read(sealed_extrinsic, kMaxDocumentBytes));
+  if (!doc.is_object() || !doc.contains("translation"))
+    throw SceneError("Scene extrinsic requires translation to rebase localizationOffset");
+  auto& translation = doc.at("translation");
+  if (translation.is_object()) {
+    for (const auto& axis : {std::make_pair(0, "x"), std::make_pair(1, "y"), std::make_pair(2, "z")}) {
+      if (!translation.contains(axis.second) || !finite(translation.at(axis.second)))
+        throw SceneError("Scene extrinsic translation must be finite");
+      translation[axis.second] = translation.at(axis.second).get<double>() + delta[axis.first];
+    }
+  } else if (translation.is_array() && translation.size() == 3) {
+    for (std::size_t i = 0; i < 3; ++i) {
+      if (!finite(translation.at(i))) throw SceneError("Scene extrinsic translation must be finite");
+      translation[i] = translation.at(i).get<double>() + delta[i];
+    }
+  } else {
+    throw SceneError("Scene extrinsic translation must be an object or 3-vector");
+  }
+  return dumpYaml(doc);
+}
+
 Json prepare(const Json& request) {
   fields(request, {"schema", "configuration_revision", "asset_directory", "world_file", "resource_root",
-                   "socket_path", "target_id", "output_grant", "parameters", "editable", "run_id", "expected_revision_id"},
+                   "socket_path", "target_id", "output_grant", "parameters", "editable", "run_id",
+                   "expected_revision_id", "target_localization_offset"},
                   {"schema", "configuration_revision", "resource_root", "socket_path", "target_id", "output_grant"});
   const auto& revision = request.at("configuration_revision");
   if (request.at("schema") != kPrepareSchema || !revision.is_number_integer() ||
@@ -662,6 +774,7 @@ Json prepare(const Json& request) {
   std::vector<std::pair<fs::path, std::string>> files{{output / "prepared-world.world", encoded}};
   std::string working_file;
   if (project_geometry) {
+    const auto origin_delta = computeOriginDelta(manifest, request.value("target_localization_offset", Json()));
     auto obstacle_input = manifest.value("obstacleInput", Json());
     if (!truth(obstacle_input)) obstacle_input = Json::object();
     const bool random = obstacle_input.value("mode", Json()) == "random";
@@ -682,7 +795,19 @@ Json prepare(const Json& request) {
       document = result.first.first; resolved = result.second;
     }
     if (document.at("obstacles").size() > 256) throw SceneError("This Gazebo world supports at most 256 scene entities");
-    if (!frozen && resolved == scene_file) {
+    if (origin_delta) {
+      if (resolved == scene_file) {
+        document = rebaseSceneDocument(std::move(document), *origin_delta);
+        const auto rebased_scene = !working_file.empty() ? fs::path(working_file) : (output / "scene-document.rebased.yaml");
+        files.emplace_back(rebased_scene, dumpYaml(document));
+        scene_file = rebased_scene.string();
+      }
+      if (!extrinsic_file.empty()) {
+        const auto rebased_extrinsic = output / "extrinsic.rebased.yaml";
+        files.emplace_back(rebased_extrinsic, rebaseExtrinsicYaml(extrinsic_file, *origin_delta));
+        extrinsic_file = rebased_extrinsic.string();
+      }
+    } else if (!frozen && resolved == scene_file) {
       files.emplace_back(working_file, dumpYaml(document)); scene_file = working_file;
     } else scene_file = resolved;
   }
@@ -817,6 +942,12 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
     return encoded + (item.is_object() ? "}" : "]");
   };
   value["generationParametersJson"] = compact(generation_json);
+  value["mediaFile"] = attachment(directory, manifest.value("media", Json()));
+  value["cameraInfoFile"] = attachment(directory, manifest.value("cameraInfo", Json()));
+  value["extrinsicFile"] = attachment(directory, manifest.value("extrinsic", Json()));
+  if (manifest.contains("localizationOffset") && !manifest.at("localizationOffset").is_null())
+    value["localizationOffset"] = manifest.at("localizationOffset");
+  const auto origin_delta = computeOriginDelta(manifest, context.value("targetLocalizationOffset", Json()));
   {
     const auto session = context.value("sessionId", Json());
     if (!shortIdentity(session)) throw SceneError("Compiled scene preparation requires the actual Session identity");
@@ -828,15 +959,27 @@ Json inputs(const Json& context, const fs::path& resource_root, const fs::path& 
     // Resolve the editor's selected working definition before compiling. The
     // sealed asset directory remains the resource root even when the working
     // YAML lives elsewhere. Only this finite startup command parses resources.
-    const auto initial = !working.empty() && fs::is_regular_file(working)
+    const bool pre_existing_working = !random && !working.empty() && fs::is_regular_file(working);
+    auto initial = pre_existing_working
         ? load(working).first : resolve(scene, working, generation_json).first.first;
+    if (origin_delta) {
+      if (!pre_existing_working) {
+        initial = rebaseSceneDocument(std::move(initial), *origin_delta);
+        const auto rebased_scene_path = output / "scene-document.rebased.yaml";
+        atomic(rebased_scene_path, dumpYaml(initial));
+        value["sceneFile"] = rebased_scene_path.string();
+      }
+      const auto sealed_extrinsic = value.at("extrinsicFile").get<std::string>();
+      if (!sealed_extrinsic.empty()) {
+        const auto rebased_extrinsic_path = output / "extrinsic.rebased.yaml";
+        atomic(rebased_extrinsic_path, rebaseExtrinsicYaml(sealed_extrinsic, *origin_delta));
+        value["extrinsicFile"] = rebased_extrinsic_path.string();
+      }
+    }
     const auto path = output / "scene-document.expanded.json";
     atomic(path, dumpJson(compile(initial, directory.string())));
     value["compiledSceneFile"] = path.string();
   }
-  value["mediaFile"] = attachment(directory, manifest.value("media", Json()));
-  value["cameraInfoFile"] = attachment(directory, manifest.value("cameraInfo", Json()));
-  value["extrinsicFile"] = attachment(directory, manifest.value("extrinsic", Json()));
   // Published consumer contract: workflows bind `scene-inputs` facts.pointCloud.* (e.g. a point-cloud convex
   // cover). The frozen sceneAsset.pointCloud feeds XSim and the adapter runtime; this keeps the published value.
   if (manifest.contains("pointCloud")) value["pointCloud"] = manifest.at("pointCloud");

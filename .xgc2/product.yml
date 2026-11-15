@@ -56,8 +56,6 @@ apt:
   - ros-noetic-visualization-msgs
   - ros-noetic-xgc2-geometry-msgs (>= 1.5.0-4)
   - python3
-  - python3-numpy
-  - python3-scipy
   - xgc2-zenoh (>= 1.10.2-1~)
   - xgc2-zenoh (<< 1.10.3~)
   - python3-xgc2-xrpc (>= 0.2.1)

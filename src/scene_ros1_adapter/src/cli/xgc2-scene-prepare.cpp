@@ -153,6 +153,8 @@ int main(int argc, char** argv) {
       // The revision the Session froze at open (sceneAsset.revisionId).
       const auto expected = context.value("expectedRevisionId", Json());
       if (!expected.is_null()) request["expected_revision_id"] = expected;
+      const auto target_offset = context.value("targetLocalizationOffset", Json());
+      if (!target_offset.is_null()) request["target_localization_offset"] = target_offset;
       value = xgc_scene::prepare(request);
       const auto manifest = xgc_scene::parseJson(xgc_scene::read(fs::path(value.at("assetDirectory").get<std::string>()) / "manifest.json", 65536));
       const auto document = manifest.value("sceneDocument", Json());

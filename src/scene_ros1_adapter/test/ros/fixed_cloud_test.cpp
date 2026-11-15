@@ -93,5 +93,37 @@ TEST(FixedCloud, FrozenSessionIsTheOnlySourceOfTheCloudMetadata) {
   EXPECT_THROW(frozenFixedCloud(tampered, asset.directory), SceneError);
 }
 
+TEST(FixedCloud, RebasesFrozenPointCloudFromAssetOffsetToSessionOffsetWithoutMutatingFile) {
+  CloudAsset asset;
+  const float points[] = {1.0f, 2.0f, 3.0f, -0.5f, 4.0f, 1.5f};
+  std::string data(sizeof(points), '\0');
+  std::memcpy(data.data(), points, sizeof(points));
+  asset.write(data);
+
+  Json session = Json::object();
+  session["localizationOffset"] = Json{{"x", 2.5}, {"y", -1.0}, {"z", 0.5}};  // d1
+  session["sceneAsset"]["revisionId"] = "r";
+  session["sceneAsset"]["pointCloud"] = asset.selected.at("pointCloud");
+  session["sceneAsset"]["localizationOffset"] = Json{{"x", 1.0}, {"y", 1.5}, {"z", -0.5}};  // d0 -> delta = (+1.5, -2.5, +1.0)
+
+  const auto rebased = frozenFixedCloud(session, asset.directory);
+  ASSERT_TRUE(rebased.has_value());
+  ASSERT_EQ(rebased->data.size(), sizeof(points));
+  float out[6]{};
+  std::memcpy(out, rebased->data.data(), sizeof(out));
+  EXPECT_FLOAT_EQ(out[0], 2.5f);
+  EXPECT_FLOAT_EQ(out[1], -0.5f);
+  EXPECT_FLOAT_EQ(out[2], 4.0f);
+  EXPECT_FLOAT_EQ(out[3], 1.0f);
+  EXPECT_FLOAT_EQ(out[4], 1.5f);
+  EXPECT_FLOAT_EQ(out[5], 2.5f);
+
+  // Original sealed bytes remain valid & unchanged when loaded without localizationOffset.
+  session["sceneAsset"].erase("localizationOffset");
+  const auto authored = frozenFixedCloud(session, asset.directory);
+  ASSERT_TRUE(authored.has_value());
+  EXPECT_EQ(std::string(authored->data.begin(), authored->data.end()), data);
+}
+
 }  // namespace
 }  // namespace xgc_scene

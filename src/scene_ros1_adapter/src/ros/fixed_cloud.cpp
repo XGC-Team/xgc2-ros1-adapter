@@ -2,6 +2,9 @@
 #include "xgc_scene/prepare.hpp"
 #include "xgc_scene/yaml_io.hpp"
 
+#include <cmath>
+#include <cstring>
+
 namespace xgc_scene {
 
 sensor_msgs::PointCloud2 fixedPointCloud(const Json& selected) {
@@ -39,7 +42,35 @@ std::optional<sensor_msgs::PointCloud2> frozenFixedCloud(const Json& session,
                                                          const std::filesystem::path& asset_directory) {
   const auto asset = session.find("sceneAsset");
   if (asset == session.end() || !asset->is_object() || !asset->contains("pointCloud")) return std::nullopt;
-  return fixedPointCloud(Json{{"assetDirectory", asset_directory.string()}, {"pointCloud", asset->at("pointCloud")}});
+  auto message = fixedPointCloud(Json{{"assetDirectory", asset_directory.string()}, {"pointCloud", asset->at("pointCloud")}});
+  const auto asset_offset = asset->find("localizationOffset");
+  const auto target_offset = session.find("localizationOffset");
+  if (asset_offset != asset->end() && target_offset != session.end() &&
+      !asset_offset->is_null() && !target_offset->is_null()) {
+    if (!asset_offset->is_object() || !target_offset->is_object())
+      throw SceneError("localizationOffset must be an object");
+    auto read_coord = [](const Json& obj, const char* key) -> double {
+      if (!obj.contains(key) || !obj.at(key).is_number())
+        throw SceneError("localizationOffset requires finite x, y, z");
+      const double v = obj.at(key).get<double>();
+      if (!std::isfinite(v)) throw SceneError("localizationOffset requires finite x, y, z");
+      return v;
+    };
+    const float dx = static_cast<float>(read_coord(*target_offset, "x") - read_coord(*asset_offset, "x"));
+    const float dy = static_cast<float>(read_coord(*target_offset, "y") - read_coord(*asset_offset, "y"));
+    const float dz = static_cast<float>(read_coord(*target_offset, "z") - read_coord(*asset_offset, "z"));
+    if (dx != 0.0f || dy != 0.0f || dz != 0.0f) {
+      for (std::size_t off = 0; off + 12 <= message.data.size(); off += 12) {
+        float xyz[3];
+        std::memcpy(xyz, message.data.data() + off, 12);
+        xyz[0] += dx;
+        xyz[1] += dy;
+        xyz[2] += dz;
+        std::memcpy(message.data.data() + off, xyz, 12);
+      }
+    }
+  }
+  return message;
 }
 
 }  // namespace xgc_scene

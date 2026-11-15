@@ -12,8 +12,18 @@
 #include <zenoh.h>
 
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <nlohmann/json.hpp>
+#include <ros/callback_queue.h>
 #include "xgc_px4_multirotor_ros1_adapter/generated_contract.hpp"
+#include "xgc_px4_multirotor_ros1_adapter/native_robot.hpp"
 #include "xgc_px4_multirotor_ros1_adapter/robot_runtime.hpp"
+#include "xgc2_ros1_robot_adapter/async_ros_services.hpp"
+#include "xgc2_ros1_robot_adapter/robot_server.hpp"
+#include "xgc2_ros1_robot_adapter/ros1_binding.hpp"
+#include "xgc2/xrpc/grpc.hpp"
+#include "xgc/robot/v1/server.grpc.pb.h"
 #include "xgc/semantic/common/v1/telemetry.pb.h"
 #include "xgc/semantic/aerial/v1/diagnostic.pb.h"
 #include "xgc2/vrpn_zenoh/v1/tracker.pb.h"
@@ -1827,6 +1837,327 @@ TEST(StatusDemand, StopJoinsAnOpeningSnapshotEmitter) {
   const auto before = source.messages().size();
   source.pose(8);
   EXPECT_EQ(before, source.messages().size());
+}
+
+namespace {
+class RostestRosBinding final : public xgc2_ros1_robot_adapter::RosBinding {
+public:
+  void Init(const xgc2_ros1_robot_adapter::ServerOptions &, const std::string &) override {
+    running_.store(true);
+  }
+  void Connect() override {
+    node_.reset(new ros::NodeHandle());
+    node_->setCallbackQueue(&queues_[0]);
+  }
+  bool Running() const override { return running_.load() && ros::ok(); }
+  bool ProbeMaster(xgc2_ros1_robot_adapter::MasterIdentity *identity) override {
+    identity->uri = ros::master::getURI();
+    identity->pid = 1;
+    identity->run_id.clear();
+    return true;
+  }
+  std::string MasterRunId() const override { return ""; }
+  void Shutdown() override {
+    running_.store(false);
+    node_.reset();
+  }
+  std::size_t Lanes() const override { return queues_.size(); }
+  void PumpLane(std::size_t lane, std::chrono::milliseconds wait) override {
+    queues_.at(lane).callOne(ros::WallDuration(wait.count() / 1000.0));
+  }
+  void DisableLanes() override {
+    for (auto &q : queues_) q.disable();
+  }
+  std::unique_ptr<xgc2_ros1_robot_adapter::RosNode> CreateNode(std::size_t lane) override {
+    ros::NodeHandle handle(*node_);
+    handle.setCallbackQueue(&queues_.at(lane));
+    return std::unique_ptr<xgc2_ros1_robot_adapter::RosNode>(
+        new xgc2_ros1_robot_adapter::Ros1Node(std::move(handle)));
+  }
+  std::unique_ptr<xgc2_ros1_robot_adapter::CommandIo> CreateCommandIo() override {
+    return std::unique_ptr<xgc2_ros1_robot_adapter::CommandIo>(
+        new xgc2_ros1_robot_adapter::AsyncRosServices());
+  }
+  std::unique_ptr<xgc2_ros1_robot_adapter::MasterBudget>
+  BoundMasterCalls(std::optional<std::chrono::milliseconds> budget) override {
+    return std::unique_ptr<xgc2_ros1_robot_adapter::MasterBudget>(
+        new xgc2_ros1_robot_adapter::RosMasterDeadline(budget));
+  }
+  bool FlushPublications(std::chrono::milliseconds) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    return true;
+  }
+
+private:
+  std::array<ros::CallbackQueue, 2> queues_;
+  std::unique_ptr<ros::NodeHandle> node_;
+  std::atomic<bool> running_{true};
+};
+
+void setOwnerInputPipe() {
+  int fds[2];
+  ASSERT_EQ(0, ::pipe(fds));
+  const std::string token(32, 'p');
+  ASSERT_EQ(static_cast<ssize_t>(token.size()), ::write(fds[1], token.data(), token.size()));
+  ::close(fds[1]);
+  ASSERT_EQ(0, ::setenv("XGC_PROCESS_OWNER_FD", std::to_string(fds[0]).c_str(), 1));
+}
+
+xgc::robot::v1::MemberIdentity makeMemberId(const std::string &robot_id, std::uint64_t epoch) {
+  xgc::robot::v1::MemberIdentity id;
+  id.set_target_id("local");
+  id.set_run_id("run-mocap-reapply");
+  id.set_robot_id(robot_id);
+  id.set_connection_epoch(epoch);
+  return id;
+}
+
+xgc::robot::v1::MemberRegistration makePhysicalRegistration(const std::string &robot_id,
+                                                            std::uint64_t epoch,
+                                                            const nlohmann::json &extrinsic) {
+  xgc::robot::v1::MemberRegistration reg;
+  *reg.mutable_identity() = makeMemberId(robot_id, epoch);
+  auto *cfg = reg.mutable_configuration();
+  cfg->set_robot_id(robot_id);
+  cfg->set_profile_id("px4-multirotor.physical.vrpn");
+  const char *digest = InstalledContract().profileDigest("px4-multirotor.physical.vrpn");
+  if (digest != nullptr) cfg->set_profile_digest(digest);
+  auto &params = *cfg->mutable_parameters();
+  params["namespace"] = "/uav_reapply";
+  params["mocap_rigid_body"] = "cf_reapply";
+  params["mocap_source_root"] = "/vrpn_reapply";
+  params["localization_offset_x"] = "0";
+  params["localization_offset_y"] = "0";
+  params["localization_offset_z"] = "0";
+  params["positioning_frame_number"] = "5";
+  params["positioning_comparison_threshold_m"] = "0.5";
+  params["mocap_marker_from_body"] = extrinsic.dump();
+  std::size_t channel_count = 0;
+  const auto *channels = InstalledContract().profileChannels("px4-multirotor.physical.vrpn", &channel_count);
+  for (std::size_t i = 0; i < channel_count; ++i) {
+    auto *ch = cfg->add_channels();
+    ch->set_channel_id(channels[i].channel_id);
+    ch->set_enabled(true);
+  }
+  return reg;
+}
+} // namespace
+
+TEST(StatusDemand, RemoveAndReapplyActivatesUpdatedMocapExtrinsicSynchronouslyPreservingStampAndRejectingStaleEpoch) {
+  char dir_template[] = "/tmp/xgc-px4-reapply-XXXXXX";
+  char *temp_dir = ::mkdtemp(dir_template);
+  ASSERT_NE(nullptr, temp_dir);
+  ASSERT_EQ(0, ::chmod(temp_dir, 0700));
+  const std::string sock_path = std::string(temp_dir) + "/server.sock";
+  struct DirCleanup {
+    std::string dir, sock;
+    ~DirCleanup() {
+      ::unlink(sock.c_str());
+      ::rmdir(dir.c_str());
+    }
+  } dir_cleanup{temp_dir, sock_path};
+
+  setOwnerInputPipe();
+  RostestRosBinding binding;
+  xgc2_ros1_robot_adapter::ServerOptions options;
+  options.socket_path = sock_path;
+  options.run_id = "run-mocap-reapply";
+  options.node_name = "xgc_px4_reapply_test";
+  options.provider = "xgc2-px4-multirotor-ros1-adapter";
+  options.target_id = "local";
+  options.ros_master_uri = ros::master::getURI();
+  options.ros_ip = "127.0.0.1";
+
+  xgc2_ros1_robot_adapter::RobotServer server(
+      std::move(options), binding, CreatePx4NativeRobot);
+  std::atomic<bool> server_finished{false};
+  int exit_code = -1;
+  std::thread server_thread([&] {
+    exit_code = server.Run();
+    server_finished.store(true);
+  });
+
+  ASSERT_TRUE(waitFor([&] {
+    return server_finished.load() || ::access(sock_path.c_str(), F_OK) == 0;
+  }));
+  ASSERT_FALSE(server_finished.load());
+
+  auto channel = xgc2::xrpc::make_grpc_unix_channel(sock_path);
+  auto stub = xgc::robot::v1::RobotAdapterServerService::NewStub(channel);
+
+  std::string instance_id;
+  {
+    grpc::ClientContext ctx;
+    xgc2::xrpc::GrpcClientCall call(
+        ctx, "", xgc2::xrpc::GrpcClock::now() + std::chrono::seconds(10), {}, "", true);
+    xgc::robot::v1::DescribeRequest req;
+    req.set_wait_ready_ms(5000);
+    xgc::robot::v1::DescribeResponse resp;
+    const auto status = call.invoke([&] { return stub->Describe(&ctx, req, &resp); });
+    ASSERT_TRUE(status.ok()) << status.error_message();
+    ASSERT_TRUE(resp.ready());
+    instance_id = call.response_instance_id();
+    ASSERT_FALSE(instance_id.empty());
+  }
+
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle nh;
+  auto raw_pub = nh.advertise<geometry_msgs::PoseStamped>("/vrpn_reapply/cf_reapply/pose", 10, false);
+  std::mutex vision_mutex;
+  std::vector<geometry_msgs::PoseStamped> vision_msgs;
+  auto vision_sub = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/uav_reapply/mavros/vision_pose/pose", 10,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(vision_mutex);
+        vision_msgs.push_back(*msg);
+      });
+
+  const auto callApply = [&](const xgc::robot::v1::ApplyMembersRequest &req) {
+    grpc::ClientContext ctx;
+    xgc2::xrpc::GrpcClientCall call(
+        ctx, instance_id, xgc2::xrpc::GrpcClock::now() + std::chrono::seconds(10));
+    xgc::robot::v1::ApplyMembersResponse resp;
+    const auto status = call.invoke([&] { return stub->ApplyMembers(&ctx, req, &resp); });
+    EXPECT_TRUE(status.ok()) << status.error_message();
+    return resp;
+  };
+  const auto callRemove = [&](const xgc::robot::v1::RemoveMembersRequest &req) {
+    grpc::ClientContext ctx;
+    xgc2::xrpc::GrpcClientCall call(
+        ctx, instance_id, xgc2::xrpc::GrpcClock::now() + std::chrono::seconds(10));
+    xgc::robot::v1::RemoveMembersResponse resp;
+    const auto status = call.invoke([&] { return stub->RemoveMembers(&ctx, req, &resp); });
+    EXPECT_TRUE(status.ok()) << status.error_message();
+    return resp;
+  };
+
+  const nlohmann::json t_kb1 = {
+      {"translation", {0.10, -0.20, 0.30}},
+      {"rotation", {0.0, 0.0, 0.0, 1.0}},
+  };
+  const nlohmann::json t_kb2 = {
+      {"translation", {-0.25, 0.15, -0.05}},
+      {"rotation", {0.0, 0.0, 0.7071067811865476, 0.7071067811865476}},
+  };
+
+  // Epoch 1 activation completes synchronously before ApplyMembers ACK.
+  {
+    xgc::robot::v1::ApplyMembersRequest req;
+    *req.add_members() = makePhysicalRegistration("uav_reapply", 1, t_kb1);
+    const auto resp = callApply(req);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_TRUE(resp.members(0).error().code().empty()) << resp.members(0).error().message();
+  }
+  ASSERT_TRUE(waitFor([&] {
+    return raw_pub.getNumSubscribers() > 0 && vision_sub.getNumPublishers() > 0;
+  }));
+
+  auto publishAndExpectStamp = [&](const ros::Time &stamp, double expected_x, double expected_y,
+                                   double expected_z, double expected_qz, double expected_qw) {
+    std::size_t baseline = 0;
+    {
+      std::lock_guard<std::mutex> lock(vision_mutex);
+      baseline = vision_msgs.size();
+    }
+    geometry_msgs::PoseStamped raw;
+    raw.header.frame_id = "world";
+    raw.pose.position.x = 1.0;
+    raw.pose.position.y = 2.0;
+    raw.pose.position.z = 3.0;
+    raw.pose.orientation.w = 1.0;
+
+    // Wait for TCPROS publisher->subscriber transport link if needed using warmups, then assert exact stamp.
+    ros::Time warmup_stamp = stamp - ros::Duration(1, 0);
+    ASSERT_TRUE(waitFor([&] {
+      warmup_stamp += ros::Duration(0, 20000000);
+      raw.header.stamp = warmup_stamp;
+      raw_pub.publish(raw);
+      std::lock_guard<std::mutex> lock(vision_mutex);
+      return vision_msgs.size() > baseline;
+    }));
+    {
+      std::lock_guard<std::mutex> lock(vision_mutex);
+      baseline = vision_msgs.size();
+    }
+    raw.header.stamp = stamp;
+    raw_pub.publish(raw);
+    ASSERT_TRUE(waitFor([&] {
+      std::lock_guard<std::mutex> lock(vision_mutex);
+      return vision_msgs.size() > baseline;
+    }));
+    std::lock_guard<std::mutex> lock(vision_mutex);
+    const auto &got = vision_msgs.back();
+    EXPECT_EQ(stamp, got.header.stamp);
+    EXPECT_NEAR(expected_x, got.pose.position.x, 1e-6);
+    EXPECT_NEAR(expected_y, got.pose.position.y, 1e-6);
+    EXPECT_NEAR(expected_z, got.pose.position.z, 1e-6);
+    EXPECT_NEAR(0.0, got.pose.orientation.x, 1e-6);
+    EXPECT_NEAR(0.0, got.pose.orientation.y, 1e-6);
+    EXPECT_NEAR(expected_qz, got.pose.orientation.z, 1e-6);
+    EXPECT_NEAR(expected_qw, got.pose.orientation.w, 1e-6);
+  };
+
+  publishAndExpectStamp(ros::Time(1700000100, 123456789), 1.10, 1.80, 3.30, 0.0, 1.0);
+
+  // Reject duplicate epoch with different config, stale/higher epoch while active, and wrong remove epoch.
+  {
+    xgc::robot::v1::ApplyMembersRequest same_epoch_diff_cfg;
+    *same_epoch_diff_cfg.add_members() = makePhysicalRegistration("uav_reapply", 1, t_kb2);
+    const auto resp = callApply(same_epoch_diff_cfg);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_EQ("member-configuration-conflict", resp.members(0).error().code());
+  }
+  {
+    xgc::robot::v1::ApplyMembersRequest wrong_epoch;
+    *wrong_epoch.add_members() = makePhysicalRegistration("uav_reapply", 2, t_kb2);
+    const auto resp = callApply(wrong_epoch);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_EQ("member-epoch-conflict", resp.members(0).error().code());
+  }
+  {
+    xgc::robot::v1::RemoveMembersRequest wrong_remove;
+    *wrong_remove.add_members() = makeMemberId("uav_reapply", 9);
+    const auto resp = callRemove(wrong_remove);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_EQ("member-epoch-conflict", resp.members(0).error().code());
+  }
+
+  // RemoveMembers(1) -> ApplyMembers(2, T_KB2) activates T_KB2 synchronously before ACK.
+  {
+    xgc::robot::v1::RemoveMembersRequest removal;
+    *removal.add_members() = makeMemberId("uav_reapply", 1);
+    const auto resp = callRemove(removal);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_TRUE(resp.members(0).error().code().empty()) << resp.members(0).error().message();
+  }
+  {
+    xgc::robot::v1::ApplyMembersRequest reapply;
+    *reapply.add_members() = makePhysicalRegistration("uav_reapply", 2, t_kb2);
+    const auto resp = callApply(reapply);
+    ASSERT_EQ(1, resp.members_size());
+    EXPECT_TRUE(resp.members(0).error().code().empty()) << resp.members(0).error().message();
+  }
+  ASSERT_TRUE(waitFor([&] {
+    return raw_pub.getNumSubscribers() > 0 && vision_sub.getNumPublishers() > 0;
+  }));
+
+  publishAndExpectStamp(ros::Time(1700000200, 987654321),
+                        0.75, 2.15, 2.95, 0.7071067811865476, 0.7071067811865476);
+
+  {
+    grpc::ClientContext ctx;
+    xgc2::xrpc::GrpcClientCall call(
+        ctx, instance_id, xgc2::xrpc::GrpcClock::now() + std::chrono::seconds(10));
+    xgc::robot::v1::ShutdownResponse resp;
+    const auto status = call.invoke([&] {
+      return stub->Shutdown(&ctx, xgc::robot::v1::ShutdownRequest(), &resp);
+    });
+    EXPECT_TRUE(status.ok()) << status.error_message();
+  }
+  server_thread.join();
+  EXPECT_EQ(xgc2_ros1_robot_adapter::kExitOk, exit_code);
+  spinner.stop();
 }
 } // namespace xgc_px4_multirotor_ros1_adapter
 
