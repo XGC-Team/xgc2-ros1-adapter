@@ -64,8 +64,8 @@ TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   source.pose.position.x = 3.0;
   source.pose.position.y = 4.0;
   source.pose.position.z = 5.0;
-  source.pose.orientation.x = 0.1;
-  source.pose.orientation.w = 0.9;
+  source.pose.orientation.x = 0.6;
+  source.pose.orientation.w = 0.8;
   geometry_msgs::PoseStamped projected;
   ASSERT_TRUE(xgc2_ros1_robot_adapter::projectLocalizationPose(source, config,
                                                                &projected));
@@ -74,6 +74,63 @@ TEST(LocalizationProjection, AppliesOnlyXYZAndPreservesTheSourceFact) {
   EXPECT_DOUBLE_EQ(projected.pose.position.z, 5.25);
   EXPECT_EQ(projected.header, source.header);
   EXPECT_EQ(projected.pose.orientation, source.pose.orientation);
+}
+
+TEST(LocalizationProjection,
+     EnforcesUnitQuaternionNormWithinFivePercentAndFiniteComponents) {
+  LocalizationProjectionConfig no_extrinsic;
+  LocalizationProjectionConfig with_extrinsic;
+  with_extrinsic.has_extrinsic = true;
+  with_extrinsic.marker_from_body_translation = {{0.1, 0.2, 0.3}};
+  with_extrinsic.marker_from_body_rotation = {{0.0, 0.0, 0.0, 1.0}};
+
+  geometry_msgs::PoseStamped projected;
+
+  // Zero quaternion must be rejected cleanly with and without extrinsic.
+  geometry_msgs::PoseStamped zero_quat;
+  EXPECT_FALSE(validLocalizationPose(zero_quat));
+  EXPECT_FALSE(projectLocalizationPose(zero_quat, no_extrinsic, &projected));
+  EXPECT_FALSE(projectLocalizationPose(zero_quat, with_extrinsic, &projected));
+
+  // Norm deviations > 0.05 (5%) must be rejected; <= 0.05 must pass.
+  for (const double bad_norm : {1.0e-6, 0.94, 1.06, 3.0}) {
+    geometry_msgs::PoseStamped bad_pose;
+    bad_pose.pose.orientation.w = bad_norm;
+    EXPECT_FALSE(validLocalizationPose(bad_pose)) << "norm=" << bad_norm;
+    EXPECT_FALSE(projectLocalizationPose(bad_pose, no_extrinsic, &projected))
+        << "norm=" << bad_norm;
+    EXPECT_FALSE(projectLocalizationPose(bad_pose, with_extrinsic, &projected))
+        << "norm=" << bad_norm;
+  }
+  for (const double ok_norm : {0.96, 1.0, 1.04}) {
+    geometry_msgs::PoseStamped ok_pose;
+    ok_pose.pose.orientation.w = ok_norm;
+    EXPECT_TRUE(validLocalizationPose(ok_pose)) << "norm=" << ok_norm;
+    EXPECT_TRUE(projectLocalizationPose(ok_pose, no_extrinsic, &projected))
+        << "norm=" << ok_norm;
+    EXPECT_TRUE(projectLocalizationPose(ok_pose, with_extrinsic, &projected))
+        << "norm=" << ok_norm;
+  }
+
+  // Non-finite values (NaN, +Inf, -Inf) in any of the 7 pose components fail.
+  for (std::size_t idx = 0u; idx < 7u; ++idx) {
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()}) {
+      geometry_msgs::PoseStamped pose;
+      pose.pose.orientation.w = 1.0;
+      double *fields[] = {&pose.pose.position.x,    &pose.pose.position.y,
+                          &pose.pose.position.z,    &pose.pose.orientation.x,
+                          &pose.pose.orientation.y, &pose.pose.orientation.z,
+                          &pose.pose.orientation.w};
+      *fields[idx] = bad;
+      EXPECT_FALSE(validLocalizationPose(pose)) << "idx=" << idx;
+      EXPECT_FALSE(projectLocalizationPose(pose, no_extrinsic, &projected))
+          << "idx=" << idx;
+      EXPECT_FALSE(projectLocalizationPose(pose, with_extrinsic, &projected))
+          << "idx=" << idx;
+    }
+  }
 }
 
 TEST(LocalizationProjection, MapsRawVrpnAccelerationWithoutChangingFields) {
@@ -152,6 +209,64 @@ TEST(PositioningLiveness, RepeatedFramesAgeOutAndClockRewindStartsANewWindow) {
   EXPECT_EQ(PositioningHealthState::kFrozen, health.evaluate(.01).state);
   EXPECT_DOUBLE_EQ(0.0, health.evaluate(.01).comparison_metric_m);
   EXPECT_EQ(PositioningHealthState::kTimedOut, health.evaluate(.111).state);
+}
+
+TEST(PositioningLiveness, Uses250msDefaultTimeoutAndFourWayHealthTruth) {
+  PositioningHealthConfig default_config;
+  EXPECT_DOUBLE_EQ(0.25, default_config.timeout_seconds);
+
+  PositioningHealthConfig parsed_config;
+  std::string error;
+  ASSERT_TRUE(parsePositioningHealthConfig(
+      {{"positioning_frame_number", "5"},
+       {"positioning_comparison_threshold_m", "0.05"}},
+      &parsed_config, &error))
+      << error;
+  EXPECT_DOUBLE_EQ(0.25, parsed_config.timeout_seconds);
+
+  PositioningHealthWindow window(parsed_config);
+  for (int frame = 0; frame < 6; ++frame) {
+    window.recordPose(1.0 + frame * 0.02, 1.0 + frame * 0.1, 2.0, 3.0);
+  }
+  EXPECT_EQ(PositioningHealthState::kActive, window.evaluate(1.349).state);
+  EXPECT_EQ(PositioningHealthState::kTimedOut, window.evaluate(1.351).state);
+
+  // Even when MAVLink #230 reports all healthy positive flags, ev_fusion_state
+  // MUST remain "UNKNOWN" and never be inferred from #230 or proximity.
+  Px4HealthTruthInput input;
+  input.mocap_observed = true;
+  input.positioning = window.evaluate(1.12);
+  input.vision_output_enabled = true;
+  input.vision_output_state = VisionOutputState::kPublishingValid;
+  input.estimator_flags.observed = true;
+  input.estimator_flags.attitude_ok = true;
+  input.estimator_flags.velocity_horiz_ok = true;
+  input.estimator_flags.velocity_vert_ok = true;
+  input.estimator_flags.pos_horiz_rel_ok = true;
+  input.estimator_flags.pos_horiz_abs_ok = true;
+  input.estimator_flags.pos_vert_abs_ok = true;
+  input.estimator_flags.pred_pos_horiz_rel_ok = true;
+  input.estimator_flags.pred_pos_horiz_abs_ok = true;
+  const auto healthy_truth = evaluatePx4HealthTruth(input);
+  EXPECT_EQ(MocapInputState::kActive, healthy_truth.mocap_input.state);
+  EXPECT_EQ(VisionOutputState::kPublishingValid, healthy_truth.vision_output);
+  EXPECT_EQ(EstimatorHealthState::kHealthy,
+            healthy_truth.estimator_health.state);
+  EXPECT_TRUE(healthy_truth.estimator_health.active_degraded_flags.empty());
+  EXPECT_EQ("UNKNOWN", healthy_truth.ev_fusion_state);
+
+  // Degraded #230 flags expose generic EKF flags while ev_fusion_state stays UNKNOWN.
+  input.estimator_flags.attitude_ok = false;
+  input.estimator_flags.const_pos_mode = true;
+  input.estimator_flags.gps_glitch = true;
+  input.estimator_flags.accel_error = true;
+  const auto degraded_truth = evaluatePx4HealthTruth(input);
+  EXPECT_EQ(EstimatorHealthState::kDegraded,
+            degraded_truth.estimator_health.state);
+  EXPECT_EQ((std::vector<std::string>{"attitude_unhealthy", "const_pos_mode",
+                                      "gps_glitch", "accel_error"}),
+            degraded_truth.estimator_health.active_degraded_flags);
+  EXPECT_EQ("UNKNOWN", degraded_truth.ev_fusion_state);
 }
 
 MessageSchema modeSchema() {

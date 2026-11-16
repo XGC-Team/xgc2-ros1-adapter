@@ -16,6 +16,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/AttitudeTarget.h>
+#include <mavros_msgs/EstimatorStatus.h>
 #include <mavros_msgs/ExtendedState.h>
 #include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/State.h>
@@ -46,6 +47,7 @@ struct NativeProfileConfig {
   std::string controller_status_endpoint;
   std::string state_endpoint;
   std::string extended_state_endpoint;
+  std::string estimator_status_endpoint;
   std::string mocap_endpoint;
   std::string vision_pose_endpoint;
   std::string mocap_velocity_endpoint;
@@ -74,70 +76,11 @@ struct NativeProfileConfig {
   xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
   xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh_localization;
   std::vector<std::string> allowed_modes;
-  struct VisionInjectionGateConfig {
-    bool enabled = false;
-    double max_vision_position_jump_m = 1.5;
-    double max_vision_attitude_jump_rad = 1.0471975511965976;
-    std::size_t recovery_consistent_frames = 5u;
-  } vision_injection_gate;
+  double max_vision_attitude_jump_rad = 1.0471975511965976;
 };
 
-using VisionInjectionGateConfig = NativeProfileConfig::VisionInjectionGateConfig;
-
-bool validVisionInjectionGateConfig(const VisionInjectionGateConfig &config,
-                                    std::string *error);
 double quaternionAngularDistanceRad(const geometry_msgs::Quaternion &left,
                                     const geometry_msgs::Quaternion &right);
-
-struct VisionInjectionDecision {
-  bool allow_publish = true;
-  bool held = false;
-  bool attitude_divergent = false;
-  bool non_advancing_source_time = false;
-  bool position_jump_detected = false;
-  bool attitude_flip_detected = false;
-  std::size_t consistent_frames = 0u;
-};
-
-// Stateful MAVROS vision_pose injection protection gate. Keeps raw observation
-// streams unaltered while blocking stale, non-advancing, jumping, or attitude-
-// flipped poses from entering PX4 EKF2 until recovery hysteresis completes.
-class VisionInjectionGate {
-public:
-  explicit VisionInjectionGate(VisionInjectionGateConfig config = {});
-
-  bool enabled() const { return config_.enabled; }
-  const VisionInjectionGateConfig &config() const { return config_; }
-
-  VisionInjectionDecision evaluate(
-      const geometry_msgs::PoseStamped &projected_pose,
-      xgc2_ros1_robot_adapter::PositioningHealthState positioning_state,
-      bool prior_timed_out,
-      bool has_source_time,
-      std::int64_t source_time_nanos,
-      xgc::v1::ClockDomain source_clock_domain,
-      bool fc_online,
-      const geometry_msgs::Quaternion *fc_orientation);
-
-  void noteInvalidPose();
-  bool isHeld() const { return held_; }
-  bool heldByAttitude() const { return held_ && attitude_hold_active_; }
-
-private:
-  VisionInjectionGateConfig config_;
-  bool has_previous_pose_ = false;
-  geometry_msgs::PoseStamped previous_pose_;
-  bool has_previous_time_ = false;
-  std::int64_t previous_time_nanos_ = 0;
-  xgc::v1::ClockDomain previous_clock_domain_ = xgc::v1::CLOCK_DOMAIN_UNSPECIFIED;
-  bool held_ = false;
-  bool attitude_hold_active_ = false;
-  std::size_t consistent_frames_ = 0u;
-  bool rollback_candidate_active_ = false;
-  std::int64_t rollback_last_time_nanos_ = 0;
-  geometry_msgs::PoseStamped rollback_last_pose_;
-  std::size_t rollback_consistent_frames_ = 0u;
-};
 
 bool BuildNativeProfileConfig(
     const xgc2_ros1_robot_adapter::RobotConfig &config,
@@ -190,6 +133,7 @@ public:
   void emitPeriodic();
   void SetStatusDemand(const std::set<std::string> &channels);
   std::pair<bool, std::string> DescribeHealth();
+  xgc2_ros1_robot_adapter::Px4HealthTruth HealthTruth() const;
 
 private:
   friend class StatusDemandHarness;
@@ -295,6 +239,8 @@ private:
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr &message);
   void mavrosExtendedStateCallback(
       const mavros_msgs::ExtendedState::ConstPtr &message);
+  void mavrosEstimatorStatusCallback(
+      const mavros_msgs::EstimatorStatus::ConstPtr &message);
   void
   localSetpointCallback(const mavros_msgs::PositionTarget::ConstPtr &message);
   void attitudeSetpointCallback(
@@ -310,7 +256,14 @@ private:
                          std::vector<xgc::robot::v1::RobotMessage> *messages);
   void emitSnapshotLocked(const std::string &channel, const ros::WallTime &now,
                           std::vector<xgc::robot::v1::RobotMessage> *messages);
-  xgc::semantic::common::v1::VehicleHealth healthLocked(const ros::WallTime &now) const;
+  xgc2_ros1_robot_adapter::Px4HealthTruth
+  healthTruthLocked(const ros::WallTime &now) const;
+  xgc::semantic::common::v1::VehicleHealth healthLocked(
+      const ros::WallTime &now,
+      const xgc2_ros1_robot_adapter::Px4HealthTruth *truth_override =
+          nullptr) const;
+  bool emitHealthLocked(const ros::WallTime &now, bool only_on_transition,
+                        std::vector<xgc::robot::v1::RobotMessage> *messages);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
@@ -323,8 +276,8 @@ private:
 
   const double offboard_source_timeout_seconds_;
   const double offboard_minimum_rate_hz_;
+  const double max_vision_attitude_jump_rad_;
   xgc2_ros1_robot_adapter::PositioningHealthWindow positioning_health_;
-  VisionInjectionGate vision_injection_gate_;
   PositionErrorWindow position_error_;
 
   const std::string pose_endpoint_;
@@ -334,6 +287,7 @@ private:
   const std::string controller_status_endpoint_;
   const std::string state_endpoint_;
   const std::string extended_state_endpoint_;
+  const std::string estimator_status_endpoint_;
   const std::string mocap_endpoint_;
   const std::string vision_pose_endpoint_;
   const bool publish_vision_;
@@ -366,21 +320,35 @@ private:
 
   mavros_msgs::State mavros_state_;
   mavros_msgs::ExtendedState mavros_extended_state_;
+  mavros_msgs::EstimatorStatus mavros_estimator_status_;
   mavros_msgs::PositionTarget local_setpoint_;
   mavros_msgs::AttitudeTarget attitude_setpoint_;
   bool has_mavros_state_ = false;
   bool flight_mode_valid_ = false;
   bool has_mavros_extended_state_ = false;
+  bool has_mavros_estimator_status_ = false;
   bool has_local_setpoint_ = false;
   bool has_attitude_setpoint_ = false;
   ros::WallTime mavros_state_last_seen_;
   ros::WallTime mavros_extended_state_last_seen_;
+  ros::WallTime mavros_estimator_status_last_seen_;
   geometry_msgs::PoseStamped::ConstPtr latest_pose_, latest_mocap_pose_;
   xgc::v1::TimePoint latest_mocap_pose_source_time_;
   bool has_mocap_pose_source_time_ = false;
   geometry_msgs::PoseStamped latest_projected_mocap_pose_;
   bool has_projected_mocap_pose_ = false;
   bool has_mocap_pose_observation_ = false;
+  bool latest_mocap_pose_invalid_ = false;
+  std::uint64_t invalid_mocap_pose_count_ = 0u;
+  ros::WallTime last_mocap_pose_rx_wall_;
+  xgc2_ros1_robot_adapter::VisionOutputState vision_output_state_ =
+      xgc2_ros1_robot_adapter::VisionOutputState::kDisabled;
+  bool has_emitted_health_ = false;
+  xgc2_ros1_robot_adapter::MocapInputState last_emitted_mocap_input_state_ =
+      xgc2_ros1_robot_adapter::MocapInputState::kUnobserved;
+  xgc2_ros1_robot_adapter::PositioningHealthState
+      last_emitted_positioning_state_ =
+          xgc2_ros1_robot_adapter::PositioningHealthState::kUnspecified;
   geometry_msgs::PoseStamped latest_vision_pose_;
   xgc::v1::TimePoint latest_vision_source_time_;
   bool has_vision_pose_ = false;
@@ -423,6 +391,7 @@ private:
   ros::Subscriber controller_status_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber extended_state_subscriber_;
+  ros::Subscriber estimator_status_subscriber_;
   ros::Subscriber local_setpoint_subscriber_;
   ros::Subscriber attitude_setpoint_subscriber_;
   ros::Subscriber timesync_subscriber_;

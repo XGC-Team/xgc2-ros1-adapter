@@ -56,7 +56,7 @@ enum class PositioningHealthReason {
 struct PositioningHealthConfig {
   std::size_t frame_number = 5u;
   double comparison_threshold_m = 1.0e-10;
-  double timeout_seconds = 0.1;
+  double timeout_seconds = 0.25;
 };
 
 struct PositioningHealthResult {
@@ -79,6 +79,7 @@ public:
 
   void recordPose(double observed_seconds, double x, double y, double z);
   PositioningHealthResult evaluate(double now_seconds) const;
+  const PositioningHealthConfig &config() const { return config_; }
 
 private:
   PositioningHealthConfig config_;
@@ -89,5 +90,88 @@ private:
   bool has_observation_ = false;
   bool active_ = false;
 };
+
+enum class MocapInputState {
+  kUnobserved,
+  kActive,
+  kFrozen,
+  kTimedOut,
+  kInvalid,
+};
+
+struct MocapInputHealth {
+  MocapInputState state = MocapInputState::kUnobserved;
+  PositioningHealthResult positioning;
+  bool latest_sample_invalid = false;
+  std::uint64_t invalid_sample_count = 0u;
+  double attitude_divergence_rad = 0.0;
+  bool attitude_diverged = false;
+};
+
+enum class VisionOutputState {
+  kDisabled,
+  kUnobserved,
+  kPublishingValid,
+  kPublishingInvalid,
+};
+
+enum class EstimatorHealthState {
+  kUnobserved,
+  kStale,
+  kHealthy,
+  kDegraded,
+};
+
+// Generic EKF/estimator status flags observed from MAVLink #230
+// (mavros_msgs/EstimatorStatus). These do not prove external-vision fusion.
+struct EstimatorStatusFlags {
+  bool observed = false;
+  bool stale = false;
+  bool attitude_ok = false;
+  bool velocity_horiz_ok = false;
+  bool velocity_vert_ok = false;
+  bool pos_horiz_rel_ok = false;
+  bool pos_horiz_abs_ok = false;
+  bool pos_vert_abs_ok = false;
+  bool pos_vert_agl_ok = false;
+  bool const_pos_mode = false;
+  bool pred_pos_horiz_rel_ok = false;
+  bool pred_pos_horiz_abs_ok = false;
+  bool gps_glitch = false;
+  bool accel_error = false;
+};
+
+struct EstimatorHealth {
+  EstimatorHealthState state = EstimatorHealthState::kUnobserved;
+  EstimatorStatusFlags flags;
+  std::vector<std::string> active_degraded_flags;
+};
+
+struct Px4HealthTruthInput {
+  bool mocap_observed = false;
+  bool mocap_input_timed_out = false;
+  bool latest_mocap_invalid = false;
+  std::uint64_t invalid_mocap_count = 0u;
+  PositioningHealthResult positioning;
+  bool attitude_diverged = false;
+  double attitude_divergence_rad = 0.0;
+  bool vision_output_enabled = false;
+  VisionOutputState vision_output_state = VisionOutputState::kDisabled;
+  EstimatorStatusFlags estimator_flags;
+};
+
+struct Px4HealthTruth {
+  MocapInputHealth mocap_input;
+  VisionOutputState vision_output = VisionOutputState::kDisabled;
+  EstimatorHealth estimator_health;
+  // EV fusion inside PX4 EKF2 cannot be inferred from MAVLink #230 or
+  // position proximity; always reported explicitly as "UNKNOWN".
+  std::string ev_fusion_state = "UNKNOWN";
+};
+
+const char *mocapInputStateName(MocapInputState state);
+const char *visionOutputStateName(VisionOutputState state);
+const char *estimatorHealthStateName(EstimatorHealthState state);
+Px4HealthTruth evaluatePx4HealthTruth(const Px4HealthTruthInput &input);
 
 } // namespace xgc2_ros1_robot_adapter

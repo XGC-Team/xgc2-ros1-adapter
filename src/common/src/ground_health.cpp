@@ -181,9 +181,8 @@ bool parsePositioningHealthConfig(
   } catch (const std::exception &) {
     return fail(error, "positioning health parameters are not canonical numbers");
   }
-  // XGC1 exposes frame_number and comparison_threshold but keeps the proven
-  // 100 ms freshness boundary fixed in the detector.
-  candidate.timeout_seconds = 0.1;
+  // Keep the 250 ms freshness boundary fixed in the detector.
+  candidate.timeout_seconds = 0.25;
   if (!validPositioningHealthConfig(candidate, error))
     return false;
   *config = candidate;
@@ -258,6 +257,106 @@ PositioningHealthWindow::evaluate(double now_seconds) const {
                       ? PositioningHealthReason::kWindowVariationObserved
                       : PositioningHealthReason::kRepeatFrameWindowFrozen;
   return result;
+}
+
+const char *mocapInputStateName(MocapInputState state) {
+  switch (state) {
+  case MocapInputState::kUnobserved:
+    return "UNOBSERVED";
+  case MocapInputState::kActive:
+    return "ACTIVE";
+  case MocapInputState::kFrozen:
+    return "FROZEN";
+  case MocapInputState::kTimedOut:
+    return "TIMED_OUT";
+  case MocapInputState::kInvalid:
+    return "INVALID";
+  }
+  return "UNSPECIFIED";
+}
+
+const char *visionOutputStateName(VisionOutputState state) {
+  switch (state) {
+  case VisionOutputState::kDisabled:
+    return "DISABLED";
+  case VisionOutputState::kUnobserved:
+    return "UNOBSERVED";
+  case VisionOutputState::kPublishingValid:
+    return "PUBLISHING_VALID";
+  case VisionOutputState::kPublishingInvalid:
+    return "PUBLISHING_INVALID";
+  }
+  return "UNSPECIFIED";
+}
+
+const char *estimatorHealthStateName(EstimatorHealthState state) {
+  switch (state) {
+  case EstimatorHealthState::kUnobserved:
+    return "UNOBSERVED";
+  case EstimatorHealthState::kStale:
+    return "STALE";
+  case EstimatorHealthState::kHealthy:
+    return "HEALTHY";
+  case EstimatorHealthState::kDegraded:
+    return "DEGRADED";
+  }
+  return "UNSPECIFIED";
+}
+
+Px4HealthTruth evaluatePx4HealthTruth(const Px4HealthTruthInput &input) {
+  Px4HealthTruth truth;
+  truth.mocap_input.positioning = input.positioning;
+  truth.mocap_input.latest_sample_invalid = input.latest_mocap_invalid;
+  truth.mocap_input.invalid_sample_count = input.invalid_mocap_count;
+  truth.mocap_input.attitude_divergence_rad = input.attitude_divergence_rad;
+  truth.mocap_input.attitude_diverged = input.attitude_diverged;
+
+  if (!input.mocap_observed) {
+    truth.mocap_input.state = MocapInputState::kUnobserved;
+  } else if (input.mocap_input_timed_out) {
+    truth.mocap_input.state = MocapInputState::kTimedOut;
+  } else if (input.latest_mocap_invalid) {
+    truth.mocap_input.state = MocapInputState::kInvalid;
+  } else if (input.positioning.state == PositioningHealthState::kTimedOut) {
+    truth.mocap_input.state = MocapInputState::kTimedOut;
+  } else if (input.positioning.state == PositioningHealthState::kFrozen) {
+    truth.mocap_input.state = MocapInputState::kFrozen;
+  } else {
+    truth.mocap_input.state = MocapInputState::kActive;
+  }
+
+  truth.vision_output = input.vision_output_enabled
+                            ? input.vision_output_state
+                            : VisionOutputState::kDisabled;
+
+  truth.estimator_health.flags = input.estimator_flags;
+  if (!input.estimator_flags.observed) {
+    truth.estimator_health.state = EstimatorHealthState::kUnobserved;
+  } else if (input.estimator_flags.stale) {
+    truth.estimator_health.state = EstimatorHealthState::kStale;
+  } else {
+    if (!input.estimator_flags.attitude_ok) {
+      truth.estimator_health.active_degraded_flags.emplace_back(
+          "attitude_unhealthy");
+    }
+    if (input.estimator_flags.const_pos_mode) {
+      truth.estimator_health.active_degraded_flags.emplace_back(
+          "const_pos_mode");
+    }
+    if (input.estimator_flags.gps_glitch) {
+      truth.estimator_health.active_degraded_flags.emplace_back("gps_glitch");
+    }
+    if (input.estimator_flags.accel_error) {
+      truth.estimator_health.active_degraded_flags.emplace_back("accel_error");
+    }
+    truth.estimator_health.state =
+        truth.estimator_health.active_degraded_flags.empty()
+            ? EstimatorHealthState::kHealthy
+            : EstimatorHealthState::kDegraded;
+  }
+
+  truth.ev_fusion_state = "UNKNOWN";
+  return truth;
 }
 
 } // namespace xgc2_ros1_robot_adapter

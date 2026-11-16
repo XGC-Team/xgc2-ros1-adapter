@@ -252,6 +252,9 @@ channels:
     extended_state:
       name: mavros/extended_state
       type: mavros_msgs/ExtendedState
+    estimator_status:
+      name: mavros/estimator_status
+      type: mavros_msgs/EstimatorStatus
   observes:
   - state.mocap.pose
 - id: state.flight

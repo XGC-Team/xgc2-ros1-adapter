@@ -35,6 +35,10 @@ bool parseLocalizationOffsets(
     const std::map<std::string, std::string> &parameters,
     LocalizationProjectionConfig *output, std::string *error);
 
+/// Returns true when the pose has finite position/orientation components and a
+/// unit quaternion whose Euclidean norm is within 5% of 1.0.
+bool validLocalizationPose(const geometry_msgs::PoseStamped &source);
+
 bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
                              const LocalizationProjectionConfig &config,
                              geometry_msgs::PoseStamped *output);

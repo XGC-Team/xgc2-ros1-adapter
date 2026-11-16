@@ -10,6 +10,28 @@ namespace {
 
 bool finite(double value) { return std::isfinite(value); }
 
+bool validatePoseAndNorm(const geometry_msgs::PoseStamped &source,
+                         double *norm_out) {
+  if (!finite(source.pose.position.x) || !finite(source.pose.position.y) ||
+      !finite(source.pose.position.z) || !finite(source.pose.orientation.x) ||
+      !finite(source.pose.orientation.y) || !finite(source.pose.orientation.z) ||
+      !finite(source.pose.orientation.w)) {
+    return false;
+  }
+  const double norm =
+      std::hypot(std::hypot(source.pose.orientation.x,
+                            source.pose.orientation.y),
+                 std::hypot(source.pose.orientation.z,
+                            source.pose.orientation.w));
+  if (!finite(norm) || std::abs(norm - 1.0) > 0.05) {
+    return false;
+  }
+  if (norm_out != nullptr) {
+    *norm_out = norm;
+  }
+  return true;
+}
+
 bool parseFinite(const std::map<std::string, std::string> &parameters,
                  const char *name, double *output, std::string *error) {
   const auto found = parameters.find(name);
@@ -114,24 +136,17 @@ bool parseLocalizationOffsets(
   return true;
 }
 
+bool validLocalizationPose(const geometry_msgs::PoseStamped &source) {
+  return validatePoseAndNorm(source, nullptr);
+}
+
 bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
                              const LocalizationProjectionConfig &config,
                              geometry_msgs::PoseStamped *output) {
-  if (output == nullptr || !finite(source.pose.position.x) ||
-      !finite(source.pose.position.y) || !finite(source.pose.position.z) ||
-      !finite(source.pose.orientation.x) ||
-      !finite(source.pose.orientation.y) ||
-      !finite(source.pose.orientation.z) ||
-      !finite(source.pose.orientation.w)) {
+  double norm = 0.0;
+  if (output == nullptr || !validatePoseAndNorm(source, &norm)) {
     return false;
   }
-  const double norm =
-      std::hypot(std::hypot(source.pose.orientation.x,
-                            source.pose.orientation.y),
-                 std::hypot(source.pose.orientation.z,
-                            source.pose.orientation.w));
-  if (!finite(norm) || norm < 1.0e-6)
-    return false;
   *output = source;
   if (config.has_extrinsic) {
     const double x = source.pose.orientation.x / norm;
@@ -156,7 +171,11 @@ bool projectLocalizationPose(const geometry_msgs::PoseStamped &source,
   output->pose.position.y += config.offset_y;
   output->pose.position.z += config.offset_z;
   return finite(output->pose.position.x) && finite(output->pose.position.y) &&
-         finite(output->pose.position.z);
+         finite(output->pose.position.z) &&
+         finite(output->pose.orientation.x) &&
+         finite(output->pose.orientation.y) &&
+         finite(output->pose.orientation.z) &&
+         finite(output->pose.orientation.w);
 }
 
 bool validLocalizationTwist(const geometry_msgs::TwistStamped &source) {

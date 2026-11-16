@@ -2337,7 +2337,7 @@ RobotRuntime::healthLocked(const ros::WallTime &now) const {
   } else if (positioning.state ==
              xgc2_ros1_robot_adapter::PositioningHealthState::kTimedOut) {
     addFault(&payload, "mocap.position.timeout",
-             "VRPN pose exceeded the XGC1 100 ms freshness boundary", 2);
+             "VRPN pose exceeded the XGC1 250 ms freshness boundary", 2);
   }
   const std::string source_name = chassis_reporting ? " chassis status" : " IMU";
   const std::string fault_source = chassis_reporting ? ".status" : ".imu";
