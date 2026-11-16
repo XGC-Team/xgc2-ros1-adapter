@@ -262,8 +262,8 @@ private:
       const ros::WallTime &now,
       const xgc2_ros1_robot_adapter::Px4HealthTruth *truth_override =
           nullptr) const;
-  bool emitHealthLocked(const ros::WallTime &now, bool only_on_transition,
-                        std::vector<xgc::robot::v1::RobotMessage> *messages);
+  void advanceReportedHealthCountersLocked(
+      const xgc2_ros1_robot_adapter::Px4HealthTruth &truth);
 
   ros::NodeHandle node_handle_;
   const std::string robot_id_;
@@ -340,15 +340,16 @@ private:
   bool has_mocap_pose_observation_ = false;
   bool latest_mocap_pose_invalid_ = false;
   std::uint64_t invalid_mocap_pose_count_ = 0u;
+  std::uint64_t timeout_transition_count_ = 0u;
+  std::uint64_t attitude_divergence_count_ = 0u;
+  std::uint64_t estimator_degraded_count_ = 0u;
+  std::uint64_t reported_invalid_mocap_pose_count_ = 0u;
+  std::uint64_t reported_timeout_transition_count_ = 0u;
+  std::uint64_t reported_attitude_divergence_count_ = 0u;
+  std::uint64_t reported_estimator_degraded_count_ = 0u;
   ros::WallTime last_mocap_pose_rx_wall_;
   xgc2_ros1_robot_adapter::VisionOutputState vision_output_state_ =
       xgc2_ros1_robot_adapter::VisionOutputState::kDisabled;
-  bool has_emitted_health_ = false;
-  xgc2_ros1_robot_adapter::MocapInputState last_emitted_mocap_input_state_ =
-      xgc2_ros1_robot_adapter::MocapInputState::kUnobserved;
-  xgc2_ros1_robot_adapter::PositioningHealthState
-      last_emitted_positioning_state_ =
-          xgc2_ros1_robot_adapter::PositioningHealthState::kUnspecified;
   geometry_msgs::PoseStamped latest_vision_pose_;
   xgc::v1::TimePoint latest_vision_source_time_;
   bool has_vision_pose_ = false;

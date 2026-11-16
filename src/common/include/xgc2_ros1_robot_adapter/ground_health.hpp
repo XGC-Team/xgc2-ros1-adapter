@@ -104,6 +104,8 @@ struct MocapInputHealth {
   PositioningHealthResult positioning;
   bool latest_sample_invalid = false;
   std::uint64_t invalid_sample_count = 0u;
+  std::uint64_t timeout_transition_count = 0u;
+  std::uint64_t attitude_divergence_count = 0u;
   double attitude_divergence_rad = 0.0;
   bool attitude_diverged = false;
 };
@@ -145,6 +147,7 @@ struct EstimatorHealth {
   EstimatorHealthState state = EstimatorHealthState::kUnobserved;
   EstimatorStatusFlags flags;
   std::vector<std::string> active_degraded_flags;
+  std::uint64_t degraded_sample_count = 0u;
 };
 
 struct Px4HealthTruthInput {
@@ -152,6 +155,9 @@ struct Px4HealthTruthInput {
   bool mocap_input_timed_out = false;
   bool latest_mocap_invalid = false;
   std::uint64_t invalid_mocap_count = 0u;
+  std::uint64_t timeout_transition_count = 0u;
+  std::uint64_t attitude_divergence_count = 0u;
+  std::uint64_t estimator_degraded_count = 0u;
   PositioningHealthResult positioning;
   bool attitude_diverged = false;
   double attitude_divergence_rad = 0.0;

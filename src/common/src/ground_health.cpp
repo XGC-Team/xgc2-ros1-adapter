@@ -308,6 +308,8 @@ Px4HealthTruth evaluatePx4HealthTruth(const Px4HealthTruthInput &input) {
   truth.mocap_input.positioning = input.positioning;
   truth.mocap_input.latest_sample_invalid = input.latest_mocap_invalid;
   truth.mocap_input.invalid_sample_count = input.invalid_mocap_count;
+  truth.mocap_input.timeout_transition_count = input.timeout_transition_count;
+  truth.mocap_input.attitude_divergence_count = input.attitude_divergence_count;
   truth.mocap_input.attitude_divergence_rad = input.attitude_divergence_rad;
   truth.mocap_input.attitude_diverged = input.attitude_diverged;
 
@@ -330,6 +332,7 @@ Px4HealthTruth evaluatePx4HealthTruth(const Px4HealthTruthInput &input) {
                             : VisionOutputState::kDisabled;
 
   truth.estimator_health.flags = input.estimator_flags;
+  truth.estimator_health.degraded_sample_count = input.estimator_degraded_count;
   if (!input.estimator_flags.observed) {
     truth.estimator_health.state = EstimatorHealthState::kUnobserved;
   } else if (input.estimator_flags.stale) {

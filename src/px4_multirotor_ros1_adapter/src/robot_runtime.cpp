@@ -1846,8 +1846,13 @@ void RobotRuntime::mocapPoseCallback(
           ++sources_[state_vision_pose_channel].dropped_samples;
         }
       }
-      emitHealthLocked(now, /*only_on_transition=*/true, &output);
     } else {
+      const auto prior_positioning = positioning_health_.evaluate(now.toSec());
+      if (has_mocap_pose_observation_ &&
+          prior_positioning.state ==
+              xgc2_ros1_robot_adapter::PositioningHealthState::kTimedOut) {
+        ++timeout_transition_count_;
+      }
       latest_projected_mocap_pose_ = projected;
       has_projected_mocap_pose_ = true;
       has_mocap_pose_observation_ = true;
@@ -1916,13 +1921,27 @@ void RobotRuntime::mocapPoseCallback(
               source_time));
           recordOutputLocked(state_vision_pose_channel);
         }
+        const double health_stale_after =
+            channelStaleAfterSeconds(profile_id_, "state.health");
+        const bool health_state_fresh =
+            has_mavros_state_ &&
+            sourceIsFresh(mavros_state_last_seen_, now, health_stale_after);
+        const bool fc_online = px4IsOnline(has_mavros_state_, health_state_fresh,
+                                           mavros_state_.connected);
+        const geometry_msgs::Quaternion *fc_orientation =
+            onlineFcOrientationLocked(now, fc_online);
+        if (fc_orientation != nullptr &&
+            quaternionAngularDistanceRad(projected.pose.orientation,
+                                         *fc_orientation) >
+                max_vision_attitude_jump_rad_) {
+          ++attitude_divergence_count_;
+        }
       }
       if (!bounded_frame) {
         position_error_.clear();
       } else if (position_error_.mocap(projected)) {
         emitPositionErrorLocked(projected.header.stamp, now, &output);
       }
-      emitHealthLocked(now, /*only_on_transition=*/true, &output);
     }
   }
   // Canonical /uavN/pose MUST receive finite projected poses only; never write
@@ -2240,6 +2259,10 @@ void RobotRuntime::mavrosEstimatorStatusCallback(
   mavros_estimator_status_ = *message;
   has_mavros_estimator_status_ = true;
   mavros_estimator_status_last_seen_ = ros::WallTime::now();
+  if (!message->attitude_status_flag || message->const_pos_mode_status_flag ||
+      message->gps_glitch_status_flag || message->accel_error_status_flag) {
+    ++estimator_degraded_count_;
+  }
 }
 
 void RobotRuntime::localSetpointCallback(
@@ -2727,6 +2750,9 @@ RobotRuntime::healthTruthLocked(const ros::WallTime &now) const {
   truth_input.mocap_input_timed_out = input_timed_out;
   truth_input.latest_mocap_invalid = latest_mocap_pose_invalid_;
   truth_input.invalid_mocap_count = invalid_mocap_pose_count_;
+  truth_input.timeout_transition_count = timeout_transition_count_;
+  truth_input.attitude_divergence_count = attitude_divergence_count_;
+  truth_input.estimator_degraded_count = estimator_degraded_count_;
   truth_input.positioning = pos_result;
   truth_input.attitude_diverged = attitude_diverged;
   truth_input.attitude_divergence_rad = attitude_divergence_rad;
@@ -2812,7 +2838,21 @@ xgc::semantic::common::v1::VehicleHealth RobotRuntime::healthLocked(
   if (truth.mocap_input.state ==
       xgc2_ros1_robot_adapter::MocapInputState::kInvalid) {
     addFault(&payload, "mocap.input.invalid",
-             "Mocap pose failed finite or unit-quaternion validation", 2);
+             "Mocap pose failed finite or unit-quaternion validation "
+             "(total_invalid=" +
+                 std::to_string(truth.mocap_input.invalid_sample_count) + ")",
+             2);
+  } else if (truth.mocap_input.invalid_sample_count >
+             reported_invalid_mocap_pose_count_) {
+    const std::uint64_t interval_invalid =
+        truth.mocap_input.invalid_sample_count -
+        reported_invalid_mocap_pose_count_;
+    addFault(&payload, "mocap.input.invalid_observed",
+             "Transient invalid mocap poses observed since last health tick "
+             "(window_invalid=" +
+                 std::to_string(interval_invalid) + ", total_invalid=" +
+                 std::to_string(truth.mocap_input.invalid_sample_count) + ")",
+             1);
   }
   if (publish_vision_ &&
       truth.vision_output ==
@@ -2820,10 +2860,38 @@ xgc::semantic::common::v1::VehicleHealth RobotRuntime::healthLocked(
     addFault(&payload, "vision.output.invalid",
              "Publishing Canonical Invalid NaN pose on MAVROS vision_pose", 2);
   }
+  if (payload.positioning().state() !=
+          xgc::semantic::common::v1::PositioningHealth::
+              POSITIONING_STATE_TIMED_OUT &&
+      truth.mocap_input.timeout_transition_count >
+          reported_timeout_transition_count_) {
+    const std::uint64_t interval_timeouts =
+        truth.mocap_input.timeout_transition_count -
+        reported_timeout_transition_count_;
+    addFault(&payload, "mocap.position.timeout_observed",
+             "Transient VRPN positioning timeout recovered since last health "
+             "tick (window_timeouts=" +
+                 std::to_string(interval_timeouts) + ", total_timeouts=" +
+                 std::to_string(truth.mocap_input.timeout_transition_count) +
+                 ")",
+             1);
+  }
   if (truth.mocap_input.attitude_diverged) {
     addFault(&payload, "mocap.attitude.divergence",
              "Mocap attitude diverges from the flight controller orientation",
              2);
+  } else if (truth.mocap_input.attitude_divergence_count >
+             reported_attitude_divergence_count_) {
+    const std::uint64_t interval_div =
+        truth.mocap_input.attitude_divergence_count -
+        reported_attitude_divergence_count_;
+    addFault(&payload, "mocap.attitude.divergence_observed",
+             "Transient mocap attitude divergence observed since last health "
+             "tick (window_divergences=" +
+                 std::to_string(interval_div) + ", total_divergences=" +
+                 std::to_string(truth.mocap_input.attitude_divergence_count) +
+                 ")",
+             1);
   }
 
   using EstState = xgc2_ros1_robot_adapter::EstimatorHealthState;
@@ -2846,6 +2914,18 @@ xgc::semantic::common::v1::VehicleHealth RobotRuntime::healthLocked(
                  "PX4 estimator reports accelerometer error flag", 2);
       }
     }
+  } else if (truth.estimator_health.degraded_sample_count >
+             reported_estimator_degraded_count_) {
+    const std::uint64_t interval_degraded =
+        truth.estimator_health.degraded_sample_count -
+        reported_estimator_degraded_count_;
+    addFault(&payload, "estimator.degraded_observed",
+             "Transient degraded MAVLink #230 flags observed since last "
+             "health tick (window_degraded=" +
+                 std::to_string(interval_degraded) + ", total_degraded=" +
+                 std::to_string(truth.estimator_health.degraded_sample_count) +
+                 ")",
+             1);
   }
 
   const auto pos_state = payload.positioning().state();
@@ -2872,40 +2952,15 @@ xgc::semantic::common::v1::VehicleHealth RobotRuntime::healthLocked(
   return payload;
 }
 
-bool RobotRuntime::emitHealthLocked(
-    const ros::WallTime &now, bool only_on_transition,
-    std::vector<xgc::robot::v1::RobotMessage> *messages) {
-  if (messages == nullptr || !channelEnabled("state.health") ||
-      !status_demand_.count("state.health") ||
-      (!forced_channel_.empty() && forced_channel_ != "state.health")) {
-    return false;
-  }
-  const auto truth = healthTruthLocked(now);
-  const bool transitioned =
-      !has_emitted_health_ ||
-      truth.mocap_input.state != last_emitted_mocap_input_state_ ||
-      truth.mocap_input.positioning.state != last_emitted_positioning_state_;
-  if (only_on_transition && !transitioned) {
-    return false;
-  }
-  if (!transitioned) {
-    if (!shouldEmitLocked("state.health", now)) {
-      return false;
-    }
-  } else if (forced_channel_.empty()) {
-    last_output_["state.health"] = now;
-  } else if (!shouldEmitLocked("state.health", now)) {
-    return false;
-  }
-  auto payload = healthLocked(now, &truth);
-  const ros::Time stamp =
-      has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();
-  messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
-  recordOutputLocked("state.health");
-  has_emitted_health_ = true;
-  last_emitted_mocap_input_state_ = truth.mocap_input.state;
-  last_emitted_positioning_state_ = truth.mocap_input.positioning.state;
-  return true;
+void RobotRuntime::advanceReportedHealthCountersLocked(
+    const xgc2_ros1_robot_adapter::Px4HealthTruth &truth) {
+  reported_invalid_mocap_pose_count_ = truth.mocap_input.invalid_sample_count;
+  reported_timeout_transition_count_ =
+      truth.mocap_input.timeout_transition_count;
+  reported_attitude_divergence_count_ =
+      truth.mocap_input.attitude_divergence_count;
+  reported_estimator_degraded_count_ =
+      truth.estimator_health.degraded_sample_count;
 }
 
 std::pair<bool, std::string> RobotRuntime::DescribeHealth() {
@@ -2933,7 +2988,15 @@ void RobotRuntime::emitPx4PeriodicLocked(
         sourceIsFresh(mavros_extended_state_last_seen_, now, flight_stale_after);
   }
 
-  emitHealthLocked(now, /*only_on_transition=*/false, messages);
+  if (channelEnabled("state.health") && shouldEmitLocked("state.health", now)) {
+    const auto truth = healthTruthLocked(now);
+    auto payload = healthLocked(now, &truth);
+    const ros::Time stamp =
+        has_mavros_state_ ? mavros_state_.header.stamp : ros::Time();
+    messages->push_back(makeEnvelopeLocked("state.health", stamp, payload));
+    recordOutputLocked("state.health");
+    advanceReportedHealthCountersLocked(truth);
+  }
 
   // An unobserved source has no flight state. Publishing default false/empty
   // fields would turn unknown ARM/MODE into fresh semantic measurements.
