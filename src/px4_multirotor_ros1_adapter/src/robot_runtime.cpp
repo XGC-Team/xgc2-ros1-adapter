@@ -1265,7 +1265,7 @@ bool RobotRuntime::installPx4(std::string *error) {
   }
   if (publish_vision_) {
     vision_pose_publisher_ =
-        node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 1, false);
+        node_handle_.advertise<geometry_msgs::PoseStamped>(vision_pose_endpoint_, 20, false);
     if (!requireRosRegistration(vision_pose_publisher_, vision_pose_endpoint_, error))
       return false;
   }

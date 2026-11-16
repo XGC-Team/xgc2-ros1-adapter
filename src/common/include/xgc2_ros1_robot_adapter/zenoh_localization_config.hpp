@@ -42,6 +42,13 @@ struct ZenohAccelerationSample {
 bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
                       double output[3]);
 
+// Validates finite 3D position and unit XYZW quaternion (|norm(q) - 1| <= 0.05).
+// Shared by Zenoh pending-slot classification and ROS1 localization projection.
+bool validZenohPoseValues(const double position[3],
+                          const double orientation_xyzw[4],
+                          double *norm_out = nullptr);
+bool validZenohPoseSample(const ZenohPoseSample &sample);
+
 struct ZenohLocalizationConfig {
   bool enabled = false;
   std::string endpoint;

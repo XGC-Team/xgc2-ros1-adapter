@@ -428,6 +428,193 @@ TEST(StatusDemand, ZenohOpenReachesPx4CanonicalPoseAndVision) {
   spinner.stop();
 }
 
+TEST(StatusDemand,
+     ZenohInvalidZeroQuaternionFollowedByValidEmitsVisionNaNThenValidKeepingCanonicalFinite) {
+  ros::AsyncSpinner spinner(2);
+  spinner.start();
+  ros::NodeHandle node;
+  const std::uint16_t port =
+      static_cast<std::uint16_t>(20000u + (getpid() % 20000) + 17u);
+  const std::string endpoint = "tcp/127.0.0.1:" + std::to_string(port);
+  xgc2_ros1_robot_adapter::ZenohLocalizationBinding binding;
+  binding.endpoint = endpoint;
+  binding.source = "r1-g4";
+  binding.tracker = "d8_origin";
+  binding.sensor = 0;
+  ZenohPosePublisher publisher(
+      endpoint, xgc2_ros1_robot_adapter::ZenohLocalizationKey(binding, "pose"));
+  ASSERT_TRUE(publisher.ready());
+
+  xgc2_ros1_robot_adapter::LocalizationProjectionConfig localization;
+  localization.offset_x = 1.25;
+  xgc2_ros1_robot_adapter::ZenohLocalizationConfig zenoh;
+  zenoh.enabled = true;
+  zenoh.endpoint = endpoint;
+  zenoh.source = "r1-g4";
+  zenoh.tracker = "d8_origin";
+  zenoh.sensor = 0;
+  zenoh.frame_id = "world";
+  StatusDemandHarness source(true, "/slot_burst/pose",
+                             "/slot_burst/mavros/vision_pose/pose",
+                             localization, zenoh);
+
+  std::mutex rx_mutex;
+  std::vector<geometry_msgs::PoseStamped> canonical_msgs;
+  std::vector<geometry_msgs::PoseStamped> vision_msgs;
+  auto pose_sub = node.subscribe<geometry_msgs::PoseStamped>(
+      "/slot_burst/pose", 100,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(rx_mutex);
+        canonical_msgs.push_back(*msg);
+      });
+  auto vision_sub = node.subscribe<geometry_msgs::PoseStamped>(
+      "/slot_burst/mavros/vision_pose/pose", 100,
+      [&](const geometry_msgs::PoseStamped::ConstPtr &msg) {
+        std::lock_guard<std::mutex> lock(rx_mutex);
+        vision_msgs.push_back(*msg);
+      });
+
+  auto all_finite = [](const geometry_msgs::PoseStamped &m) {
+    return std::isfinite(m.pose.position.x) &&
+           std::isfinite(m.pose.position.y) &&
+           std::isfinite(m.pose.position.z) &&
+           std::isfinite(m.pose.orientation.x) &&
+           std::isfinite(m.pose.orientation.y) &&
+           std::isfinite(m.pose.orientation.z) &&
+           std::isfinite(m.pose.orientation.w);
+  };
+  auto all_nan = [](const geometry_msgs::PoseStamped &m) {
+    return std::isnan(m.pose.position.x) && std::isnan(m.pose.position.y) &&
+           std::isnan(m.pose.position.z) &&
+           std::isnan(m.pose.orientation.x) &&
+           std::isnan(m.pose.orientation.y) &&
+           std::isnan(m.pose.orientation.z) &&
+           std::isnan(m.pose.orientation.w);
+  };
+  auto send_pose = [&](double x, double y, double z, double qw,
+                       std::int64_t ts_ns) {
+    xgc2::vrpn_zenoh::v1::Pose sample;
+    sample.mutable_report_time()->set_nanoseconds(ts_ns);
+    sample.mutable_report_time()->set_clock_domain(xgc::v1::CLOCK_DOMAIN_STEADY);
+    sample.mutable_position_m()->set_x(x);
+    sample.mutable_position_m()->set_y(y);
+    sample.mutable_position_m()->set_z(z);
+    sample.mutable_orientation_xyzw()->set_w(qw);
+    publisher.publish(sample);
+  };
+
+  ASSERT_TRUE(waitFor([&] {
+    return pose_sub.getNumPublishers() > 0 && vision_sub.getNumPublishers() > 0;
+  }));
+  // Warm up Zenoh pub->sub link and ROS TCPROS links with one valid pose.
+  ASSERT_TRUE(waitFor([&] {
+    send_pose(1.0, 0.0, 0.0, 1.0, 1000LL);
+    std::lock_guard<std::mutex> lock(rx_mutex);
+    return !canonical_msgs.empty() && !vision_msgs.empty();
+  }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  // Enable demand while unblocked so the initial synchronous snapshot completes,
+  // wait past the 10 Hz output interval, then arm block_ for the trigger pose.
+  source.demand({"state.mocap.pose"});
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  source.block();
+  send_pose(1.5, 0.0, 0.0, 1.0, 2000LL);
+  ASSERT_TRUE(source.waitEntered());
+  std::size_t vis_base = 0;
+  std::size_t can_base = 0;
+  {
+    std::lock_guard<std::mutex> lock(rx_mutex);
+    vis_base = vision_msgs.size();
+    can_base = canonical_msgs.size();
+  }
+  send_pose(1.25, -2.5, 0.75, 0.0, 3000LL);
+  send_pose(2.0, -2.5, 0.75, 1.0, 4000LL);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  source.release();
+  ASSERT_TRUE(waitFor([&] {
+    std::lock_guard<std::mutex> lock(rx_mutex);
+    std::size_t nan_idx = vision_msgs.size();
+    std::size_t valid_idx = vision_msgs.size();
+    for (std::size_t i = vis_base; i < vision_msgs.size(); ++i) {
+      if (nan_idx == vision_msgs.size() && all_nan(vision_msgs[i])) {
+        nan_idx = i;
+      } else if (nan_idx < vision_msgs.size() &&
+                 all_finite(vision_msgs[i]) &&
+                 std::abs(vision_msgs[i].pose.position.x - 3.25) < 1e-6) {
+        valid_idx = i;
+        break;
+      }
+    }
+    return nan_idx < valid_idx && valid_idx < vision_msgs.size() &&
+           canonical_msgs.size() > can_base;
+  }));
+  source.demand({});
+
+  // 2. Unstalled live ~75 us and 0 us back-to-back Zenoh [zero_quat, valid] bursts.
+  for (int round = 0; round < 5; ++round) {
+    {
+      std::lock_guard<std::mutex> lock(rx_mutex);
+      vis_base = vision_msgs.size();
+      can_base = canonical_msgs.size();
+    }
+    const double target_x = 4.0 + round;
+    const std::int64_t ts = 10000LL + round * 100LL;
+    send_pose(1.25, -2.5, 0.75, 0.0, ts);
+    if (round < 3) {
+      std::this_thread::sleep_for(std::chrono::microseconds(75));
+    }
+    send_pose(target_x, -2.5, 0.75, 1.0, ts + 1);
+    ASSERT_TRUE(waitFor([&] {
+      std::lock_guard<std::mutex> lock(rx_mutex);
+      std::size_t nan_idx = vision_msgs.size();
+      std::size_t valid_idx = vision_msgs.size();
+      for (std::size_t i = vis_base; i < vision_msgs.size(); ++i) {
+        if (nan_idx == vision_msgs.size() && all_nan(vision_msgs[i])) {
+          nan_idx = i;
+        } else if (nan_idx < vision_msgs.size() &&
+                   all_finite(vision_msgs[i]) &&
+                   std::abs(vision_msgs[i].pose.position.x - (target_x + 1.25)) <
+                       1e-6) {
+          valid_idx = i;
+          break;
+        }
+      }
+      bool has_can = false;
+      for (std::size_t i = can_base; i < canonical_msgs.size(); ++i) {
+        if (std::abs(canonical_msgs[i].pose.position.x - (target_x + 1.25)) <
+            1e-6) {
+          has_can = true;
+          break;
+        }
+      }
+      return nan_idx < valid_idx && valid_idx < vision_msgs.size() && has_can;
+    })) << "burst round " << round;
+  }
+
+  // Canonical pose topic must contain zero NaNs, and stopping transmission
+  // must not replay stale samples.
+  std::size_t settled_vision = 0;
+  std::size_t settled_canonical = 0;
+  {
+    std::lock_guard<std::mutex> lock(rx_mutex);
+    for (const auto &msg : canonical_msgs) {
+      EXPECT_TRUE(all_finite(msg));
+    }
+    settled_vision = vision_msgs.size();
+    settled_canonical = canonical_msgs.size();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  {
+    std::lock_guard<std::mutex> lock(rx_mutex);
+    EXPECT_EQ(settled_vision, vision_msgs.size());
+    EXPECT_EQ(settled_canonical, canonical_msgs.size());
+  }
+
+  source.stop();
+  spinner.stop();
+}
+
 TEST(StatusDemand, ZenohPosePublishesSlotPoseAndVisionWithSourceTime) {
   ros::AsyncSpinner spinner(2);
   spinner.start();

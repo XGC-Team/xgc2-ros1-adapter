@@ -71,7 +71,8 @@ struct PoseState {
     stopping.store(true, std::memory_order_release);
     {
       std::lock_guard<std::mutex> lock(pending_mutex);
-      has_pending = false;
+      has_pending_invalid = false;
+      has_pending_valid = false;
       worker_stop = true;
     }
     pending_cv.notify_all();
@@ -87,14 +88,20 @@ struct PoseState {
         std::unique_lock<std::mutex> lock(pending_mutex);
         pending_cv.wait(lock, [this]() {
           return worker_stop || stopping.load(std::memory_order_acquire) ||
-                 has_pending;
+                 has_pending_invalid || has_pending_valid;
         });
         if (worker_stop || stopping.load(std::memory_order_acquire)) {
-          has_pending = false;
+          has_pending_invalid = false;
+          has_pending_valid = false;
           return;
         }
-        sample = latest_pending;
-        has_pending = false;
+        if (has_pending_invalid) {
+          sample = pending_invalid;
+          has_pending_invalid = false;
+        } else {
+          sample = latest_valid;
+          has_pending_valid = false;
+        }
       }
       try {
         callback(sample);
@@ -108,8 +115,10 @@ struct PoseState {
   std::mutex pending_mutex;
   std::condition_variable pending_cv;
   bool worker_stop{false};
-  bool has_pending{false};
-  ZenohPoseSample latest_pending;
+  bool has_pending_invalid{false};
+  ZenohPoseSample pending_invalid;
+  bool has_pending_valid{false};
+  ZenohPoseSample latest_valid;
   std::thread worker;
 };
 
@@ -163,15 +172,26 @@ void onPoseSample(z_loaned_sample_t *sample, void *context) noexcept {
   decoded.orientation[1] = message.orientation_xyzw().y();
   decoded.orientation[2] = message.orientation_xyzw().z();
   decoded.orientation[3] = message.orientation_xyzw().w();
+  const bool valid_pose = validZenohPoseSample(decoded);
   {
     std::lock_guard<std::mutex> lock(state->pending_mutex);
     if (state->stopping.load(std::memory_order_acquire) || state->worker_stop) {
-      state->has_pending = false;
+      state->has_pending_invalid = false;
+      state->has_pending_valid = false;
       return;
     }
-    // Single-slot overwrite keeps only the newest pose while a slow callback runs.
-    state->latest_pending = decoded;
-    state->has_pending = true;
+    if (!valid_pose) {
+      // Sticky invalid slot: never overwritten by subsequent valid poses before
+      // worker dispatch, and supersedes any older unconsumed valid pose.
+      state->pending_invalid = decoded;
+      state->has_pending_invalid = true;
+      state->has_pending_valid = false;
+    } else {
+      // Single-slot overwrite coalesces valid bursts while preserving any
+      // earlier unconsumed invalid observation to be dispatched first.
+      state->latest_valid = decoded;
+      state->has_pending_valid = true;
+    }
   }
   state->pending_cv.notify_one();
 }
@@ -267,6 +287,38 @@ void onAccelerationDrop(void *context) {
 }
 
 } // namespace
+
+bool validZenohPoseValues(const double position[3],
+                          const double orientation_xyzw[4],
+                          double *norm_out) {
+  if (position == nullptr || orientation_xyzw == nullptr) {
+    return false;
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (!std::isfinite(position[i])) {
+      return false;
+    }
+  }
+  for (int i = 0; i < 4; ++i) {
+    if (!std::isfinite(orientation_xyzw[i])) {
+      return false;
+    }
+  }
+  const double norm = std::hypot(
+      std::hypot(orientation_xyzw[0], orientation_xyzw[1]),
+      std::hypot(orientation_xyzw[2], orientation_xyzw[3]));
+  if (!std::isfinite(norm) || std::abs(norm - 1.0) > 0.05) {
+    return false;
+  }
+  if (norm_out != nullptr) {
+    *norm_out = norm;
+  }
+  return true;
+}
+
+bool validZenohPoseSample(const ZenohPoseSample &sample) {
+  return validZenohPoseValues(sample.position, sample.orientation);
+}
 
 bool zenohAngularRate(const double rotation_xyzw[4], double interval_seconds,
                       double output[3]) {

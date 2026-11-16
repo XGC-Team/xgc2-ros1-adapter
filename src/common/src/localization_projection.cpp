@@ -5,6 +5,8 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 
+#include "xgc2_ros1_robot_adapter/zenoh_localization_config.hpp"
+
 namespace xgc2_ros1_robot_adapter {
 namespace {
 
@@ -12,24 +14,18 @@ bool finite(double value) { return std::isfinite(value); }
 
 bool validatePoseAndNorm(const geometry_msgs::PoseStamped &source,
                          double *norm_out) {
-  if (!finite(source.pose.position.x) || !finite(source.pose.position.y) ||
-      !finite(source.pose.position.z) || !finite(source.pose.orientation.x) ||
-      !finite(source.pose.orientation.y) || !finite(source.pose.orientation.z) ||
-      !finite(source.pose.orientation.w)) {
-    return false;
-  }
-  const double norm =
-      std::hypot(std::hypot(source.pose.orientation.x,
-                            source.pose.orientation.y),
-                 std::hypot(source.pose.orientation.z,
-                            source.pose.orientation.w));
-  if (!finite(norm) || std::abs(norm - 1.0) > 0.05) {
-    return false;
-  }
-  if (norm_out != nullptr) {
-    *norm_out = norm;
-  }
-  return true;
+  const double position[3] = {
+      source.pose.position.x,
+      source.pose.position.y,
+      source.pose.position.z,
+  };
+  const double orientation[4] = {
+      source.pose.orientation.x,
+      source.pose.orientation.y,
+      source.pose.orientation.z,
+      source.pose.orientation.w,
+  };
+  return validZenohPoseValues(position, orientation, norm_out);
 }
 
 bool parseFinite(const std::map<std::string, std::string> &parameters,

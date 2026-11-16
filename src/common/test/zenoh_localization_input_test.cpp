@@ -4,9 +4,11 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <future>
-#include <mutex>
+#include <cstddef>
 #include <cstdint>
+#include <future>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -357,6 +359,238 @@ TEST(ZenohLocalizationInput, PoseCallbacksCoalesceBurstsToLatestSampleWhenBusy) 
     EXPECT_LT(observed_nanos.size(), 5u);
     EXPECT_EQ(100, observed_nanos.front());
     EXPECT_EQ(2000, observed_nanos.back());
+  }
+
+  input->Stop();
+  input.reset();
+  z_drop(z_move(publisher));
+  z_drop(z_move(publisher_session));
+}
+
+TEST(ZenohPoseValidity,
+     EnforcesFiniteComponentsAndFivePercentUnitQuaternionNorm) {
+  const double pos[3] = {1.25, -2.5, 0.75};
+  const double identity[4] = {0.0, 0.0, 0.0, 1.0};
+  const double zero_q[4] = {0.0, 0.0, 0.0, 0.0};
+  const double scaled_ok[4] = {0.0, 0.0, 0.0, 1.04};
+  const double scaled_bad[4] = {0.0, 0.0, 0.0, 1.06};
+  const double nan_q[4] = {0.0, 0.0, 0.0,
+                           std::numeric_limits<double>::quiet_NaN()};
+  const double inf_pos[3] = {1.0, std::numeric_limits<double>::infinity(), 0.0};
+
+  double norm = 0.0;
+  EXPECT_TRUE(validZenohPoseValues(pos, identity, &norm));
+  EXPECT_DOUBLE_EQ(1.0, norm);
+  EXPECT_TRUE(validZenohPoseValues(pos, scaled_ok, &norm));
+  EXPECT_NEAR(1.04, norm, 1e-12);
+  EXPECT_FALSE(validZenohPoseValues(pos, zero_q));
+  EXPECT_FALSE(validZenohPoseValues(pos, scaled_bad));
+  EXPECT_FALSE(validZenohPoseValues(pos, nan_q));
+  EXPECT_FALSE(validZenohPoseValues(inf_pos, identity));
+
+  ZenohPoseSample sample;
+  sample.position[0] = 1.25;
+  sample.position[1] = -2.5;
+  sample.position[2] = 0.75;
+  sample.orientation[0] = 0.0;
+  sample.orientation[1] = 0.0;
+  sample.orientation[2] = 0.0;
+  sample.orientation[3] = 0.0;
+  EXPECT_FALSE(validZenohPoseSample(sample));
+  sample.orientation[3] = 1.0;
+  EXPECT_TRUE(validZenohPoseSample(sample));
+}
+
+TEST(ZenohLocalizationInput,
+     InvalidZeroQuaternionFollowedByValidIsNeverOverwrittenAndDoesNotReplay) {
+  const std::uint16_t port =
+      static_cast<std::uint16_t>(20000u + (getpid() % 20000) + 3u);
+  const std::string endpoint = "tcp/127.0.0.1:" + std::to_string(port);
+  const std::string listen_config =
+      "{\"mode\":\"peer\",\"listen\":{\"endpoints\":[\"" + endpoint +
+      "\"]},\"scouting\":{\"multicast\":{\"enabled\":false},"
+      "\"gossip\":{\"enabled\":false}}}";
+  z_owned_config_t config;
+  ASSERT_GE(zc_config_from_str(&config, listen_config.c_str()), 0);
+  z_owned_session_t publisher_session;
+  ASSERT_GE(z_open(&publisher_session, z_move(config), nullptr), 0);
+
+  ZenohLocalizationBinding binding;
+  binding.endpoint = endpoint;
+  binding.source = "r1-g4";
+  binding.tracker = "d8_origin";
+  const std::string key = ZenohLocalizationKey(binding, "pose");
+  z_view_keyexpr_t key_expression;
+  ASSERT_GE(z_view_keyexpr_from_str(&key_expression, key.c_str()), 0);
+  z_owned_publisher_t publisher;
+  ASSERT_GE(z_declare_publisher(z_loan(publisher_session), &publisher,
+                                z_loan(key_expression), nullptr),
+            0);
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<ZenohPoseSample> observed;
+  std::int64_t stall_on_timestamp = 100;
+  bool stall_active = false;
+  std::string error;
+  ZenohLocalizationInput::Callbacks callbacks;
+  callbacks.pose = [&](const ZenohPoseSample &sample) {
+    std::unique_lock<std::mutex> lock(mutex);
+    observed.push_back(sample);
+    if (sample.report_time_nanos == stall_on_timestamp) {
+      stall_active = true;
+      changed.notify_all();
+      changed.wait(lock, [&] { return !stall_active; });
+    } else {
+      changed.notify_all();
+    }
+  };
+  auto input =
+      ZenohLocalizationInput::Open(binding, std::move(callbacks), &error);
+  ASSERT_NE(nullptr, input) << error;
+
+  auto publish_pose = [&](std::int64_t t_ns, bool valid) {
+    xgc2::vrpn_zenoh::v1::Pose sample;
+    sample.mutable_report_time()->set_nanoseconds(t_ns);
+    sample.mutable_report_time()->set_clock_domain(xgc::v1::CLOCK_DOMAIN_STEADY);
+    sample.mutable_position_m()->set_x(1.25);
+    sample.mutable_position_m()->set_y(-2.5);
+    sample.mutable_position_m()->set_z(0.75);
+    sample.mutable_orientation_xyzw()->set_w(valid ? 1.0 : 0.0);
+    std::string payload;
+    ASSERT_TRUE(sample.SerializeToString(&payload));
+    z_owned_bytes_t bytes;
+    ASSERT_GE(z_bytes_copy_from_buf(
+                  &bytes,
+                  reinterpret_cast<const std::uint8_t *>(payload.data()),
+                  payload.size()),
+              0);
+    ASSERT_GE(z_publisher_put(z_loan(publisher), z_move(bytes), nullptr), 0);
+  };
+
+  const auto deadline_for = [](int seconds) {
+    return std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+  };
+
+  // 1. Stall worker on t=100, then burst [Valid(200), Invalid(300), Valid(400)]:
+  //    Valid(200) is coalesced, Invalid(300) survives and precedes Valid(400).
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    const auto deadline = deadline_for(3);
+    while (!stall_active && std::chrono::steady_clock::now() < deadline) {
+      publish_pose(100, true);
+      changed.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    ASSERT_TRUE(stall_active);
+  }
+  publish_pose(200, true);
+  publish_pose(300, false);
+  publish_pose(400, true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    stall_on_timestamp = 450;
+    stall_active = false;
+  }
+  changed.notify_all();
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    ASSERT_TRUE(changed.wait_until(lock, deadline_for(3), [&] {
+      return !observed.empty() && observed.back().report_time_nanos == 400;
+    }));
+    auto find_index = [&](std::int64_t ts) -> std::ptrdiff_t {
+      for (std::size_t i = 0; i < observed.size(); ++i) {
+        if (observed[i].report_time_nanos == ts) {
+          return static_cast<std::ptrdiff_t>(i);
+        }
+      }
+      return -1;
+    };
+    const std::ptrdiff_t idx_300 = find_index(300);
+    const std::ptrdiff_t idx_400 = find_index(400);
+    ASSERT_GE(idx_300, 0);
+    ASSERT_GT(idx_400, idx_300);
+    EXPECT_FALSE(validZenohPoseSample(observed[idx_300]));
+    EXPECT_TRUE(validZenohPoseSample(observed[idx_400]));
+    EXPECT_EQ(-1, find_index(200));
+  }
+
+  // 2. Tail invalid supersedes earlier pending invalid & valid without replay.
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    publish_pose(450, true);
+    ASSERT_TRUE(changed.wait_until(lock, deadline_for(3),
+                                   [&] { return stall_active; }));
+  }
+  publish_pose(500, false);
+  publish_pose(600, true);
+  publish_pose(700, false);
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    stall_on_timestamp = -1;
+    stall_active = false;
+  }
+  changed.notify_all();
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    ASSERT_TRUE(changed.wait_until(lock, deadline_for(3), [&] {
+      return !observed.empty() && observed.back().report_time_nanos == 700;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    bool saw_600 = false, saw_700_invalid = false;
+    for (const auto &s : observed) {
+      if (s.report_time_nanos == 600) saw_600 = true;
+      if (s.report_time_nanos == 700 && !validZenohPoseSample(s)) {
+        saw_700_invalid = true;
+      }
+    }
+    EXPECT_FALSE(saw_600);
+    EXPECT_TRUE(saw_700_invalid);
+  }
+
+  // 3. Unstalled live wire 0 us and ~75 us Invalid -> Valid bursts (10 rounds).
+  for (int round = 0; round < 10; ++round) {
+    const std::int64_t bad_ts = 1000 + round * 10;
+    const std::int64_t good_ts = bad_ts + 1;
+    std::size_t base = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      base = observed.size();
+    }
+    publish_pose(bad_ts, false);
+    if (round >= 5) {
+      std::this_thread::sleep_for(std::chrono::microseconds(75));
+    }
+    publish_pose(good_ts, true);
+    std::unique_lock<std::mutex> lock(mutex);
+    ASSERT_TRUE(changed.wait_until(lock, deadline_for(3), [&] {
+      for (std::size_t i = base; i < observed.size(); ++i) {
+        if (observed[i].report_time_nanos == good_ts) return true;
+      }
+      return false;
+    })) << "round " << round;
+    std::ptrdiff_t idx_bad = -1, idx_good = -1;
+    for (std::size_t i = base; i < observed.size(); ++i) {
+      if (observed[i].report_time_nanos == bad_ts) idx_bad = i;
+      if (observed[i].report_time_nanos == good_ts) idx_good = i;
+    }
+    ASSERT_GE(idx_bad, static_cast<std::ptrdiff_t>(base));
+    ASSERT_GT(idx_good, idx_bad);
+    EXPECT_FALSE(validZenohPoseSample(observed[idx_bad]));
+    EXPECT_TRUE(validZenohPoseSample(observed[idx_good]));
+  }
+
+  // 4. Stopping transmission must not replay cached poses or NaNs.
+  std::size_t settled_count = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    settled_count = observed.size();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_EQ(settled_count, observed.size());
   }
 
   input->Stop();
