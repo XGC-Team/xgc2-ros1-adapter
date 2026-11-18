@@ -1168,8 +1168,12 @@ manifest["capacityPreflight"] = {
 write_manifest(manifest)
 # Wait on the native recorder itself; the Python CLI can exit on a signal
 # before its recorder child has finalized and renamed the bag.
+from uuid import uuid4
+
 executable = os.path.join(root, "lib", "rosbag", "record")
-arguments = [executable, "--split", "--size=" + str(split_size)]
+recorder_name = "record_" + uuid4().hex
+recorder_node = "/" + "/".join(filter(None, os.environ.get("ROS_NAMESPACE", "").split("/") + [recorder_name]))
+arguments = [executable, "__name:=" + recorder_name, "--split", "--size=" + str(split_size)]
 arguments.append("--min-space=" + str(min_space_gib) + "G")
 if compression != "none":
     arguments.append("--" + compression)
@@ -1207,76 +1211,103 @@ signal.signal(signal.SIGTERM, forward)
 exit_code = 1
 recorder_ready = threading.Event()
 recorder_armed = threading.Event()
-def subscriptions_armed():
-    # "Ready" must mean capture-armed: the native recorder has registered its
-    # subscription on every resolved topic, and for topics that already have a
-    # publisher the inbound transport connection exists. A message published the
-    # moment readiness is reported is captured; process-alive alone is not armed.
-    if child is None or child.poll() is not None:
-        return False
+stop_arming = threading.Event()
+arm_wake = threading.Event()
+
+# Read the exact native node during startup. The master supplies the current
+# publication roster and the final registration proof. Explicit topics must
+# all be registered, while inbound connections are needed only for producers
+# present now. Native record-all discovers topics as they appear.
+ARM_WORKER_SECONDS = 35.0
+def arm_recorder():
     import xmlrpc.client
+    from xml.parsers.expat import ExpatError
+
     class Transport(xmlrpc.client.Transport):
         def make_connection(self, host):
             connection = super().make_connection(host)
             connection.timeout = 0.25
             return connection
-    try:
-        with xmlrpc.client.ServerProxy(os.environ["ROS_MASTER_URI"], transport=Transport()) as master:
-            code, _message, state = master.getSystemState("/xgc_rosbag_ready")
-            if code != 1:
-                return False
-            publishers, subscribers, _services = state
-            published = {topic: nodes for topic, nodes in publishers}
-            subscribed = {topic: set(nodes) for topic, nodes in subscribers}
-            node = "/record_%d" % child.pid
-            uri = None
-            candidates = [node] + sorted(
-                {name for _topic, nodes in subscribers for name in nodes
-                 if name.startswith("/record_")})
-            for name in candidates:
-                code, _message, candidate = master.lookupNode("/xgc_rosbag_ready", name)
-                if code != 1:
-                    continue
-                try:
-                    with xmlrpc.client.ServerProxy(candidate, transport=Transport()) as daemon:
-                        code, _message, pid = daemon.getPid("/xgc_rosbag_ready")
-                except Exception:
-                    continue
-                if code == 1 and pid == child.pid:
-                    node, uri = name, candidate
-                    break
-            if uri is None:
-                return False
-        # rosbag registers a subscription only once a topic's publisher exists,
-        # so a resolved-but-absent topic can never gate record-start (an
-        # algorithm output may appear only after the run begins). Armed covers
-        # current capture: every resolved topic that already has a publisher
-        # must show this node subscribed AND its inbound transport connected.
-        need = [topic for topic in topics if published.get(topic)]
-        if any(node not in subscribed.get(topic, ()) for topic in need):
-            return False
-        if not need:
-            return True
-        with xmlrpc.client.ServerProxy(uri, transport=Transport()) as daemon:
-            code, _message, bus = daemon.getBusInfo("/xgc_rosbag_ready")
-        if code != 1:
-            return False
-        connected = {row[4] for row in bus if len(row) > 5 and row[2] == "i" and row[5]}
-        return all(topic in connected for topic in need)
-    except Exception:
-        return False
-# The readiness worker exists only to cover the startup window; longer waits are
-# answered by describe's own opportunistic check, so no orphan scan can outlive
-# this budget or the child.
-ARM_WORKER_SECONDS = 35.0
-def arm_recorder():
+
+    caller = "/xgc_rosbag_ready"
+    master_uri = os.environ.get("ROS_MASTER_URI")
     deadline = time.monotonic() + ARM_WORKER_SECONDS
-    while child is not None and child.poll() is None and time.monotonic() < deadline:
-        if subscriptions_armed():
-            recorder_armed.set()
-            break
-        time.sleep(0.1)
-    recorder_ready.set()
+    selected = set(topics)
+    explicit_topics = set() if manifest.get("recordAllTopics") else selected
+    expected, uri = None, None
+    refresh_publications = 0.0
+    delay = 0.1
+    local_registrations = set()
+
+    def proxy(address):
+        return xmlrpc.client.ServerProxy(address, transport=Transport())
+
+    def lookup_child(master):
+        code, _message, candidate = master.lookupNode(caller, recorder_node)
+        if code != 1:
+            return None
+        with proxy(candidate) as daemon:
+            code, _message, pid = daemon.getPid(caller)
+        return candidate if code == 1 and pid == child.pid else None
+
+    def inbound(address):
+        with proxy(address) as daemon:
+            code, _message, bus = daemon.getBusInfo(caller)
+        if code == 1:
+            return {row[4] for row in bus if len(row) > 5 and row[2] == "i" and row[5]}
+        return set()
+
+    def subscriptions(address):
+        with proxy(address) as daemon:
+            code, _message, registered = daemon.getSubscriptions(caller)
+        return {topic for topic, _type in registered} if code == 1 else set()
+
+    def active():
+        return not stop_arming.is_set() and forwarded_signal is None and child.poll() is None
+
+    try:
+        if master_uri is None:
+            return
+        with proxy(master_uri) as master:
+            while active() and time.monotonic() < deadline:
+                try:
+                    if uri is None:
+                        uri = lookup_child(master)
+                    if uri is not None and not explicit_topics.issubset(local_registrations):
+                        local_registrations = subscriptions(uri)
+                        if explicit_topics.issubset(local_registrations):
+                            delay = 0.1
+                    if uri is not None and explicit_topics.issubset(local_registrations) and active():
+                        now = time.monotonic()
+                        if now >= refresh_publications:
+                            refresh_publications = now + 1.0
+                            code, _message, published = master.getPublishedTopics(caller, "/")
+                            if code == 1:
+                                expected = selected.intersection(topic for topic, _type in published)
+                        if expected is not None:
+                            connected = inbound(uri) if expected else set()
+                            if expected.issubset(connected) and active():
+                                code, _message, state = master.getSystemState(caller)
+                                if code == 1:
+                                    publishers, subscribers, _services = state
+                                    expected = selected.intersection(topic for topic, nodes in publishers if nodes)
+                                    registered = {topic for topic, nodes in subscribers if recorder_node in nodes}
+                                    if (explicit_topics.union(expected).issubset(registered)
+                                            and expected.issubset(connected)):
+                                        if active():
+                                            recorder_armed.set()
+                                        break
+                except (OSError, xmlrpc.client.Error, ExpatError, ValueError):
+                    # The third-party endpoints can be briefly unavailable.
+                    # No partial observation can prove readiness.
+                    pass
+                arm_wake.wait(delay)
+                arm_wake.clear()
+                delay = min(delay * 2, 1.0)
+    finally:
+        recorder_ready.set()
+
+
 def start_recorder_service():
     from xgc2_xrpc import Endpoint, Fault, Host, Runtime, ServiceRef
     service_ref = ServiceRef(manifest["targetId"], "xgc.recording.v1", "1",
@@ -1291,13 +1322,9 @@ def start_recorder_service():
         if wait_ms:
             recorder_ready.wait(min(wait_ms / 1000.0, call.remaining()))
         call.check_cancelled()
-        # The bounded worker only covers the startup window; an arming that
-        # lands later is still observed here instead of reported stale.
-        if not recorder_armed.is_set() and subscriptions_armed():
-            recorder_armed.set()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
-                "ready": child is not None and child.poll() is None and recorder_armed.is_set(),
+                "ready": child is not None and child.poll() is None and forwarded_signal is None and recorder_armed.is_set(),
                 "facts": {"path": output_prefix + ".bag", "recordingId": recording_id, "manifestPath": manifest_path, "parts": manifest.get("parts", []),
                           "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
                           "startedAt": manifest["recordingStartedAt"],
@@ -1321,9 +1348,11 @@ try:
             # The stop is an intent recorded as such; it is not artifact proof.
             manifest["stopRequestedAt"] = utc_now()
             manifest["stopRequestSignal"] = forwarded_signal
+            arm_wake.set()
             changed = True
         if manifest["firstBagObservedAt"] is None and recorded_paths():
             manifest["firstBagObservedAt"] = facts.clock()
+            arm_wake.set()
             changed = True
         if changed:
             write_manifest(manifest)
@@ -1339,11 +1368,10 @@ try:
         except subprocess.TimeoutExpired:
             continue
 finally:
+    stop_arming.set()
+    arm_wake.set()
     recorder_ready.set()
     if arm_thread is not None:
-        # Shutdown joins the readiness worker: no orphan master scan survives
-        # the recorder. The worker exits within one poll cycle once the child
-        # is gone or its startup budget ends.
         arm_thread.join(timeout=10.0)
     rpc_host.close()
     rpc_runtime.close()
