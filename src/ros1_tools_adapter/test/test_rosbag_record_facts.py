@@ -351,7 +351,7 @@ class RecordFactsTests(unittest.TestCase):
                 found.add(int(entry.name))
         return found
 
-    def _armed_ros_master(self, sparse, topics, sim_time):
+    def _armed_ros_master(self, sparse, topics, sim_time, admission_delay):
         # The fake recorder has actual child identity. The second connection
         # (or, without a publisher, its subscription) is delayed.
         published = topics[:1] if sparse else topics
@@ -412,6 +412,8 @@ class RecordFactsTests(unittest.TestCase):
             counts["masterUri"] += 1
             if child_identity()[0] is not None:
                 raise AssertionError("native registrations started before the master answered")
+            if admission_delay:
+                time.sleep(admission_delay)
             return [1, "uri", uri]
 
         server.register_function(lambda _caller, _scope: [1, "topics", [[t, "std_msgs/String"] for t in published]],
@@ -424,7 +426,7 @@ class RecordFactsTests(unittest.TestCase):
         server.register_function(get_param, "getParam")
         return master_probe(self, server, get_uri)
 
-    def assert_recorder_armed(self, sparse, *, clock_selected=False, sim_time=None):
+    def assert_recorder_armed(self, sparse, *, clock_selected=False, sim_time=None, admission_delay=0):
         setup = '''
 import json, threading, types
 from pathlib import Path
@@ -448,7 +450,7 @@ def readiness_host(_address, routes, **kwargs):
 xrpc.Host = readiness_host
 '''
         topics = ["/xgc/record_facts", "/clock" if clock_selected else "/tf"]
-        master_uri = self._armed_ros_master(sparse, topics, sim_time)
+        master_uri = self._armed_ros_master(sparse, topics, sim_time, admission_delay)
         document = self.run_native_recipe(setup, wait_for_ready=True, topics=topics, master_uri=master_uri)
         reply = json.loads((self.directory / "ready.json").read_text())
         self.assertTrue(reply["ready"])
@@ -468,8 +470,9 @@ xrpc.Host = readiness_host
         self.assertEqual(document["recordFacts"]["timebase"], timebase)
 
     def test_recorder_ready_releases_held_describe_before_any_bag_exists(self):
-        # The recorder child creates its first bag only after describe returns.
-        self.assert_recorder_armed(sparse=False)
+        # A valid initial answer can exceed the individual graph probe timeout.
+        # The child creates its first bag only after describe returns.
+        self.assert_recorder_armed(sparse=False, admission_delay=0.4)
 
     def test_external_master_admission_rejects_once_before_starting_recorder(self):
         calls = []

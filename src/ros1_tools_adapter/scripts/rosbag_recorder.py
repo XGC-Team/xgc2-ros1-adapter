@@ -1224,7 +1224,7 @@ ARM_WORKER_SECONDS = 35.0
 ROS_READY_CALLER = "/xgc_rosbag_ready"
 
 
-def admit_external_master(uri):
+def admit_external_master(uri, deadline):
     # roscpp does not recover a rejected initial registerSubscriber. An
     # external master has no Session owner event, so admit this request once.
     from contextlib import closing
@@ -1234,13 +1234,16 @@ def admit_external_master(uri):
     target = urlsplit(uri)
     connect = HTTPSConnection if target.scheme == "https" else HTTPConnection
     try:
-        with closing(connect(target.hostname, target.port, timeout=0.25)) as connection:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("recorder startup budget exhausted")
+        with closing(connect(target.hostname, target.port, timeout=remaining)) as connection:
             request = xmlrpc.client.dumps((ROS_READY_CALLER,), methodname="getUri")
             connection.request("POST", target.path or "/RPC2", request, {"Content-Type": "text/xml"})
             response = connection.getresponse()
             if response.status == 200:
                 ((code, _message, master_uri),), _method = xmlrpc.client.loads(response.read())
-                if code == 1 and isinstance(master_uri, str) and master_uri:
+                if code == 1 and isinstance(master_uri, str) and master_uri and time.monotonic() < deadline:
                     return
     except (OSError, HTTPException, xmlrpc.client.Error, ExpatError, TypeError, ValueError):
         pass
@@ -1250,7 +1253,7 @@ def admit_external_master(uri):
 master_uri = os.environ["ROS_MASTER_URI"]
 arming_deadline = time.monotonic() + ARM_WORKER_SECONDS
 if external_master_admission:
-    admit_external_master(master_uri)
+    admit_external_master(master_uri, arming_deadline)
 
 facts = RecordFacts(manifest, output_directory)
 facts.start(manifest.get("cameraTopicRoots") or [])
