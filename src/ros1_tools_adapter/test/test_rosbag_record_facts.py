@@ -58,6 +58,18 @@ exec(compile(ast.Module(body=selected, type_ignores=[]), "record-recipe", "exec"
 RecordFacts = namespace["RecordFacts"]
 
 
+def master_probe(test, server=None, get_uri=None):
+    if server is None:
+        server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
+    uri = "http://127.0.0.1:%s" % server.server_address[1]
+    server.register_function(get_uri or (lambda _caller: [1, "uri", uri]), "getUri")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    test.addCleanup(server.server_close)
+    test.addCleanup(server.shutdown)
+    return uri
+
+
 def applied(sequence=1, instance="epoch-A", gain=2.5, event="applied", ros=None):
     return {
         "schemaVersion": 1,
@@ -345,7 +357,8 @@ class RecordFactsTests(unittest.TestCase):
         published = topics[:1] if sparse else topics
         server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
         uri = "http://127.0.0.1:%s" % server.server_address[1]
-        counts = self.arming_calls = {"graphs": 0, "bus": 0, "pid": 0, "subscriptions": 0, "timebase": 0}
+        counts = self.arming_calls = {"graphs": 0, "bus": 0, "pid": 0, "subscriptions": 0,
+                                      "timebase": 0, "masterUri": 0}
 
         def child_identity():
             # Select the real fake recorder and its configured ROS name.
@@ -395,6 +408,12 @@ class RecordFactsTests(unittest.TestCase):
             counts["timebase"] += 1
             return [-1, "missing", 0] if sim_time is None else [1, "found", sim_time]
 
+        def get_uri(_caller):
+            counts["masterUri"] += 1
+            if child_identity()[0] is not None:
+                raise AssertionError("native registrations started before the master answered")
+            return [-1, "still starting", ""] if counts["masterUri"] == 1 else [1, "uri", uri]
+
         server.register_function(lambda _caller, _scope: [1, "topics", [[t, "std_msgs/String"] for t in published]],
                                  "getPublishedTopics")
         server.register_function(get_system_state, "getSystemState")
@@ -403,11 +422,7 @@ class RecordFactsTests(unittest.TestCase):
         server.register_function(get_bus_info, "getBusInfo")
         server.register_function(get_subscriptions, "getSubscriptions")
         server.register_function(get_param, "getParam")
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        return uri
+        return master_probe(self, server, get_uri)
 
     def assert_recorder_armed(self, sparse, *, clock_selected=False, sim_time=None):
         setup = '''
@@ -434,14 +449,13 @@ xrpc.Host = readiness_host
 '''
         topics = ["/xgc/record_facts", "/clock" if clock_selected else "/tf"]
         master_uri = self._armed_ros_master(sparse, topics, sim_time)
-        with patch.dict(os.environ, {"ROS_MASTER_URI": master_uri}):
-            document = self.run_native_recipe(setup, wait_for_ready=True, topics=topics)
+        document = self.run_native_recipe(setup, wait_for_ready=True, topics=topics, master_uri=master_uri)
         reply = json.loads((self.directory / "ready.json").read_text())
         self.assertTrue(reply["ready"])
         self.assertTrue(reply["archiveExists"])
         self.assertIsNone(reply["firstBagObservedAt"])
         self.assertEqual(self.arming_calls, {"graphs": 1, "bus": 1 if sparse else 3, "pid": 1,
-                                             "subscriptions": 3 if sparse else 1, "timebase": 1})
+                                             "subscriptions": 3 if sparse else 1, "timebase": 1, "masterUri": 2})
         timebase = reply["facts"]["timebase"]
         self.assertIs(timebase["useSimTime"], sim_time)
         self.assertEqual(timebase["rosMasterUri"], master_uri)
@@ -492,7 +506,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         self.assertEqual(len(producers), 1)
         self.assertEqual(json.loads(self.body(producers[0], self.directory / "Experiments" / "Data")), applied())
 
-    def run_native_recipe(self, setup="", wait_for_ready=False, topics=None):
+    def run_native_recipe(self, setup="", wait_for_ready=False, topics=None, master_uri=None):
         if "sys.argv[1:]" not in SCRIPT:
             self.skipTest("standalone fragment run; full recipe exercised in isolated checkout")
         root = self.directory / "ros"
@@ -527,6 +541,7 @@ p.write_bytes(b'bag-stub')""")
                    "64", "1", "1", "none", "true", "1", "0", "1", json.dumps(manifest)]
         result = subprocess.run(command, text=True, capture_output=True, timeout=10,
                                 env=dict(os.environ, FACT_TEST_FILE=str(source),
+                                         ROS_MASTER_URI=master_uri or master_probe(self),
                                          XGC_USER_FILES_DIR=str(self.directory), XGC_RECORDER_RUN_ID="facts-test",
                                          RECORDER_READY_RESULT=str(self.directory / "ready.json"),
                                          XGC_RECORDER_SOCKET=str(self.directory / "rpc.sock")))

@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-from test_rosbag_record_facts import RECORDER_TRANSPORT_STUB, RUNTIME_SCRIPT, SIM_RECORDER
+from test_rosbag_record_facts import RECORDER_TRANSPORT_STUB, RUNTIME_SCRIPT, SIM_RECORDER, master_probe
 
 BAG_BYTES = b"owned-native-recording"
 
@@ -93,6 +93,7 @@ active.rename(str(active)[:-7])
                    "64", "1", "1", "none", "true", "1", "0", "1", json.dumps(manifest)]
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, start_new_session=True, env=dict(os.environ,
+                                        ROS_MASTER_URI=master_probe(self),
                                         XGC_USER_FILES_DIR=str(self.directory), XGC_RECORDER_RUN_ID="stop-test",
                                         XGC_RECORDER_SOCKET=str(self.directory / "rpc.sock"),
                                         STOP_MODE=mode,

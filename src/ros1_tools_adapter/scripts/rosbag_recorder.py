@@ -1281,24 +1281,46 @@ recorder_armed = threading.Event()
 stop_arming = threading.Event()
 arm_wake = threading.Event()
 
-# Read the exact native node during startup. The master supplies the current
-# publication roster and the final registration proof. Explicit topics must
-# all be registered, while inbound connections are needed only for producers
-# present now. Native record-all discovers topics as they appear.
+import xmlrpc.client
+from xml.parsers.expat import ExpatError
+
 ARM_WORKER_SECONDS = 35.0
-def arm_recorder():
-    import xmlrpc.client
-    from xml.parsers.expat import ExpatError
+ROS_READY_CALLER = "/xgc_rosbag_ready"
 
-    class Transport(xmlrpc.client.Transport):
-        def make_connection(self, host):
-            connection = super().make_connection(host)
-            connection.timeout = 0.25
-            return connection
 
-    caller = "/xgc_rosbag_ready"
-    master_uri = os.environ.get("ROS_MASTER_URI")
-    deadline = time.monotonic() + ARM_WORKER_SECONDS
+class StartupTransport(xmlrpc.client.Transport):
+    def make_connection(self, host):
+        connection = super().make_connection(host)
+        connection.timeout = 0.25
+        return connection
+
+
+def startup_proxy(address):
+    return xmlrpc.client.ServerProxy(address, transport=StartupTransport())
+
+
+def wait_for_master(master_uri, deadline):
+    # Noetic's first registerSubscriber is a one-shot call. Native recorder
+    # subscriptions created before the master can reply never reach the graph.
+    delay = 0.1
+    with startup_proxy(master_uri) as master:
+        while forwarded_signal is None and time.monotonic() < deadline:
+            try:
+                code, _message, uri = master.getUri(ROS_READY_CALLER)
+                if code == 1 and isinstance(uri, str) and uri:
+                    return forwarded_signal is None and time.monotonic() < deadline
+            except (OSError, xmlrpc.client.Error, ExpatError, TypeError, ValueError):
+                pass
+            time.sleep(min(delay, max(0, deadline - time.monotonic())))
+            delay = min(delay * 2, 1.0)
+    return False
+
+
+# The master supplies the current publication roster and final registration
+# proof. Explicit topics must all be registered. Inbound connections are
+# required for producers present now. Record-all discovers topics as they appear.
+def arm_recorder(master_uri, deadline):
+    caller = ROS_READY_CALLER
     selected = set(topics)
     explicit_topics = set() if manifest.get("recordAllTopics") else selected
     expected, uri = None, None
@@ -1306,26 +1328,23 @@ def arm_recorder():
     delay = 0.1
     local_registrations = set()
 
-    def proxy(address):
-        return xmlrpc.client.ServerProxy(address, transport=Transport())
-
     def lookup_child(master):
         code, _message, candidate = master.lookupNode(caller, recorder_node)
         if code != 1:
             return None
-        with proxy(candidate) as daemon:
+        with startup_proxy(candidate) as daemon:
             code, _message, pid = daemon.getPid(caller)
         return candidate if code == 1 and pid == child.pid else None
 
     def inbound(address):
-        with proxy(address) as daemon:
+        with startup_proxy(address) as daemon:
             code, _message, bus = daemon.getBusInfo(caller)
         if code == 1:
             return {row[4] for row in bus if len(row) > 5 and row[2] == "i" and row[5]}
         return None
 
     def subscriptions(address):
-        with proxy(address) as daemon:
+        with startup_proxy(address) as daemon:
             code, _message, registered = daemon.getSubscriptions(caller)
         return {topic for topic, _type in registered} if code == 1 else set()
 
@@ -1355,9 +1374,7 @@ def arm_recorder():
         }
 
     try:
-        if master_uri is None:
-            return
-        with proxy(master_uri) as master:
+        with startup_proxy(master_uri) as master:
             while active() and time.monotonic() < deadline:
                 try:
                     if uri is None:
@@ -1429,8 +1446,14 @@ def start_recorder_service():
 rpc_runtime, rpc_host = start_recorder_service()
 arm_thread = None
 try:
+    master_uri = os.environ["ROS_MASTER_URI"]
+    arming_deadline = time.monotonic() + ARM_WORKER_SECONDS
+    if not wait_for_master(master_uri, arming_deadline):
+        if forwarded_signal is None:
+            sys.stderr.write("ROS master did not answer before native recorder startup: " + master_uri + "\n")
+        raise SystemExit(1)
     child = subprocess.Popen(arguments)
-    arm_thread = threading.Thread(target=arm_recorder, daemon=True)
+    arm_thread = threading.Thread(target=arm_recorder, args=(master_uri, arming_deadline), daemon=True)
     arm_thread.start()
     if forwarded_signal is not None and not signal_delivered and child.poll() is None:
         child.send_signal(forwarded_signal)
