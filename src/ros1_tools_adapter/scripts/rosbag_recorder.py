@@ -832,6 +832,15 @@ class RecordFacts:
             self.persisted = self.revision
             return True
 
+    def record_timebase(self, timebase):
+        with self.lock:
+            self.state["timebase"] = timebase
+            self.revision += 1
+
+    def timebase(self):
+        with self.lock:
+            return self.state.get("timebase")
+
     def finish(self, document):
         # Stop accepting callbacks first; a blocked ROS master or file does not
         # delay native recorder shutdown. Such coverage is explicitly unknown.
@@ -1022,6 +1031,24 @@ def inventory_partial_files(document):
         if stat.S_ISREG(info.st_mode):
             document["bagFiles"].append({"name": name, "state": "partial", "sizeBytes": info.st_size})
 
+def clock_sample_in_index(stream):
+    # Bag v2 stores connection IDs and counts in chunk summaries. No message
+    # payload or per-message index is needed for this finite observation.
+    try:
+        import rosbag
+    except ImportError:
+        return None
+    try:
+        stream.seek(0)
+        with os.fdopen(os.dup(stream.fileno()), "rb") as view, rosbag.Bag(view, "r", skip_index=True) as bag:
+            if bag.version != 200:
+                return None
+            clocks = {c.id for c in bag._get_connections("/clock") if c.datatype == "rosgraph_msgs/Clock"}
+            return any(chunk.connection_counts.get(clock, 0) > 0 for chunk in bag._chunks for clock in clocks)
+    except (OSError, ValueError, rosbag.ROSBagException):
+        return None
+
+
 def publish_parts(document):
     # A central recorder can cover several frozen slots. Empty slotId retains
     # that shared scope; it must never be guessed from the first selected robot.
@@ -1035,6 +1062,9 @@ def publish_parts(document):
     def identity(info):
         return {"device": info.st_dev, "inode": info.st_ino, "sizeBytes": info.st_size,
                 "mtimeNs": info.st_mtime_ns, "ctimeNs": info.st_ctime_ns}
+    timebase = (document.get("recordFacts") or {}).get("timebase")
+    inspect_clock = timebase is not None and timebase["clockCaptureSelected"]
+    clock_samples = []
     for entry in document.get("bagFiles") or []:
         if entry.get("state") != "finalized":
             continue
@@ -1052,6 +1082,7 @@ def publish_parts(document):
             if receipt != observed or not re.fullmatch(r"[0-9a-f]{64}", cached.get("sha256", "")):
                 raise RuntimeError("issued bag content changed after publication")
             pinned = cached["sha256"]
+            clock_sample = cached.get("clockSampleObserved")
         else:
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, "rb") as stream:
@@ -1060,13 +1091,25 @@ def publish_parts(document):
                 digest = hashlib.sha256()
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(chunk)
+                clock_sample = clock_sample_in_index(stream) if inspect_clock else None
                 if identity(os.fstat(stream.fileno())) != observed:
                     raise RuntimeError("issued bag changed during hashing")
             pinned = digest.hexdigest()
-            document.setdefault("partContentReceipts", {})[name] = {"sha256": pinned, "contentIdentity": observed}
+            cached = {"sha256": pinned, "contentIdentity": observed}
+            if inspect_clock:
+                cached["clockSampleObserved"] = clock_sample
+            document.setdefault("partContentReceipts", {})[name] = cached
+        if inspect_clock:
+            clock_samples.append(clock_sample)
         parts.append({"slotId": slot_id, "targetId": document["targetId"], "sourcePath": path,
                       "sha256": pinned, "size": info.st_size})
     document["parts"] = parts
+    if True in clock_samples:
+        timebase["clockSampleObserved"] = True
+    elif clock_samples and None not in clock_samples and len(clock_samples) == len(document["bagFiles"]):
+        timebase["clockSampleObserved"] = False
+    if clock_samples and timebase["clockSampleObserved"] is not None:
+        timebase["clockSampleEvidence"] = "finalized-bag-index"
 
 def finalize_archive_files(document):
     def issued_bag_name(index, count):
@@ -1279,7 +1322,7 @@ def arm_recorder():
             code, _message, bus = daemon.getBusInfo(caller)
         if code == 1:
             return {row[4] for row in bus if len(row) > 5 and row[2] == "i" and row[5]}
-        return set()
+        return None
 
     def subscriptions(address):
         with proxy(address) as daemon:
@@ -1288,6 +1331,28 @@ def arm_recorder():
 
     def active():
         return not stop_arming.is_set() and forwarded_signal is None and child.poll() is None
+
+    def observe_timebase(master, publishers, registered, connected):
+        observed = facts.clock()
+        use_sim_time = None
+        try:
+            code, _message, value = master.getParam(caller, "/use_sim_time")
+            if code == 1 and type(value) is bool:
+                use_sim_time = value
+        except (OSError, xmlrpc.client.Error, ExpatError, TypeError, ValueError):
+            pass
+        excluded = {item["topic"] for item in manifest.get("excludedTopics", [])}
+        return {
+            "targetId": manifest["targetId"], "slotId": manifest.get("slotId", ""), "sessionId": manifest["sessionId"],
+            "recordingRunId": manifest["runId"], "rosMasterUri": master_uri, "observedAt": observed,
+            "useSimTime": use_sim_time,
+            "clockPublisherObserved": any(topic == "/clock" and bool(nodes) for topic, nodes in publishers),
+            "clockRecorderSubscribed": "/clock" in registered,
+            "clockRecorderConnected": None if connected is None else "/clock" in connected,
+            "clockCaptureSelected": "/clock" in explicit_topics or
+                (manifest.get("recordAllTopics", False) and "/clock" not in excluded),
+            "clockSampleObserved": None,
+        }
 
     try:
         if master_uri is None:
@@ -1309,17 +1374,19 @@ def arm_recorder():
                             if code == 1:
                                 expected = selected.intersection(topic for topic, _type in published)
                         if expected is not None:
-                            connected = inbound(uri) if expected else set()
-                            if expected.issubset(connected) and active():
+                            connected = inbound(uri) if expected else None
+                            if expected.issubset(connected or ()) and active():
                                 code, _message, state = master.getSystemState(caller)
                                 if code == 1:
                                     publishers, subscribers, _services = state
                                     expected = selected.intersection(topic for topic, nodes in publishers if nodes)
                                     registered = {topic for topic, nodes in subscribers if recorder_node in nodes}
                                     if (explicit_topics.union(expected).issubset(registered)
-                                            and expected.issubset(connected)):
+                                            and expected.issubset(connected or ())):
                                         if active():
-                                            recorder_armed.set()
+                                            facts.record_timebase(observe_timebase(master, publishers, registered, connected))
+                                            if active():
+                                                recorder_armed.set()
                                         break
                 except (OSError, xmlrpc.client.Error, ExpatError, ValueError):
                     # The third-party endpoints can be briefly unavailable.
@@ -1346,13 +1413,15 @@ def start_recorder_service():
         if wait_ms:
             recorder_ready.wait(min(wait_ms / 1000.0, call.remaining()))
         call.check_cancelled()
+        timebase = facts.timebase()
         return {"service": service_ref.service, "api_version": service_ref.api_version,
                 "instance_id": service_ref.instance_id,
                 "ready": child is not None and child.poll() is None and forwarded_signal is None and recorder_armed.is_set(),
                 "facts": {"path": output_prefix + ".bag", "recordingId": recording_id, "manifestPath": manifest_path, "parts": manifest.get("parts", []),
                           "figuresDirectory": os.path.join(os.path.dirname(output_directory), "Results", "Figures"),
                           "startedAt": manifest["recordingStartedAt"],
-                          "timeSource": manifest["recordingStartedAtEvidence"]}}
+                          "timeSource": manifest["recordingStartedAtEvidence"],
+                          **({"timebase": timebase} if timebase is not None else {})}}
     rpc_host = Host(service_ref.endpoint.address, {("GET", "/v1/describe"): describe},
                     runtime=rpc_runtime, instance_id=service_ref.instance_id,
                     discovery_routes=("/v1/describe",)).start()

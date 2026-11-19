@@ -339,14 +339,13 @@ class RecordFactsTests(unittest.TestCase):
                 found.add(int(entry.name))
         return found
 
-    def _armed_ros_master(self, sparse):
+    def _armed_ros_master(self, sparse, topics, sim_time):
         # The fake recorder has actual child identity. The second connection
         # (or, without a publisher, its subscription) is delayed.
-        topics = ["/xgc/record_facts", "/tf"]
         published = topics[:1] if sparse else topics
         server = SimpleXMLRPCServer(("127.0.0.1", 0), logRequests=False)
         uri = "http://127.0.0.1:%s" % server.server_address[1]
-        counts = self.arming_calls = {"graphs": 0, "bus": 0, "pid": 0, "subscriptions": 0}
+        counts = self.arming_calls = {"graphs": 0, "bus": 0, "pid": 0, "subscriptions": 0, "timebase": 0}
 
         def child_identity():
             # Select the real fake recorder and its configured ROS name.
@@ -390,6 +389,12 @@ class RecordFactsTests(unittest.TestCase):
             known = topics[:1] if sparse and counts["subscriptions"] < 3 else topics
             return [1, "subscriptions", [[topic, "*"] for topic in known]]
 
+        def get_param(caller, name):
+            if caller != "/xgc_rosbag_ready" or name != "/use_sim_time":
+                return [-1, "missing", 0]
+            counts["timebase"] += 1
+            return [-1, "missing", 0] if sim_time is None else [1, "found", sim_time]
+
         server.register_function(lambda _caller, _scope: [1, "topics", [[t, "std_msgs/String"] for t in published]],
                                  "getPublishedTopics")
         server.register_function(get_system_state, "getSystemState")
@@ -397,13 +402,14 @@ class RecordFactsTests(unittest.TestCase):
         server.register_function(get_pid, "getPid")
         server.register_function(get_bus_info, "getBusInfo")
         server.register_function(get_subscriptions, "getSubscriptions")
+        server.register_function(get_param, "getParam")
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return uri
 
-    def assert_recorder_armed(self, sparse):
+    def assert_recorder_armed(self, sparse, *, clock_selected=False, sim_time=None):
         setup = '''
 import json, threading, types
 from pathlib import Path
@@ -415,7 +421,10 @@ def readiness_host(_address, routes, **kwargs):
         reply = routes[("GET", "/v1/describe")](call, None)
         reply["firstBagObservedAt"] = manifest["firstBagObservedAt"]
         reply["archiveExists"] = Path(manifest_path).is_file()
-        Path(os.environ["RECORDER_READY_RESULT"]).write_text(json.dumps(reply))
+        result = Path(os.environ["RECORDER_READY_RESULT"])
+        staging = result.with_suffix(".tmp")
+        staging.write_text(json.dumps(reply))
+        staging.replace(result)
     def start():
         threading.Thread(target=probe, daemon=True).start()
         return host
@@ -423,15 +432,26 @@ def readiness_host(_address, routes, **kwargs):
     return host
 xrpc.Host = readiness_host
 '''
-        master_uri = self._armed_ros_master(sparse)
+        topics = ["/xgc/record_facts", "/clock" if clock_selected else "/tf"]
+        master_uri = self._armed_ros_master(sparse, topics, sim_time)
         with patch.dict(os.environ, {"ROS_MASTER_URI": master_uri}):
-            self.run_native_recipe(setup, wait_for_ready=True)
+            document = self.run_native_recipe(setup, wait_for_ready=True, topics=topics)
         reply = json.loads((self.directory / "ready.json").read_text())
         self.assertTrue(reply["ready"])
         self.assertTrue(reply["archiveExists"])
         self.assertIsNone(reply["firstBagObservedAt"])
         self.assertEqual(self.arming_calls, {"graphs": 1, "bus": 1 if sparse else 3, "pid": 1,
-                                             "subscriptions": 3 if sparse else 1})
+                                             "subscriptions": 3 if sparse else 1, "timebase": 1})
+        timebase = reply["facts"]["timebase"]
+        self.assertIs(timebase["useSimTime"], sim_time)
+        self.assertEqual(timebase["rosMasterUri"], master_uri)
+        self.assertEqual(timebase["clockPublisherObserved"], clock_selected and not sparse)
+        self.assertEqual(timebase["clockRecorderSubscribed"], clock_selected)
+        self.assertEqual(timebase["clockRecorderConnected"], clock_selected and not sparse)
+        self.assertIsNone(timebase["clockSampleObserved"])
+        # This fixture writes opaque bytes. Even with a publisher and an
+        # inbound connection, the closed sample stays unknown.
+        self.assertEqual(document["recordFacts"]["timebase"], timebase)
 
     def test_recorder_ready_releases_held_describe_before_any_bag_exists(self):
         # The recorder child creates its first bag only after describe returns.
@@ -439,6 +459,12 @@ xrpc.Host = readiness_host
 
     def test_unpublished_explicit_topic_still_needs_owned_registration(self):
         self.assert_recorder_armed(sparse=True)
+
+    def test_clock_ready_records_publisher_and_sim_param_once(self):
+        self.assert_recorder_armed(sparse=False, clock_selected=True, sim_time=True)
+
+    def test_clock_wall_param_and_absent_publisher_are_distinct(self):
+        self.assert_recorder_armed(sparse=True, clock_selected=True, sim_time=False)
 
     def test_blocked_ros_registration_and_shutdown_do_not_hold_the_recorder(self):
         # The callback crosses the real observer process pipe. Both registration
@@ -466,7 +492,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         self.assertEqual(len(producers), 1)
         self.assertEqual(json.loads(self.body(producers[0], self.directory / "Experiments" / "Data")), applied())
 
-    def run_native_recipe(self, setup="", wait_for_ready=False):
+    def run_native_recipe(self, setup="", wait_for_ready=False, topics=None):
         if "sys.argv[1:]" not in SCRIPT:
             self.skipTest("standalone fragment run; full recipe exercised in isolated checkout")
         root = self.directory / "ros"
@@ -489,10 +515,11 @@ if not json.loads(ready.read_text())['ready']:
 p.write_bytes(b'bag-stub')""")
             native.write_text(body)
         native.chmod(0o700)
-        topics = ["/xgc/record_facts", "/tf"]
+        topics = topics or ["/xgc/record_facts", "/tf"]
         manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "recordingId": "a" * 32,
                     "recordingProfile": "general", "topics": topics, "estimatedBytes": 0,
                     "experimentName": "experiment", "runMode": "simulation", "targetId": "local",
+                    "sessionId": "facts-session", "runId": "facts-test",
                     "factSources": {"calibrationFiles": [{"role": "calibration", "path": str(source)}]}}
         directory = self.directory / "Experiments" / "Data"
         prefix = directory / "record"
