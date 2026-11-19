@@ -94,6 +94,7 @@ usage:
     test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_node
 
     test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_recorder
+    test -x /opt/ros/noetic/lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_sim_record
 
     test -x /opt/ros/noetic/lib/xgc_scene_ros1_adapter/xgc2_scene_adapter
 

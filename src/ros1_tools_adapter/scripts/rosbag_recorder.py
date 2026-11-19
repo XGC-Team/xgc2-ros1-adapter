@@ -1170,7 +1170,10 @@ write_manifest(manifest)
 # before its recorder child has finalized and renamed the bag.
 from uuid import uuid4
 
-executable = os.path.join(root, "lib", "rosbag", "record")
+if manifest.get("runMode") == "simulation":
+    executable = os.path.join(root, "lib", "xgc_ros1_tools_adapter", "xgc_ros1_tools_adapter_rosbag_sim_record")
+else:
+    executable = os.path.join(root, "lib", "rosbag", "record")
 recorder_name = "record_" + uuid4().hex
 recorder_node = "/" + "/".join(filter(None, os.environ.get("ROS_NAMESPACE", "").split("/") + [recorder_name]))
 arguments = [executable, "__name:=" + recorder_name, "--split", "--size=" + str(split_size)]

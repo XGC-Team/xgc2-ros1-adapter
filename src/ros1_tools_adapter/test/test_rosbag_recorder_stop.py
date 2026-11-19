@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-from test_rosbag_record_facts import RECORDER_TRANSPORT_STUB, RUNTIME_SCRIPT
+from test_rosbag_record_facts import RECORDER_TRANSPORT_STUB, RUNTIME_SCRIPT, SIM_RECORDER
 
 BAG_BYTES = b"owned-native-recording"
 
@@ -46,7 +46,7 @@ class NativeRecorderStopTests(unittest.TestCase):
                 pass
             self.process.communicate(timeout=3)
 
-    def start_recorder(self, mode="cooperative"):
+    def start_recorder(self, mode="cooperative", run_mode="simulation"):
         """Start the recorder against a real stub rosbag child.
 
         Modes: cooperative renames its closed volume and exits 0; empty-topic
@@ -55,7 +55,7 @@ class NativeRecorderStopTests(unittest.TestCase):
         finalizing, so only the owner can escalate.
         """
         root = self.directory / "ros"
-        native = root / "lib/rosbag/record"
+        native = root / (SIM_RECORDER if run_mode == "simulation" else "lib/rosbag/record")
         native.parent.mkdir(parents=True)
         native.write_text('''#!/usr/bin/env python3
 import os, signal, sys, time
@@ -86,7 +86,7 @@ active.rename(str(active)[:-7])
         topics = ["/tf"]
         manifest = {"schemaVersion": 1, "recordNamingVersion": 1, "recordingId": "c" * 32,
                     "recordingProfile": "general", "topics": topics, "estimatedBytes": 0,
-                    "experimentName": "Stop regression", "runMode": "simulation", "targetId": "local"}
+                    "experimentName": "Stop regression", "runMode": run_mode, "targetId": "local"}
         self.archive = self.directory / "Experiments" / "Data"
         command = [sys.executable, "-c", RECORDER_TRANSPORT_STUB + RUNTIME_SCRIPT,
                    str(root), str(self.archive / "record"), json.dumps(topics),
@@ -125,7 +125,7 @@ active.rename(str(active)[:-7])
         return manifest
 
     def test_sigterm_publishes_the_issued_bag(self):
-        self.start_recorder("cooperative")
+        self.start_recorder("cooperative", run_mode="hybrid")
         manifest = self.cancel_and_read(signal.SIGTERM)
         self.assertEqual(manifest["recorderExitCode"], 0)
         self.assertEqual(manifest["status"], "stopped")

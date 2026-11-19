@@ -29,6 +29,7 @@ def recipe_script():
 
 SCRIPT = recipe_script()
 RUNTIME_SCRIPT = SCRIPT[:SCRIPT.index('try:\n    if sys.argv[1:] == ["--prepare"]:')] + SCRIPT[SCRIPT.index('\ndef require_archive_path'):]
+SIM_RECORDER = "lib/xgc_ros1_tools_adapter/xgc_ros1_tools_adapter_rosbag_sim_record"
 
 # These recipe tests exercise recording facts and archive finalization, not the
 # SDK transport. Keep that boundary explicit, like the ROS and rosbag stubs.
@@ -340,7 +341,7 @@ class RecordFactsTests(unittest.TestCase):
                         argv = Path("/proc/%d/cmdline" % pid).read_bytes().split(b"\0")
                     except (FileNotFoundError, PermissionError):
                         continue
-                    if any(arg.endswith(b"/lib/rosbag/record") for arg in argv):
+                    if any(arg.endswith(("/" + SIM_RECORDER).encode()) for arg in argv):
                         name = next((arg.split(b":=", 1)[1] for arg in argv if arg.startswith(b"__name:=")), b"")
                         return pid, "/" + name.decode() if name else "/record_%d" % pid
             return None, None
@@ -454,7 +455,7 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         if "sys.argv[1:]" not in SCRIPT:
             self.skipTest("standalone fragment run; full recipe exercised in isolated checkout")
         root = self.directory / "ros"
-        native = root / "lib/rosbag/record"
+        native = root / SIM_RECORDER
         native.parent.mkdir(parents=True)
         source = self.directory / "calibration.yaml"
         source.write_text("K: 1\n")

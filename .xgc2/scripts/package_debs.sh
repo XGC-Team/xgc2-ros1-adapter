@@ -287,13 +287,14 @@ package_tools() {
     "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_node" \
     "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_service_helper" \
     "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_probe" \
-    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_clock_wait")"
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_clock_wait" \
+    "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_rosbag_sim_record")"
   write_control "${tools_root}" "${TOOLS_PACKAGE}" \
     "${tools_depends}, python3, python3-xgc2-xrpc (>= 0.2.1), ros-${ROS_DISTRO}-rosbag, ros-${ROS_DISTRO}-rospy, ros-${ROS_DISTRO}-ros-babel-fish, ros-${ROS_DISTRO}-roscpp, ros-${ROS_DISTRO}-roslib, ros-${ROS_DISTRO}-rosgraph-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-std-srvs" \
     "Typed ROS1 Tools XRPC service and native ROS helpers" \
     "Run-owned ROS1 Tools process: typed topic publishing and service calls over XRPC http.v1."
   build_deb "${tools_root}" "${TOOLS_PACKAGE}"
-  for name in node service_helper probe clock_wait rosbag_recorder; do
+  for name in node service_helper probe clock_wait rosbag_recorder rosbag_sim_record; do
     chmod 0755 "${tools_root}${library_root}/${TOOLS_ROS_PACKAGE}_${name}"
   done
   fakeroot dpkg-deb --build "${tools_root}" \

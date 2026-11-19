@@ -10,6 +10,7 @@
   <buildtool_depend>catkin</buildtool_depend>
 
   <depend>ros_babel_fish</depend>
+  <depend>rosbag</depend>
   <depend>roscpp</depend>
   <depend>roslib</depend>
   <depend>rosgraph_msgs</depend>
@@ -18,7 +19,6 @@
   <build_depend>libxgc2-xrpc-dev</build_depend>
   <exec_depend>python3</exec_depend>
   <exec_depend version_gte="0.2.1">python3-xgc2-xrpc</exec_depend>
-  <exec_depend>rosbag</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>libjsoncpp1</exec_depend>
   <exec_depend>libxgc2-xrpc2</exec_depend>

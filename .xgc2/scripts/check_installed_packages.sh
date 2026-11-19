@@ -191,7 +191,7 @@ test ! -e /usr/share/xgc2/adapter-definitions
 
 echo "Installed robot package checks passed"
 
-for name in node service_helper probe clock_wait rosbag_recorder; do
+for name in node service_helper probe clock_wait rosbag_recorder rosbag_sim_record; do
   path="${PREFIX}/lib/${TOOLS_ROS_PACKAGE}/${TOOLS_ROS_PACKAGE}_${name}"
   test -x "${path}"
   dpkg-query -S "${path}" | grep -Fq "${TOOLS_PACKAGE}:"

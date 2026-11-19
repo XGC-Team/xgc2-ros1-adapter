@@ -3,11 +3,13 @@ project(xgc_ros1_tools_adapter VERSION 0.6.0 LANGUAGES CXX)
 
 find_package(catkin REQUIRED COMPONENTS
   ros_babel_fish
+  rosbag
   roscpp
   roslib
   rosgraph_msgs
   xgc_ros1_adapter_common
 )
+find_package(Boost REQUIRED COMPONENTS regex)
 find_package(PkgConfig REQUIRED)
 find_package(PythonInterp 3 REQUIRED)
 find_package(Threads REQUIRED)
@@ -76,11 +78,18 @@ target_compile_options(${PROJECT_NAME}_probe PRIVATE -Wall -Wextra -Wpedantic -W
 target_include_directories(${PROJECT_NAME}_probe PRIVATE ${catkin_INCLUDE_DIRS} ${JSONCPP_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME}_probe ${catkin_LIBRARIES} ${JSONCPP_LIBRARIES})
 
+add_executable(${PROJECT_NAME}_rosbag_sim_record src/rosbag_sim_record.cpp)
+target_compile_features(${PROJECT_NAME}_rosbag_sim_record PRIVATE cxx_std_17)
+target_compile_options(${PROJECT_NAME}_rosbag_sim_record PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(${PROJECT_NAME}_rosbag_sim_record PRIVATE ${catkin_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME}_rosbag_sim_record ${catkin_LIBRARIES} Boost::regex)
+
 install(TARGETS
   ${PROJECT_NAME}_node
   ${PROJECT_NAME}_service_helper
   ${PROJECT_NAME}_clock_wait
   ${PROJECT_NAME}_probe
+  ${PROJECT_NAME}_rosbag_sim_record
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/rosbag_recorder.py"
