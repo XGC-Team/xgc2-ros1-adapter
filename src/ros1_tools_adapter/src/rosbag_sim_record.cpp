@@ -1,4 +1,8 @@
+#include "xsim_receipt_clock.hpp"
+
+#include <atomic>
 #include <csignal>
+#include <dlfcn.h>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +15,10 @@
 #include <rosgraph_msgs/Clock.h>
 
 namespace {
+
+xgc::recording::XSimReceiptClock receipt_clock;
+std::atomic<bool> clock_retired{false};
+volatile sig_atomic_t external_stop = 0;
 
 // One existing subscription applies the authoritative simulation clock when
 // roscpp receives it. The separate internal spinner can otherwise fall
@@ -32,11 +40,13 @@ uint64_t units(std::string_view text, uint64_t scale) {
   return value * scale;
 }
 
-rosbag::RecorderOptions record_options(int argc, char** argv) {
+rosbag::RecorderOptions record_options(int argc, char** argv, std::string &world_clock) {
   rosbag::RecorderOptions options;
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
-    if (arg == "--split") {
+    if (arg == "--world-receipt-clock" && i + 1 < argc && world_clock.empty()) {
+      world_clock = argv[++i];
+    } else if (arg == "--split") {
       options.split = true;
     } else if (arg.substr(0, 7) == "--size=") {
       options.max_size = units(arg.substr(7), 1024 * 1024);
@@ -66,21 +76,48 @@ rosbag::RecorderOptions record_options(int argc, char** argv) {
   return options;
 }
 
-void on_terminate(int) { ros::requestShutdown(); }
+void on_terminate(int) {
+  external_stop = 1;
+  ros::requestShutdown();
+}
 
 }  // namespace
 
+// The isolated pure-simulation recorder owns this ROS time provider. The
+// Noetic recorder still stamps where its original code calls Time::now().
+// No message fields, TCP delivery or callback ordering enter this clock.
+ros::Time ros::Time::now() {
+  if (const auto state = receipt_clock.stamp()) {
+    if ((state & xgc::recording::XSimReceiptClock::retired) && !clock_retired.exchange(true))
+      ros::requestShutdown();
+    ros::Time current;
+    current.fromNSec(state & ~xgc::recording::XSimReceiptClock::retired);
+    return current;
+  }
+  static auto stock_now = reinterpret_cast<ros::Time (*)()>(dlsym(RTLD_NEXT, "_ZN3ros4Time3nowEv"));
+  if (!stock_now) throw std::runtime_error("native Noetic time provider is unavailable");
+  return stock_now();
+}
+
 int main(int argc, char** argv) {
   try {
-    ros::init(argc, argv, "record", ros::init_options::NoSimTime);
-    const auto options = record_options(argc, argv);
+    ros::init(argc, argv, "record", ros::init_options::NoSimTime | ros::init_options::NoSigintHandler);
+    std::string world_clock;
+    const auto options = record_options(argc, argv, world_clock);
+    std::signal(SIGINT, on_terminate);
     std::signal(SIGTERM, on_terminate);
     ClockReceipt clock_receipt;
     ros::NodeHandle node;
     ros::Subscriber clock;
     bool simulated = false;
     node.param("/use_sim_time", simulated, false);
-    if (simulated) {
+    if (!world_clock.empty()) {
+      if (!simulated) throw std::runtime_error("receipt clock requires simulation time");
+      receipt_clock.open(world_clock);
+      ros::Time initial;
+      initial.fromNSec(receipt_clock.stamp() & ~xgc::recording::XSimReceiptClock::retired);
+      ros::Time::setNow(initial);  // Let the native ROS validity wait finish.
+    } else if (simulated) {
       ros::Time::setNow(ros::Time());
       ros::SubscribeOptions options;
       options.init<rosgraph_msgs::Clock>("/clock", 1,
@@ -89,7 +126,12 @@ int main(int argc, char** argv) {
       clock = node.subscribe(options);
     }
     rosbag::Recorder recorder(options);
-    return recorder.run();
+    const auto result = recorder.run();
+    if (clock_retired && !external_stop) {
+      std::cerr << "simulation world retired while recorder was running" << '\n';
+      return 1;
+    }
+    return result;
   } catch (const std::exception& failure) {
     std::cerr << "rosbag simulation recorder: " << failure.what() << '\n';
     return 1;

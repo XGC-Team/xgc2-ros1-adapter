@@ -337,6 +337,20 @@ def prepare(document, preview=False):
     return p, resolved, manifest
 
 
+def local_world_receipt_clock(context):
+    # Use the immutable endpoint projection only for the local central XSim
+    # world. No user parameter or ROS graph lookup selects the authority.
+    if (context.get("runMode") != "simulation" or context.get("targetId") != "local"
+            or context.get("slotId") or context.get("recordingEndpoint")
+            or context.get("experimentType") == "onboard"
+            or (context.get("scene") or {}).get("simulator") != "xsim"):
+        return None
+    endpoint = (context.get("endpoints") or {}).get("world")
+    if isinstance(endpoint, str) and endpoint.startswith("/") and os.path.lexists(endpoint + ".clock-v1"):
+        return endpoint
+    return None
+
+
 def record_arguments(document):
     p, resolved, manifest = prepare(document)
     import subprocess
@@ -349,6 +363,11 @@ def record_arguments(document):
         }), timeout=10))
     os.environ["XGC_USER_FILES_DIR"] = archive["userFilesDir"]
     os.environ["ROS_MASTER_URI"] = p["rosMasterUri"]
+    os.environ.pop("XGC_RECORDER_WORLD_CLOCK", None)
+    world = local_world_receipt_clock(context)
+    if world:
+        os.environ["XGC_RECORDER_WORLD_CLOCK"] = world
+        manifest["timestampContract"]["bagReceiveTime"] = "current frame of the same local XSim world"
     for name, field in (("ROS_IP", "rosIp"), ("ROS_HOSTNAME", "rosHostname")):
         if p[field]: os.environ[name] = p[field]
         else: os.environ.pop(name, None)
@@ -1178,6 +1197,8 @@ recorder_name = "record_" + uuid4().hex
 recorder_node = "/" + "/".join(filter(None, os.environ.get("ROS_NAMESPACE", "").split("/") + [recorder_name]))
 arguments = [executable, "__name:=" + recorder_name, "--split", "--size=" + str(split_size)]
 arguments.append("--min-space=" + str(min_space_gib) + "G")
+if os.environ.get("XGC_RECORDER_WORLD_CLOCK"):
+    arguments.extend(["--world-receipt-clock", os.environ["XGC_RECORDER_WORLD_CLOCK"]])
 if compression != "none":
     arguments.append("--" + compression)
 if repeat_latched == "true":

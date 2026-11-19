@@ -52,7 +52,8 @@ module = ast.parse(SCRIPT)
 namespace = {}
 # Compile production imports/class without launching the recorder at import.
 selected = [node for node in module.body if isinstance(node, (ast.Import, ast.ImportFrom)) or
-            isinstance(node, ast.ClassDef) and node.name == "RecordFacts"]
+            isinstance(node, ast.ClassDef) and node.name == "RecordFacts" or
+            isinstance(node, ast.FunctionDef) and node.name == "local_world_receipt_clock"]
 exec(compile(ast.Module(body=selected, type_ignores=[]), "record-recipe", "exec"), namespace)
 RecordFacts = namespace["RecordFacts"]
 
@@ -89,6 +90,20 @@ class RecordFactsTests(unittest.TestCase):
 
     def body(self, event, directory=None):
         return (Path(directory or self.facts.directory) / event["content"]["relativePath"]).read_bytes()
+
+    def test_only_central_local_simulation_uses_the_frozen_world_clock(self):
+        clock = namespace["local_world_receipt_clock"]
+        endpoint = str(self.directory / "world.sock")
+        context = {"runMode": "simulation", "targetId": "local", "scene": {"simulator": "xsim"},
+                   "experimentType": "simulation-only", "endpoints": {"world": endpoint}}
+        self.assertIsNone(clock(context))  # Existing installed worlds still work.
+        Path(endpoint + ".clock-v1").touch()
+        self.assertEqual(clock(context), endpoint)
+        for replacement in ({"runMode": "physical"}, {"runMode": "hybrid"}, {"targetId": "edge"},
+                            {"slotId": "uav1"}, {"recordingEndpoint": {"targetId": "local"}},
+                            {"experimentType": "onboard"}, {"scene": {"simulator": "gazebo"}}):
+            with self.subTest(replacement=replacement):
+                self.assertIsNone(clock(dict(context, **replacement)))
 
     def test_file_revisions_are_portable_and_do_not_claim_applied(self):
         source = self.directory / "intrinsics.yaml"
