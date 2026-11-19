@@ -380,6 +380,7 @@ def record_arguments(document):
     return [sys.argv[0], p["rosInstallPath"], output[:-4], json.dumps(resolved["topics"]), str(p["splitSizeMiB"]), str(p["maxSplits"]), str(p["minFreeSpaceGiB"]), p["compression"], str(p["repeatLatched"]).lower(), str(p["expectedDurationMinutes"]), str(p["estimatedVideoBitrateMbps"]), str(p["capacitySafetyFactor"]), json_bytes(manifest).decode("utf-8")]
 
 
+external_master_admission = True
 try:
     if sys.argv[1:] == ["--prepare"]:
         _, resolved, manifest = prepare(read_preview_request(), preview=True)
@@ -387,7 +388,12 @@ try:
         raise SystemExit(0)
     if sys.argv[1:] != ["--record"]:
         raise ValueError("usage: xgc_ros1_tools_adapter_rosbag_recorder --prepare|--record")
-    sys.argv = record_arguments(read_record_request())
+    document = read_record_request()
+    context = document["context"]
+    # Managed Session and member graphs have already awaited their owner.
+    external_master_admission = (context.get("recordingEndpoint") is None
+                                 and context["simulation"].get("rosMasterManaged") is not True)
+    sys.argv = record_arguments(document)
 except (ValueError, TypeError, KeyError) as error:
     sys.stderr.write("%s: %s\n" % (type(error).__name__, error))
     raise SystemExit(2)
@@ -1211,6 +1217,41 @@ if naming_version == 1:
 if free_bytes <= reserve_bytes or needed_bytes > free_bytes - reserve_bytes:
     raise SystemExit("ROS bag capacity preflight failed: insufficient free space after the configured reserve")
 
+import xmlrpc.client
+from xml.parsers.expat import ExpatError
+
+ARM_WORKER_SECONDS = 35.0
+ROS_READY_CALLER = "/xgc_rosbag_ready"
+
+
+def admit_external_master(uri):
+    # roscpp does not recover a rejected initial registerSubscriber. An
+    # external master has no Session owner event, so admit this request once.
+    from contextlib import closing
+    from http.client import HTTPConnection, HTTPException, HTTPSConnection
+    from urllib.parse import urlsplit
+
+    target = urlsplit(uri)
+    connect = HTTPSConnection if target.scheme == "https" else HTTPConnection
+    try:
+        with closing(connect(target.hostname, target.port, timeout=0.25)) as connection:
+            request = xmlrpc.client.dumps((ROS_READY_CALLER,), methodname="getUri")
+            connection.request("POST", target.path or "/RPC2", request, {"Content-Type": "text/xml"})
+            response = connection.getresponse()
+            if response.status == 200:
+                ((code, _message, master_uri),), _method = xmlrpc.client.loads(response.read())
+                if code == 1 and isinstance(master_uri, str) and master_uri:
+                    return
+    except (OSError, HTTPException, xmlrpc.client.Error, ExpatError, TypeError, ValueError):
+        pass
+    raise SystemExit("ROS master admission failed before native recorder startup: " + uri)
+
+
+master_uri = os.environ["ROS_MASTER_URI"]
+arming_deadline = time.monotonic() + ARM_WORKER_SECONDS
+if external_master_admission:
+    admit_external_master(master_uri)
+
 facts = RecordFacts(manifest, output_directory)
 facts.start(manifest.get("cameraTopicRoots") or [])
 facts.snapshot(manifest)
@@ -1281,13 +1322,6 @@ recorder_armed = threading.Event()
 stop_arming = threading.Event()
 arm_wake = threading.Event()
 
-import xmlrpc.client
-from xml.parsers.expat import ExpatError
-
-ARM_WORKER_SECONDS = 35.0
-ROS_READY_CALLER = "/xgc_rosbag_ready"
-
-
 class StartupTransport(xmlrpc.client.Transport):
     def make_connection(self, host):
         connection = super().make_connection(host)
@@ -1297,23 +1331,6 @@ class StartupTransport(xmlrpc.client.Transport):
 
 def startup_proxy(address):
     return xmlrpc.client.ServerProxy(address, transport=StartupTransport())
-
-
-def wait_for_master(master_uri, deadline):
-    # Noetic's first registerSubscriber is a one-shot call. Native recorder
-    # subscriptions created before the master can reply never reach the graph.
-    delay = 0.1
-    with startup_proxy(master_uri) as master:
-        while forwarded_signal is None and time.monotonic() < deadline:
-            try:
-                code, _message, uri = master.getUri(ROS_READY_CALLER)
-                if code == 1 and isinstance(uri, str) and uri:
-                    return forwarded_signal is None and time.monotonic() < deadline
-            except (OSError, xmlrpc.client.Error, ExpatError, TypeError, ValueError):
-                pass
-            time.sleep(min(delay, max(0, deadline - time.monotonic())))
-            delay = min(delay * 2, 1.0)
-    return False
 
 
 # The master supplies the current publication roster and final registration
@@ -1446,12 +1463,6 @@ def start_recorder_service():
 rpc_runtime, rpc_host = start_recorder_service()
 arm_thread = None
 try:
-    master_uri = os.environ["ROS_MASTER_URI"]
-    arming_deadline = time.monotonic() + ARM_WORKER_SECONDS
-    if not wait_for_master(master_uri, arming_deadline):
-        if forwarded_signal is None:
-            sys.stderr.write("ROS master did not answer before native recorder startup: " + master_uri + "\n")
-        raise SystemExit(1)
     child = subprocess.Popen(arguments)
     arm_thread = threading.Thread(target=arm_recorder, args=(master_uri, arming_deadline), daemon=True)
     arm_thread.start()

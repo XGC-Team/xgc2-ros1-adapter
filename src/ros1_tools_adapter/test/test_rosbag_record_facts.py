@@ -412,7 +412,7 @@ class RecordFactsTests(unittest.TestCase):
             counts["masterUri"] += 1
             if child_identity()[0] is not None:
                 raise AssertionError("native registrations started before the master answered")
-            return [-1, "still starting", ""] if counts["masterUri"] == 1 else [1, "uri", uri]
+            return [1, "uri", uri]
 
         server.register_function(lambda _caller, _scope: [1, "topics", [[t, "std_msgs/String"] for t in published]],
                                  "getPublishedTopics")
@@ -455,7 +455,7 @@ xrpc.Host = readiness_host
         self.assertTrue(reply["archiveExists"])
         self.assertIsNone(reply["firstBagObservedAt"])
         self.assertEqual(self.arming_calls, {"graphs": 1, "bus": 1 if sparse else 3, "pid": 1,
-                                             "subscriptions": 3 if sparse else 1, "timebase": 1, "masterUri": 2})
+                                             "subscriptions": 3 if sparse else 1, "timebase": 1, "masterUri": 1})
         timebase = reply["facts"]["timebase"]
         self.assertIs(timebase["useSimTime"], sim_time)
         self.assertEqual(timebase["rosMasterUri"], master_uri)
@@ -470,6 +470,15 @@ xrpc.Host = readiness_host
     def test_recorder_ready_releases_held_describe_before_any_bag_exists(self):
         # The recorder child creates its first bag only after describe returns.
         self.assert_recorder_armed(sparse=False)
+
+    def test_external_master_admission_rejects_once_before_starting_recorder(self):
+        calls = []
+        def reject(caller):
+            calls.append(caller)
+            return [-1, "upstream not ready", ""]
+        uri = master_probe(self, get_uri=reject)
+        self.run_native_recipe(master_uri=uri, admission_rejected=True)
+        self.assertEqual(calls, ["/xgc_rosbag_ready"])
 
     def test_unpublished_explicit_topic_still_needs_owned_registration(self):
         self.assert_recorder_armed(sparse=True)
@@ -506,7 +515,8 @@ sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(CameraInfo=object)
         self.assertEqual(len(producers), 1)
         self.assertEqual(json.loads(self.body(producers[0], self.directory / "Experiments" / "Data")), applied())
 
-    def run_native_recipe(self, setup="", wait_for_ready=False, topics=None, master_uri=None):
+    def run_native_recipe(self, setup="", wait_for_ready=False, topics=None, master_uri=None,
+                          admission_rejected=False):
         if "sys.argv[1:]" not in SCRIPT:
             self.skipTest("standalone fragment run; full recipe exercised in isolated checkout")
         root = self.directory / "ros"
@@ -545,6 +555,12 @@ p.write_bytes(b'bag-stub')""")
                                          XGC_USER_FILES_DIR=str(self.directory), XGC_RECORDER_RUN_ID="facts-test",
                                          RECORDER_READY_RESULT=str(self.directory / "ready.json"),
                                          XGC_RECORDER_SOCKET=str(self.directory / "rpc.sock")))
+        if admission_rejected:
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("ROS master admission failed before native recorder startup", result.stderr)
+            self.assertFalse((directory / "session-manifest.json").exists())
+            self.assertEqual(list(directory.glob("*.bag*")), [])
+            return
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((directory / "session-manifest.json").read_text())
         self.assertEqual(document["bagFiles"][0]["id"], "bag." + "a" * 32 + ".0")
