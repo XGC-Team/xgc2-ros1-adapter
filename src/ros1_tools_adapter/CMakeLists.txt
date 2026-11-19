@@ -81,7 +81,7 @@ target_link_libraries(${PROJECT_NAME}_probe ${catkin_LIBRARIES} ${JSONCPP_LIBRAR
 add_executable(${PROJECT_NAME}_rosbag_sim_record src/rosbag_sim_record.cpp)
 target_compile_features(${PROJECT_NAME}_rosbag_sim_record PRIVATE cxx_std_17)
 target_compile_options(${PROJECT_NAME}_rosbag_sim_record PRIVATE -Wall -Wextra -Wpedantic -Werror)
-target_include_directories(${PROJECT_NAME}_rosbag_sim_record PRIVATE ${catkin_INCLUDE_DIRS})
+target_include_directories(${PROJECT_NAME}_rosbag_sim_record SYSTEM PRIVATE ${catkin_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME}_rosbag_sim_record ${catkin_LIBRARIES} Boost::regex)
 
 install(TARGETS
